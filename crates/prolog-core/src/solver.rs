@@ -1,0 +1,1067 @@
+use crate::builtins::{exec_builtin, is_builtin, BuiltinResult};
+use crate::database::CompiledDatabase;
+use crate::term::{Clause, Term, VarId};
+use crate::unify::Substitution;
+use fnv::FnvHashMap;
+use serde::{Deserialize, Serialize};
+
+/// A solution: variable name -> resolved term.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Solution {
+    pub bindings: Vec<(String, Term)>,
+}
+
+/// Result of solving a query.
+#[derive(Debug)]
+pub enum SolveResult {
+    /// Query succeeded with a solution.
+    Success(Solution),
+    /// No (more) solutions.
+    Failure,
+    /// A runtime error occurred.
+    Error(String),
+}
+
+/// Choice point for backtracking.
+struct ChoicePoint {
+    /// Goal list at the time this choice was created.
+    goals: Vec<Term>,
+    /// Remaining untried clause indices.
+    untried: Vec<usize>,
+    /// Trail mark for undoing substitution bindings.
+    trail_mark: usize,
+    /// Variable counter at the time this choice was created.
+    var_counter: VarId,
+    /// Cut barrier: if true, backtracking past this point is blocked.
+    cut_barrier: bool,
+    /// Whether this is a disjunction choice point (alternative branch).
+    disjunction: bool,
+}
+
+pub struct Solver<'a> {
+    db: &'a CompiledDatabase,
+    subst: Substitution,
+    var_counter: VarId,
+    query_vars: FnvHashMap<String, VarId>,
+    choice_stack: Vec<ChoicePoint>,
+    /// Limit on number of solutions to return.
+    limit: Option<usize>,
+    solutions_found: usize,
+    /// Current recursion depth (number of goal resolution steps).
+    depth: usize,
+    /// Maximum allowed depth before returning an error.
+    max_depth: usize,
+}
+
+impl<'a> Solver<'a> {
+    /// Create a new solver for a query against a compiled database.
+    pub fn new(
+        db: &'a CompiledDatabase,
+        goals: Vec<Term>,
+        query_vars: FnvHashMap<String, VarId>,
+    ) -> Self {
+        // Start var counter at 1000 to avoid collisions with query-level var IDs
+        let mut solver = Solver {
+            db,
+            subst: Substitution::new(),
+            var_counter: 1000,
+            query_vars,
+            choice_stack: Vec::new(),
+            limit: None,
+            solutions_found: 0,
+            depth: 0,
+            max_depth: 10_000,
+        };
+        // Push the initial goal list as a choice point with no alternatives
+        // (this is just to set up the initial state; the real solving starts in next())
+        solver.choice_stack.push(ChoicePoint {
+            goals,
+            untried: vec![],
+            trail_mark: 0,
+            var_counter: 1000,
+            cut_barrier: false,
+            disjunction: false,
+        });
+        solver
+    }
+
+    pub fn with_limit(mut self, limit: usize) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    pub fn with_max_depth(mut self, max_depth: usize) -> Self {
+        self.max_depth = max_depth;
+        self
+    }
+
+    /// Get the next solution (or failure/error).
+    pub fn next(&mut self) -> SolveResult {
+        if let Some(limit) = self.limit {
+            if self.solutions_found >= limit {
+                return SolveResult::Failure;
+            }
+        }
+
+        // If this is the first call, start from the initial choice point's goals
+        if self.solutions_found == 0 && !self.choice_stack.is_empty() {
+            let initial = self.choice_stack.pop().unwrap();
+            self.var_counter = initial.var_counter;
+            return self.solve(initial.goals);
+        }
+
+        // Otherwise, backtrack to find the next solution
+        self.backtrack()
+    }
+
+    /// Enumerate all solutions.
+    pub fn all_solutions(mut self) -> Result<Vec<Solution>, String> {
+        let mut solutions = Vec::new();
+        loop {
+            match self.next() {
+                SolveResult::Success(sol) => solutions.push(sol),
+                SolveResult::Failure => return Ok(solutions),
+                SolveResult::Error(e) => return Err(e),
+            }
+        }
+    }
+
+    /// Core solve loop: process goals one at a time.
+    fn solve(&mut self, mut goals: Vec<Term>) -> SolveResult {
+        loop {
+            if goals.is_empty() {
+                // Success! Extract the solution.
+                self.solutions_found += 1;
+                return SolveResult::Success(self.extract_solution());
+            }
+
+            self.depth += 1;
+            if self.depth > self.max_depth {
+                return SolveResult::Error(format!(
+                    "Maximum recursion depth exceeded ({})", self.max_depth
+                ));
+            }
+
+            let goal = goals.remove(0);
+            let walked_goal = self.subst.walk(&goal);
+
+            if is_builtin(&walked_goal, &self.db.interner) {
+                match exec_builtin(&walked_goal, &mut self.subst, &self.db.interner) {
+                    Ok(BuiltinResult::Success) => {
+                        // Continue with remaining goals
+                        continue;
+                    }
+                    Ok(BuiltinResult::Failure) => {
+                        return self.backtrack();
+                    }
+                    Ok(BuiltinResult::Cut) => {
+                        // Remove all choice points up to the nearest cut barrier
+                        while let Some(cp) = self.choice_stack.last() {
+                            if cp.cut_barrier {
+                                break;
+                            }
+                            self.choice_stack.pop();
+                        }
+                        // Continue with remaining goals
+                        continue;
+                    }
+                    Ok(BuiltinResult::NegationAsFailure(inner_goal)) => {
+                        // Try to solve the inner goal
+                        let mark = self.subst.trail_mark();
+                        let saved_counter = self.var_counter;
+                        let saved_stack_len = self.choice_stack.len();
+
+                        // Create a mini-solver for the inner goal
+                        let inner_result = self.try_solve_once(vec![inner_goal]);
+
+                        // Restore state regardless of outcome
+                        self.subst.undo_to(mark);
+                        self.var_counter = saved_counter;
+                        self.choice_stack.truncate(saved_stack_len);
+
+                        if inner_result {
+                            // Inner goal succeeded, so \+ fails
+                            return self.backtrack();
+                        } else {
+                            // Inner goal failed, so \+ succeeds
+                            continue;
+                        }
+                    }
+                    Ok(BuiltinResult::Disjunction(left, right)) => {
+                        // Try left first; push choice point for right
+                        let mark = self.subst.trail_mark();
+                        let saved_counter = self.var_counter;
+
+                        // Build the alternative goal list: right + remaining goals
+                        let mut alt_goals = vec![right];
+                        alt_goals.extend(goals.clone());
+
+                        // Push a disjunction choice point
+                        self.choice_stack.push(ChoicePoint {
+                            goals: alt_goals,
+                            untried: vec![],
+                            trail_mark: mark,
+                            var_counter: saved_counter,
+                            cut_barrier: false,
+                            disjunction: true,
+                        });
+
+                        // Continue with left branch + remaining goals
+                        goals.insert(0, left);
+                        continue;
+                    }
+                    Ok(BuiltinResult::IfThenElse(cond, then, else_branch)) => {
+                        // Try cond; if succeeds, commit to then (cut alternatives)
+                        // If cond fails, try else_branch
+                        let mark = self.subst.trail_mark();
+                        let saved_counter = self.var_counter;
+                        let saved_stack_len = self.choice_stack.len();
+
+                        if self.try_solve_once(vec![cond.clone()]) {
+                            // Cond succeeded — keep bindings, continue with then + rest
+                            // (Don't restore state — bindings from cond are kept)
+                            // But we need to re-run cond to re-establish bindings since
+                            // try_solve_once doesn't preserve them. Let's use a different approach.
+                            self.subst.undo_to(mark);
+                            self.var_counter = saved_counter;
+                            self.choice_stack.truncate(saved_stack_len);
+
+                            // Re-run: prepend cond, then goals
+                            // Use conjunction: cond, then, rest
+                            goals.insert(0, then);
+                            goals.insert(0, cond);
+                            continue;
+                        } else {
+                            // Cond failed — restore and try else
+                            self.subst.undo_to(mark);
+                            self.var_counter = saved_counter;
+                            self.choice_stack.truncate(saved_stack_len);
+
+                            goals.insert(0, else_branch);
+                            continue;
+                        }
+                    }
+                    Ok(BuiltinResult::IfThen(cond, then)) => {
+                        // Like if-then-else but no else (fails if cond fails)
+                        let mark = self.subst.trail_mark();
+                        let saved_counter = self.var_counter;
+                        let saved_stack_len = self.choice_stack.len();
+
+                        if self.try_solve_once(vec![cond.clone()]) {
+                            self.subst.undo_to(mark);
+                            self.var_counter = saved_counter;
+                            self.choice_stack.truncate(saved_stack_len);
+
+                            goals.insert(0, then);
+                            goals.insert(0, cond);
+                            continue;
+                        } else {
+                            self.subst.undo_to(mark);
+                            self.var_counter = saved_counter;
+                            self.choice_stack.truncate(saved_stack_len);
+                            return self.backtrack();
+                        }
+                    }
+                    Ok(BuiltinResult::Conjunction(a, b)) => {
+                        // Flatten conjunction into goal list
+                        goals.insert(0, b);
+                        goals.insert(0, a);
+                        continue;
+                    }
+                    Ok(BuiltinResult::FindAll(template, goal, result_var)) => {
+                        match self.exec_findall(template, goal) {
+                            Ok(result_list) => {
+                                if self.subst.unify(&result_var, &result_list) {
+                                    continue;
+                                } else {
+                                    return self.backtrack();
+                                }
+                            }
+                            Err(e) => return SolveResult::Error(e),
+                        }
+                    }
+                    Err(e) => return SolveResult::Error(e),
+                }
+            } else {
+                // User-defined predicate: look up candidate clauses
+                let candidates = self.db.lookup(&walked_goal);
+                if candidates.is_empty() {
+                    return self.backtrack();
+                }
+
+                match self.try_clauses(walked_goal, goals, candidates) {
+                    Some(new_goals) => {
+                        goals = new_goals;
+                        continue;
+                    }
+                    None => return self.backtrack(),
+                }
+            }
+        }
+    }
+
+    /// Try candidate clauses for a goal. Returns new goal list if one succeeds.
+    fn try_clauses(
+        &mut self,
+        goal: Term,
+        rest_goals: Vec<Term>,
+        candidates: Vec<usize>,
+    ) -> Option<Vec<Term>> {
+        for (i, &clause_idx) in candidates.iter().enumerate() {
+            let mark = self.subst.trail_mark();
+            let saved_counter = self.var_counter;
+
+            let clause = &self.db.clauses[clause_idx];
+            let renamed = self.rename_clause(clause);
+
+            if self.subst.unify(&goal, &renamed.head) {
+                // Build new goals: body of matched clause + remaining goals
+                let mut new_goals = renamed.body;
+                new_goals.extend(rest_goals.clone());
+
+                // If there are more candidates, push a choice point
+                if i + 1 < candidates.len() {
+                    self.choice_stack.push(ChoicePoint {
+                        goals: {
+                            let mut g = vec![goal.clone()];
+                            g.extend(rest_goals);
+                            g
+                        },
+                        untried: candidates[i + 1..].to_vec(),
+                        trail_mark: mark,
+                        var_counter: saved_counter,
+                        cut_barrier: true,
+                        disjunction: false,
+                    });
+                }
+
+                return Some(new_goals);
+            } else {
+                // Unification failed; undo and try next clause
+                self.subst.undo_to(mark);
+                self.var_counter = saved_counter;
+            }
+        }
+        None
+    }
+
+    /// Backtrack: pop choice points until we find one with alternatives.
+    fn backtrack(&mut self) -> SolveResult {
+        while let Some(cp) = self.choice_stack.pop() {
+            // Restore state to this choice point
+            self.subst.undo_to(cp.trail_mark);
+            self.var_counter = cp.var_counter;
+
+            if cp.disjunction {
+                // Disjunction choice point: try the alternative branch directly
+                return self.solve(cp.goals);
+            }
+
+            if cp.untried.is_empty() {
+                // No alternatives at this level — keep backtracking
+                continue;
+            }
+
+            // The first goal in cp.goals is the one we need to retry
+            let goal = cp.goals[0].clone();
+            let rest_goals: Vec<Term> = cp.goals[1..].to_vec();
+            let candidates = cp.untried;
+
+            match self.try_clauses(goal, rest_goals.clone(), candidates) {
+                Some(new_goals) => {
+                    return self.solve(new_goals);
+                }
+                None => {
+                    // All remaining candidates failed — keep backtracking
+                    continue;
+                }
+            }
+        }
+        SolveResult::Failure
+    }
+
+    /// Try to solve goals (used for negation-as-failure check).
+    /// Returns true if the goals succeed at least once.
+    fn try_solve_once(&mut self, goals: Vec<Term>) -> bool {
+        let mut goal_list = goals;
+        loop {
+            if goal_list.is_empty() {
+                return true;
+            }
+
+            let goal = goal_list.remove(0);
+            let walked_goal = self.subst.walk(&goal);
+
+            if is_builtin(&walked_goal, &self.db.interner) {
+                match exec_builtin(&walked_goal, &mut self.subst, &self.db.interner) {
+                    Ok(BuiltinResult::Success) => continue,
+                    Ok(BuiltinResult::Failure) => return false,
+                    Ok(BuiltinResult::Cut) => continue,
+                    Ok(BuiltinResult::NegationAsFailure(inner)) => {
+                        let mark = self.subst.trail_mark();
+                        let inner_result = self.try_solve_once(vec![inner]);
+                        self.subst.undo_to(mark);
+                        if inner_result {
+                            return false;
+                        }
+                        continue;
+                    }
+                    Ok(BuiltinResult::Conjunction(a, b)) => {
+                        goal_list.insert(0, b);
+                        goal_list.insert(0, a);
+                        continue;
+                    }
+                    Ok(BuiltinResult::Disjunction(left, right)) => {
+                        // Try left first
+                        let mark = self.subst.trail_mark();
+                        let saved_counter = self.var_counter;
+                        let mut left_goals = vec![left];
+                        left_goals.extend(goal_list.clone());
+                        if self.try_solve_once(left_goals) {
+                            return true;
+                        }
+                        self.subst.undo_to(mark);
+                        self.var_counter = saved_counter;
+                        // Try right
+                        goal_list.insert(0, right);
+                        continue;
+                    }
+                    Ok(BuiltinResult::IfThenElse(cond, then, else_branch)) => {
+                        let mark = self.subst.trail_mark();
+                        let saved_counter = self.var_counter;
+                        if self.try_solve_once(vec![cond.clone()]) {
+                            self.subst.undo_to(mark);
+                            self.var_counter = saved_counter;
+                            goal_list.insert(0, then);
+                            goal_list.insert(0, cond);
+                            continue;
+                        } else {
+                            self.subst.undo_to(mark);
+                            self.var_counter = saved_counter;
+                            goal_list.insert(0, else_branch);
+                            continue;
+                        }
+                    }
+                    Ok(BuiltinResult::IfThen(cond, then)) => {
+                        let mark = self.subst.trail_mark();
+                        let saved_counter = self.var_counter;
+                        if self.try_solve_once(vec![cond.clone()]) {
+                            self.subst.undo_to(mark);
+                            self.var_counter = saved_counter;
+                            goal_list.insert(0, then);
+                            goal_list.insert(0, cond);
+                            continue;
+                        } else {
+                            self.subst.undo_to(mark);
+                            self.var_counter = saved_counter;
+                            return false;
+                        }
+                    }
+                    Ok(BuiltinResult::FindAll(template, goal, result_var)) => {
+                        match self.exec_findall(template, goal) {
+                            Ok(result_list) => {
+                                if self.subst.unify(&result_var, &result_list) {
+                                    continue;
+                                } else {
+                                    return false;
+                                }
+                            }
+                            Err(_) => return false,
+                        }
+                    }
+                    Err(_) => return false,
+                }
+            }
+
+            let candidates = self.db.lookup(&walked_goal);
+            for &clause_idx in &candidates {
+                let mark = self.subst.trail_mark();
+                let saved_counter = self.var_counter;
+
+                let clause = &self.db.clauses[clause_idx];
+                let renamed = self.rename_clause(clause);
+
+                if self.subst.unify(&walked_goal, &renamed.head) {
+                    let mut new_goals = renamed.body;
+                    new_goals.extend(goal_list.clone());
+                    if self.try_solve_once(new_goals) {
+                        return true;
+                    }
+                }
+                self.subst.undo_to(mark);
+                self.var_counter = saved_counter;
+            }
+            return false;
+        }
+    }
+
+    /// Execute findall/3: collect all instances of Template for which Goal succeeds.
+    fn exec_findall(&mut self, template: Term, goal: Term) -> Result<Term, String> {
+        let mark = self.subst.trail_mark();
+        let saved_counter = self.var_counter;
+        let saved_stack_len = self.choice_stack.len();
+
+        let mut collected = Vec::new();
+        self.try_solve_collecting(vec![goal], &template, &mut collected);
+
+        // Restore state
+        self.subst.undo_to(mark);
+        self.var_counter = saved_counter;
+        self.choice_stack.truncate(saved_stack_len);
+
+        // Build the result list from collected terms
+        let nil_id = self.db.interner.lookup("[]")
+            .expect("[] must be interned");
+        let mut result = Term::Atom(nil_id);
+        for term in collected.into_iter().rev() {
+            result = Term::List {
+                head: Box::new(term),
+                tail: Box::new(result),
+            };
+        }
+
+        Ok(result)
+    }
+
+    /// Try to solve a list of goals, collecting template instances for each success.
+    fn try_solve_collecting(&mut self, goals: Vec<Term>, template: &Term, results: &mut Vec<Term>) -> bool {
+        if goals.is_empty() {
+            results.push(self.subst.apply(template));
+            return true;
+        }
+
+        let mut goal_list = goals;
+        let goal = goal_list.remove(0);
+        let walked_goal = self.subst.walk(&goal);
+
+        if is_builtin(&walked_goal, &self.db.interner) {
+            match exec_builtin(&walked_goal, &mut self.subst, &self.db.interner) {
+                Ok(BuiltinResult::Success) => {
+                    return self.try_solve_collecting(goal_list, template, results);
+                }
+                Ok(BuiltinResult::Cut) => {
+                    return self.try_solve_collecting(goal_list, template, results);
+                }
+                Ok(BuiltinResult::Conjunction(a, b)) => {
+                    goal_list.insert(0, b);
+                    goal_list.insert(0, a);
+                    return self.try_solve_collecting(goal_list, template, results);
+                }
+                Ok(BuiltinResult::NegationAsFailure(inner)) => {
+                    let mark = self.subst.trail_mark();
+                    let inner_result = self.try_solve_once(vec![inner]);
+                    self.subst.undo_to(mark);
+                    if inner_result {
+                        return false;
+                    }
+                    return self.try_solve_collecting(goal_list, template, results);
+                }
+                Ok(BuiltinResult::Disjunction(left, right)) => {
+                    // Try left branch
+                    let mark = self.subst.trail_mark();
+                    let saved_counter = self.var_counter;
+                    let mut left_goals = vec![left];
+                    left_goals.extend(goal_list.clone());
+                    let found_left = self.try_solve_collecting(left_goals, template, results);
+                    self.subst.undo_to(mark);
+                    self.var_counter = saved_counter;
+                    // Try right branch
+                    let mut right_goals = vec![right];
+                    right_goals.extend(goal_list);
+                    let found_right = self.try_solve_collecting(right_goals, template, results);
+                    return found_left || found_right;
+                }
+                Ok(BuiltinResult::IfThenElse(cond, then, else_branch)) => {
+                    let mark = self.subst.trail_mark();
+                    let saved_counter = self.var_counter;
+                    if self.try_solve_once(vec![cond.clone()]) {
+                        self.subst.undo_to(mark);
+                        self.var_counter = saved_counter;
+                        goal_list.insert(0, then);
+                        goal_list.insert(0, cond);
+                        return self.try_solve_collecting(goal_list, template, results);
+                    } else {
+                        self.subst.undo_to(mark);
+                        self.var_counter = saved_counter;
+                        goal_list.insert(0, else_branch);
+                        return self.try_solve_collecting(goal_list, template, results);
+                    }
+                }
+                Ok(BuiltinResult::IfThen(cond, then)) => {
+                    let mark = self.subst.trail_mark();
+                    let saved_counter = self.var_counter;
+                    if self.try_solve_once(vec![cond.clone()]) {
+                        self.subst.undo_to(mark);
+                        self.var_counter = saved_counter;
+                        goal_list.insert(0, then);
+                        goal_list.insert(0, cond);
+                        return self.try_solve_collecting(goal_list, template, results);
+                    } else {
+                        self.subst.undo_to(mark);
+                        self.var_counter = saved_counter;
+                        return false;
+                    }
+                }
+                Ok(BuiltinResult::FindAll(tmpl, inner_goal, result_var)) => {
+                    match self.exec_findall(tmpl, inner_goal) {
+                        Ok(result_list) => {
+                            if self.subst.unify(&result_var, &result_list) {
+                                return self.try_solve_collecting(goal_list, template, results);
+                            }
+                            return false;
+                        }
+                        Err(_) => return false,
+                    }
+                }
+                Ok(BuiltinResult::Failure) | Err(_) => return false,
+            }
+        }
+
+        let candidates = self.db.lookup(&walked_goal);
+        let mut found_any = false;
+        for &clause_idx in &candidates {
+            let mark = self.subst.trail_mark();
+            let saved_counter = self.var_counter;
+
+            let clause = &self.db.clauses[clause_idx];
+            let renamed = self.rename_clause(clause);
+
+            if self.subst.unify(&walked_goal, &renamed.head) {
+                let mut new_goals = renamed.body;
+                new_goals.extend(goal_list.clone());
+                if self.try_solve_collecting(new_goals, template, results) {
+                    found_any = true;
+                }
+            }
+            self.subst.undo_to(mark);
+            self.var_counter = saved_counter;
+        }
+        found_any
+    }
+
+    /// Rename all variables in a clause to fresh IDs to avoid collisions.
+    fn rename_clause(&mut self, clause: &Clause) -> Clause {
+        let mut var_map: FnvHashMap<VarId, VarId> = FnvHashMap::default();
+        Clause {
+            head: self.rename_term(&clause.head, &mut var_map),
+            body: clause
+                .body
+                .iter()
+                .map(|t| self.rename_term(t, &mut var_map))
+                .collect(),
+        }
+    }
+
+    fn rename_term(&mut self, term: &Term, var_map: &mut FnvHashMap<VarId, VarId>) -> Term {
+        match term {
+            Term::Var(id) => {
+                let new_id = *var_map.entry(*id).or_insert_with(|| {
+                    let fresh = self.var_counter;
+                    self.var_counter += 1;
+                    fresh
+                });
+                Term::Var(new_id)
+            }
+            Term::Compound { functor, args } => Term::Compound {
+                functor: *functor,
+                args: args.iter().map(|a| self.rename_term(a, var_map)).collect(),
+            },
+            Term::List { head, tail } => Term::List {
+                head: Box::new(self.rename_term(head, var_map)),
+                tail: Box::new(self.rename_term(tail, var_map)),
+            },
+            _ => term.clone(),
+        }
+    }
+
+    /// Extract the current solution based on query variable bindings.
+    fn extract_solution(&self) -> Solution {
+        let mut bindings = Vec::new();
+        let mut vars: Vec<_> = self.query_vars.iter().collect();
+        vars.sort_by_key(|(name, _)| name.to_string());
+        for (name, &var_id) in vars {
+            if name == "_" {
+                continue;
+            }
+            let resolved = self.subst.apply(&Term::Var(var_id));
+            bindings.push((name.clone(), resolved));
+        }
+        Solution { bindings }
+    }
+}
+
+/// Format a term as a human-readable string.
+pub fn term_to_string(term: &Term, interner: &crate::term::StringInterner) -> String {
+    match term {
+        Term::Atom(id) => interner.resolve(*id).to_string(),
+        Term::Var(id) => format!("_{}", id),
+        Term::Integer(n) => n.to_string(),
+        Term::Float(f) => format!("{}", f),
+        Term::Compound { functor, args } => {
+            let name = interner.resolve(*functor);
+            if args.len() == 2 {
+                // Check if it's an infix operator
+                match name {
+                    "+" | "-" | "*" | "/" | "mod" | "is" | "=" | "\\=" | "<" | ">" | "=<"
+                    | ">=" | "=:=" | "=\\=" => {
+                        return format!(
+                            "{} {} {}",
+                            term_to_string(&args[0], interner),
+                            name,
+                            term_to_string(&args[1], interner)
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            format!(
+                "{}({})",
+                name,
+                args.iter()
+                    .map(|a| term_to_string(a, interner))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+        Term::List { head, tail } => {
+            let mut elements = vec![term_to_string(head, interner)];
+            let mut current = tail.as_ref();
+            loop {
+                match current {
+                    Term::List { head, tail } => {
+                        elements.push(term_to_string(head, interner));
+                        current = tail;
+                    }
+                    Term::Atom(id) if interner.resolve(*id) == "[]" => {
+                        return format!("[{}]", elements.join(", "));
+                    }
+                    _ => {
+                        return format!(
+                            "[{}|{}]",
+                            elements.join(", "),
+                            term_to_string(current, interner)
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::CompiledDatabase;
+    use crate::parser::Parser;
+
+    fn query(source: &str, query_str: &str) -> Vec<Solution> {
+        let mut interner = crate::term::StringInterner::new();
+        let clauses = Parser::parse_program(source, &mut interner).unwrap();
+        let (goals, vars) = Parser::parse_query_with_vars(query_str, &mut interner).unwrap();
+        let db = CompiledDatabase::new(interner, clauses);
+        let solver = Solver::new(&db, goals, vars);
+        solver.all_solutions().unwrap()
+    }
+
+    fn query_first_binding(source: &str, query_str: &str, var_name: &str) -> Option<String> {
+        let mut interner = crate::term::StringInterner::new();
+        let clauses = Parser::parse_program(source, &mut interner).unwrap();
+        let (goals, vars) = Parser::parse_query_with_vars(query_str, &mut interner).unwrap();
+        let db = CompiledDatabase::new(interner, clauses);
+        let solver = Solver::new(&db, goals, vars);
+        let solutions = solver.all_solutions().unwrap();
+        solutions.first().and_then(|sol| {
+            sol.bindings
+                .iter()
+                .find(|(name, _)| name == var_name)
+                .map(|(_, term)| term_to_string(term, &db.interner))
+        })
+    }
+
+    #[test]
+    fn test_simple_fact() {
+        let solutions = query("likes(mary, food).", "likes(mary, food)");
+        assert_eq!(solutions.len(), 1);
+        assert!(solutions[0].bindings.is_empty()); // no variables
+    }
+
+    #[test]
+    fn test_fact_negative() {
+        let solutions = query("likes(mary, food).", "likes(mary, beer)");
+        assert_eq!(solutions.len(), 0);
+    }
+
+    #[test]
+    fn test_variable_binding() {
+        let result = query_first_binding("likes(mary, food).", "likes(mary, X)", "X");
+        assert_eq!(result, Some("food".to_string()));
+    }
+
+    #[test]
+    fn test_simple_rule() {
+        let source = "likes(mary, food). happy(X) :- likes(X, food).";
+        let solutions = query(source, "happy(mary)");
+        assert_eq!(solutions.len(), 1);
+    }
+
+    #[test]
+    fn test_multiple_solutions() {
+        let source = "parent(tom, mary). parent(tom, james). parent(tom, ann).";
+        let solutions = query(source, "parent(tom, X)");
+        assert_eq!(solutions.len(), 3);
+    }
+
+    #[test]
+    fn test_recursive_rule() {
+        let source = r#"
+            parent(tom, mary).
+            parent(mary, ann).
+            ancestor(X, Y) :- parent(X, Y).
+            ancestor(X, Y) :- parent(X, Z), ancestor(Z, Y).
+        "#;
+        let solutions = query(source, "ancestor(tom, ann)");
+        assert!(solutions.len() >= 1);
+    }
+
+    #[test]
+    fn test_grandparent() {
+        let source = r#"
+            parent(tom, mary).
+            parent(mary, ann).
+            grandparent(X, Z) :- parent(X, Y), parent(Y, Z).
+        "#;
+        let result = query_first_binding(source, "grandparent(tom, X)", "X");
+        assert_eq!(result, Some("ann".to_string()));
+    }
+
+    #[test]
+    fn test_arithmetic_is() {
+        let source = "add(X, Y, Z) :- Z is X + Y.";
+        let result = query_first_binding(source, "add(3, 4, X)", "X");
+        assert_eq!(result, Some("7".to_string()));
+    }
+
+    #[test]
+    fn test_arithmetic_multiply() {
+        let source = "double(X, Y) :- Y is X * 2.";
+        let result = query_first_binding(source, "double(5, X)", "X");
+        assert_eq!(result, Some("10".to_string()));
+    }
+
+    #[test]
+    fn test_comparison_positive() {
+        let source = "big(X) :- X > 100.";
+        let solutions = query(source, "big(200)");
+        assert_eq!(solutions.len(), 1);
+    }
+
+    #[test]
+    fn test_comparison_negative() {
+        let source = "big(X) :- X > 100.";
+        let solutions = query(source, "big(50)");
+        assert_eq!(solutions.len(), 0);
+    }
+
+    #[test]
+    fn test_operator_precedence() {
+        let source = "result(X) :- X is 2 + 3 * 4.";
+        let result = query_first_binding(source, "result(X)", "X");
+        assert_eq!(result, Some("14".to_string()));
+    }
+
+    #[test]
+    fn test_mod_operator() {
+        let source = "remainder(X, Y, Z) :- Z is X mod Y.";
+        let result = query_first_binding(source, "remainder(10, 3, X)", "X");
+        assert_eq!(result, Some("1".to_string()));
+    }
+
+    #[test]
+    fn test_nested_compound() {
+        let source = "outer(inner(deep(hello))).";
+        let solutions = query(source, "outer(inner(deep(hello)))");
+        assert_eq!(solutions.len(), 1);
+    }
+
+    #[test]
+    fn test_nested_compound_with_var() {
+        let source = "outer(inner(deep(hello))).";
+        let result = query_first_binding(source, "outer(inner(deep(X)))", "X");
+        assert_eq!(result, Some("hello".to_string()));
+    }
+
+    #[test]
+    fn test_negation_as_failure() {
+        let source = r#"
+            likes(mary, food).
+            likes(mary, wine).
+            dislikes(X, Y) :- \+ likes(X, Y).
+        "#;
+        let solutions = query(source, "dislikes(mary, beer)");
+        assert_eq!(solutions.len(), 1);
+
+        let solutions = query(source, "dislikes(mary, food)");
+        assert_eq!(solutions.len(), 0);
+    }
+
+    #[test]
+    fn test_cut() {
+        let source = r#"
+            max(X, Y, X) :- X >= Y, !.
+            max(X, Y, Y).
+        "#;
+        // max(3, 5, Z) should give Z = 5 (first clause fails, second succeeds)
+        let result = query_first_binding(source, "max(3, 5, Z)", "Z");
+        assert_eq!(result, Some("5".to_string()));
+
+        // max(5, 3, Z) should give Z = 5 (first clause succeeds + cut)
+        let result = query_first_binding(source, "max(5, 3, Z)", "Z");
+        assert_eq!(result, Some("5".to_string()));
+    }
+
+    #[test]
+    fn test_index_multi_predicate() {
+        let source = "color(red). color(blue). color(green). shape(circle). shape(square).";
+        let solutions = query(source, "shape(circle)");
+        assert_eq!(solutions.len(), 1);
+
+        let solutions = query(source, "color(circle)");
+        assert_eq!(solutions.len(), 0);
+    }
+
+    #[test]
+    fn test_index_first_arg() {
+        let source = r#"
+            component(engine, piston).
+            component(engine, crankshaft).
+            component(engine, valve).
+            component(brake, pad).
+            component(brake, rotor).
+            component(wheel, tire).
+            component(wheel, rim).
+        "#;
+        let result = query_first_binding(source, "component(brake, X)", "X");
+        assert_eq!(result, Some("pad".to_string()));
+
+        let solutions = query(source, "component(engine, X)");
+        assert_eq!(solutions.len(), 3);
+
+        let solutions = query(source, "component(transmission, X)");
+        assert_eq!(solutions.len(), 0);
+    }
+
+    #[test]
+    fn test_index_variable_fallback() {
+        let source = r#"
+            component(engine, piston).
+            component(brake, pad).
+            component(wheel, tire).
+        "#;
+        let solutions = query(source, "component(X, tire)");
+        assert!(solutions.len() >= 1);
+        let result = query_first_binding(source, "component(X, tire)", "X");
+        assert_eq!(result, Some("wheel".to_string()));
+    }
+
+    #[test]
+    fn test_mixed_ground_var_clauses() {
+        let source = r#"
+            lookup(a, 1).
+            lookup(b, 2).
+            lookup(c, 3).
+            lookup(X, 0) :- X = default.
+        "#;
+        let result = query_first_binding(source, "lookup(b, X)", "X");
+        assert_eq!(result, Some("2".to_string()));
+
+        let result = query_first_binding(source, "lookup(default, X)", "X");
+        assert_eq!(result, Some("0".to_string()));
+    }
+
+    #[test]
+    fn test_disjunction() {
+        let source = "color(red). color(blue).";
+        let solutions = query(source, "( color(red) ; color(green) )");
+        assert_eq!(solutions.len(), 1);
+    }
+
+    #[test]
+    fn test_disjunction_both_branches() {
+        let source = "color(red). color(blue).";
+        let solutions = query(source, "( color(red) ; color(blue) )");
+        assert_eq!(solutions.len(), 2);
+    }
+
+    #[test]
+    fn test_if_then_else_true() {
+        // If 1 < 2, then X = yes, else X = no
+        let source = "";
+        let result = query_first_binding(source, "(1 < 2 -> X = yes ; X = no)", "X");
+        assert_eq!(result, Some("yes".to_string()));
+    }
+
+    #[test]
+    fn test_if_then_else_false() {
+        let source = "";
+        let result = query_first_binding(source, "(2 < 1 -> X = yes ; X = no)", "X");
+        assert_eq!(result, Some("no".to_string()));
+    }
+
+    #[test]
+    fn test_findall_basic() {
+        let source = "color(red). color(green). color(blue).";
+        let result = query_first_binding(source, "findall(X, color(X), L)", "L");
+        assert_eq!(result, Some("[red, green, blue]".to_string()));
+    }
+
+    #[test]
+    fn test_findall_empty() {
+        let source = "color(red).";
+        let result = query_first_binding(source, "findall(X, shape(X), L)", "L");
+        assert_eq!(result, Some("[]".to_string()));
+    }
+
+    #[test]
+    fn test_findall_with_rule() {
+        let source = r#"
+            parent(tom, mary). parent(tom, james). parent(tom, ann).
+        "#;
+        let result = query_first_binding(source, "findall(C, parent(tom, C), Kids)", "Kids");
+        assert_eq!(result, Some("[mary, james, ann]".to_string()));
+    }
+
+    #[test]
+    fn test_if_then_no_else() {
+        let source = "";
+        let solutions = query(source, "(1 < 2 -> true)");
+        assert_eq!(solutions.len(), 1);
+
+        let solutions = query(source, "(2 < 1 -> true)");
+        assert_eq!(solutions.len(), 0);
+    }
+
+    #[test]
+    fn test_solution_limit() {
+        let source = "n(1). n(2). n(3). n(4). n(5).";
+        let mut interner = crate::term::StringInterner::new();
+        let clauses = Parser::parse_program(source, &mut interner).unwrap();
+        let (goals, vars) = Parser::parse_query_with_vars("n(X)", &mut interner).unwrap();
+        let db = CompiledDatabase::new(interner, clauses);
+        let solver = Solver::new(&db, goals, vars).with_limit(3);
+        let solutions = solver.all_solutions().unwrap();
+        assert_eq!(solutions.len(), 3);
+    }
+
+    #[test]
+    fn test_depth_limit() {
+        // Create an infinite loop: loop :- loop.
+        let source = "loop :- loop.";
+        let mut interner = crate::term::StringInterner::new();
+        let clauses = Parser::parse_program(source, &mut interner).unwrap();
+        let (goals, vars) = Parser::parse_query_with_vars("loop", &mut interner).unwrap();
+        let db = CompiledDatabase::new(interner, clauses);
+        let mut solver = Solver::new(&db, goals, vars).with_max_depth(100);
+        let result = solver.next();
+        assert!(matches!(result, SolveResult::Error(ref e) if e.contains("depth")));
+    }
+}

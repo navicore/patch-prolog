@@ -1,0 +1,18 @@
+[workspace]
+members = ["crates/prolog-core"]
+resolver = "2"
+
+[package]
+name = "patch-prolog"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+prolog-core = { path = "crates/prolog-core" }
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+bincode = "1"
+
+[build-dependencies]
+prolog-core = { path = "crates/prolog-core" }
+bincode = "1"
