@@ -173,6 +173,13 @@ impl<'a> Parser<'a> {
             TokenKind::Gte => ">=",
             TokenKind::ArithEq => "=:=",
             TokenKind::ArithNeq => "=\\=",
+            TokenKind::Atom(s)
+                if s == "@<" || s == "@>" || s == "@=<" || s == "@>=" || s == "=.." =>
+            {
+                let op = s.clone();
+                self.advance();
+                return Some(op);
+            }
             _ => return None,
         };
         self.advance();

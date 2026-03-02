@@ -310,6 +310,15 @@ impl<'a> Tokenizer<'a> {
                             col,
                         })
                     }
+                    Some(b'.') if self.peek_at(1) == Some(b'.') => {
+                        self.advance();
+                        self.advance();
+                        Ok(Token {
+                            kind: TokenKind::Atom("=..".into()),
+                            line,
+                            col,
+                        })
+                    }
                     _ => Ok(Token {
                         kind: TokenKind::Equals,
                         line,
@@ -364,6 +373,47 @@ impl<'a> Tokenizer<'a> {
                         line,
                         col,
                     })
+                }
+            }
+
+            b'@' => {
+                self.advance();
+                match self.peek() {
+                    Some(b'<') => {
+                        self.advance();
+                        Ok(Token {
+                            kind: TokenKind::Atom("@<".into()),
+                            line,
+                            col,
+                        })
+                    }
+                    Some(b'>') => {
+                        self.advance();
+                        if self.peek() == Some(b'=') {
+                            self.advance();
+                            Ok(Token {
+                                kind: TokenKind::Atom("@>=".into()),
+                                line,
+                                col,
+                            })
+                        } else {
+                            Ok(Token {
+                                kind: TokenKind::Atom("@>".into()),
+                                line,
+                                col,
+                            })
+                        }
+                    }
+                    Some(b'=') if self.peek_at(1) == Some(b'<') => {
+                        self.advance();
+                        self.advance();
+                        Ok(Token {
+                            kind: TokenKind::Atom("@=<".into()),
+                            line,
+                            col,
+                        })
+                    }
+                    _ => Err(format!("Unexpected '@' at line {} col {}", line, col)),
                 }
             }
 

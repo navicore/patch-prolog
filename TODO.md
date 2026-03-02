@@ -86,23 +86,23 @@ Added to `is/2` evaluation:
 
 ### Test counts
 - 132 unit tests in prolog-core
-- 33 integration tests in tests/integration.rs
-- **165 total**
+- 71 integration tests in tests/integration.rs
+- **203 total**
 
 ---
 
-## Phase 5: Nice-to-have (lower priority)
+## Phase 5: Nice-to-have — COMPLETE
 
-- [ ] `write/1`, `writeln/1`, `nl/0` — for debugging rules
-- [ ] `compare/3`, `@</2` family — term ordering
-- [ ] `functor/3`, `arg/3`, `=../2` — term introspection
-- [ ] `assert/1`, `retract/1` — dynamic predicates
-- [ ] `between/3` — integer enumeration
-- [ ] `copy_term/2` — term copying with fresh variables
-- [ ] `succ/2`, `plus/3` — Peano arithmetic
-- [ ] `msort/2`, `sort/2` — list sorting
-- [ ] `number_chars/2`, `number_codes/2` — number/string conversion
-- [ ] REPL mode
+- [x] `write/1`, `writeln/1`, `nl/0` — I/O for debugging rules
+- [x] `compare/3`, `@</2`, `@>/2`, `@=</2`, `@>=/2` — term ordering (ISO standard order)
+- [x] `functor/3`, `arg/3`, `=../2` — term introspection/decomposition
+- [x] `between/3` — integer enumeration (with backtracking, works inside findall)
+- [x] `copy_term/2` — term copying with fresh variables
+- [x] `succ/2`, `plus/3` — Peano arithmetic (bidirectional)
+- [x] `msort/2`, `sort/2` — list sorting (sort removes duplicates)
+- [x] `number_chars/2`, `number_codes/2` — number/string conversion (bidirectional)
+- [ ] `assert/1`, `retract/1` — dynamic predicates (future)
+- [ ] REPL mode (future)
 
 ---
 
@@ -117,7 +117,7 @@ Added to `is/2` evaluation:
 - **Disjunction choice points**: use `disjunction: bool` flag on ChoicePoint to distinguish from clause alternatives
 - **Parenthesized expressions**: `parse_paren_body()` handles `;`, `->`, and `,` as control flow operators
 
-## Current Built-in Predicates (~40 total)
+## Current Built-in Predicates (~55 total)
 
 | Category | Predicates |
 |----------|-----------|
@@ -128,6 +128,14 @@ Added to `is/2` evaluation:
 | Collection | `findall/3` |
 | Atom/string | `atom_length/2`, `atom_concat/3`, `atom_chars/2` |
 | Arithmetic ops | `+`, `-`, `*`, `/`, `mod`, unary `-`, `abs/1`, `max/2`, `min/2`, `sign/1` |
+| I/O | `write/1`, `writeln/1`, `nl/0` |
+| Term ordering | `compare/3`, `@</2`, `@>/2`, `@=</2`, `@>=/2` |
+| Term introspection | `functor/3`, `arg/3`, `=../2` |
+| Enumeration | `between/3` |
+| Copying | `copy_term/2` |
+| Peano arithmetic | `succ/2`, `plus/3` |
+| Sorting | `msort/2`, `sort/2` |
+| Number conversion | `number_chars/2`, `number_codes/2` |
 
 ## Stdlib (knowledge/stdlib.pl)
 

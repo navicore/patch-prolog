@@ -460,3 +460,323 @@ fn test_arithmetic_combined() {
     let result = first_binding("", "X is abs(min(3, -5))", "X");
     assert_eq!(result, Some("5".to_string()));
 }
+
+// ========================================================================
+// Phase 5: Nice-to-have — term ordering, introspection, between, etc.
+// ========================================================================
+
+#[test]
+fn test_compare_atoms() {
+    let result = first_binding("", "compare(Order, apple, banana)", "Order");
+    assert_eq!(result, Some("<".to_string()));
+
+    let result = first_binding("", "compare(Order, zebra, apple)", "Order");
+    assert_eq!(result, Some(">".to_string()));
+
+    let result = first_binding("", "compare(Order, same, same)", "Order");
+    assert_eq!(result, Some("=".to_string()));
+}
+
+#[test]
+fn test_compare_numbers() {
+    let result = first_binding("", "compare(Order, 1, 2)", "Order");
+    assert_eq!(result, Some("<".to_string()));
+
+    let result = first_binding("", "compare(Order, 10, 3)", "Order");
+    assert_eq!(result, Some(">".to_string()));
+}
+
+#[test]
+fn test_term_ordering_operators() {
+    let source = "";
+    // Atoms compared alphabetically
+    let solutions = solve_all(source, "apple @< banana");
+    assert_eq!(solutions.len(), 1);
+
+    let solutions = solve_all(source, "banana @< apple");
+    assert_eq!(solutions.len(), 0);
+
+    let solutions = solve_all(source, "zebra @> apple");
+    assert_eq!(solutions.len(), 1);
+
+    let solutions = solve_all(source, "foo @>= foo");
+    assert_eq!(solutions.len(), 1);
+
+    let solutions = solve_all(source, "foo @=< foo");
+    assert_eq!(solutions.len(), 1);
+}
+
+#[test]
+fn test_term_ordering_numbers_before_atoms() {
+    // Standard order: numbers < atoms
+    let solutions = solve_all("", "1 @< hello");
+    assert_eq!(solutions.len(), 1);
+
+    let solutions = solve_all("", "hello @< 1");
+    assert_eq!(solutions.len(), 0);
+}
+
+#[test]
+fn test_functor_decompose() {
+    let result = first_binding("", "functor(foo(a, b, c), Name, Arity)", "Name");
+    assert_eq!(result, Some("foo".to_string()));
+
+    let result = first_binding("", "functor(foo(a, b, c), Name, Arity)", "Arity");
+    assert_eq!(result, Some("3".to_string()));
+}
+
+#[test]
+fn test_functor_atom() {
+    let result = first_binding("", "functor(hello, Name, Arity)", "Name");
+    assert_eq!(result, Some("hello".to_string()));
+
+    let result = first_binding("", "functor(hello, Name, Arity)", "Arity");
+    assert_eq!(result, Some("0".to_string()));
+}
+
+#[test]
+fn test_functor_construct() {
+    let result = first_binding("", "functor(T, foo, 2)", "T");
+    // Constructed term has fresh variables with numeric IDs
+    let val = result.unwrap();
+    assert!(val.starts_with("foo("));
+    assert!(val.contains(","));
+}
+
+#[test]
+fn test_functor_number() {
+    let result = first_binding("", "functor(42, Name, Arity)", "Name");
+    assert_eq!(result, Some("42".to_string()));
+
+    let result = first_binding("", "functor(42, Name, Arity)", "Arity");
+    assert_eq!(result, Some("0".to_string()));
+}
+
+#[test]
+fn test_arg_compound() {
+    let result = first_binding("", "arg(1, foo(a, b, c), X)", "X");
+    assert_eq!(result, Some("a".to_string()));
+
+    let result = first_binding("", "arg(2, foo(a, b, c), X)", "X");
+    assert_eq!(result, Some("b".to_string()));
+
+    let result = first_binding("", "arg(3, foo(a, b, c), X)", "X");
+    assert_eq!(result, Some("c".to_string()));
+}
+
+#[test]
+fn test_arg_out_of_range() {
+    let solutions = solve_all("", "arg(4, foo(a, b, c), X)");
+    assert_eq!(solutions.len(), 0); // fails, not error
+}
+
+#[test]
+fn test_univ_decompose() {
+    let result = first_binding("", "foo(a, b) =.. L", "L");
+    assert_eq!(result, Some("[foo, a, b]".to_string()));
+}
+
+#[test]
+fn test_univ_atom() {
+    let result = first_binding("", "hello =.. L", "L");
+    assert_eq!(result, Some("[hello]".to_string()));
+}
+
+#[test]
+fn test_univ_construct() {
+    let result = first_binding("", "T =.. [bar, 1, 2]", "T");
+    assert_eq!(result, Some("bar(1, 2)".to_string()));
+}
+
+#[test]
+fn test_univ_number() {
+    let result = first_binding("", "42 =.. L", "L");
+    assert_eq!(result, Some("[42]".to_string()));
+}
+
+#[test]
+fn test_between_basic() {
+    let solutions = solve_all("", "between(1, 5, X)");
+    assert_eq!(solutions.len(), 5);
+    assert_eq!(solutions[0][0].1, "1");
+    assert_eq!(solutions[4][0].1, "5");
+}
+
+#[test]
+fn test_between_single() {
+    let solutions = solve_all("", "between(3, 3, X)");
+    assert_eq!(solutions.len(), 1);
+    assert_eq!(solutions[0][0].1, "3");
+}
+
+#[test]
+fn test_between_empty() {
+    let solutions = solve_all("", "between(5, 3, X)");
+    assert_eq!(solutions.len(), 0);
+}
+
+#[test]
+fn test_between_in_rule() {
+    let source = r#"
+        digit(D) :- between(0, 9, D).
+    "#;
+    let solutions = solve_all(source, "digit(D)");
+    assert_eq!(solutions.len(), 10);
+}
+
+#[test]
+fn test_copy_term_basic() {
+    let source = "";
+    let result = first_binding(source, "copy_term(f(X, Y), Copy)", "Copy");
+    // Copy should be f with fresh variables
+    assert!(result.is_some());
+    let val = result.unwrap();
+    assert!(val.starts_with("f("));
+}
+
+#[test]
+fn test_copy_term_ground() {
+    let result = first_binding("", "copy_term(hello, Copy)", "Copy");
+    assert_eq!(result, Some("hello".to_string()));
+
+    let result = first_binding("", "copy_term(42, Copy)", "Copy");
+    assert_eq!(result, Some("42".to_string()));
+}
+
+#[test]
+fn test_succ_forward() {
+    let result = first_binding("", "succ(3, X)", "X");
+    assert_eq!(result, Some("4".to_string()));
+
+    let result = first_binding("", "succ(0, X)", "X");
+    assert_eq!(result, Some("1".to_string()));
+}
+
+#[test]
+fn test_succ_backward() {
+    let result = first_binding("", "succ(X, 5)", "X");
+    assert_eq!(result, Some("4".to_string()));
+
+    let result = first_binding("", "succ(X, 1)", "X");
+    assert_eq!(result, Some("0".to_string()));
+}
+
+#[test]
+fn test_plus_forward() {
+    let result = first_binding("", "plus(3, 4, X)", "X");
+    assert_eq!(result, Some("7".to_string()));
+}
+
+#[test]
+fn test_plus_backward() {
+    let result = first_binding("", "plus(3, Y, 10)", "Y");
+    assert_eq!(result, Some("7".to_string()));
+
+    let result = first_binding("", "plus(X, 4, 10)", "X");
+    assert_eq!(result, Some("6".to_string()));
+}
+
+#[test]
+fn test_msort_basic() {
+    let result = first_binding("", "msort([c, a, b], X)", "X");
+    assert_eq!(result, Some("[a, b, c]".to_string()));
+}
+
+#[test]
+fn test_msort_preserves_duplicates() {
+    let result = first_binding("", "msort([b, a, b, a], X)", "X");
+    assert_eq!(result, Some("[a, a, b, b]".to_string()));
+}
+
+#[test]
+fn test_msort_numbers() {
+    let result = first_binding("", "msort([3, 1, 2], X)", "X");
+    assert_eq!(result, Some("[1, 2, 3]".to_string()));
+}
+
+#[test]
+fn test_sort_removes_duplicates() {
+    let result = first_binding("", "sort([b, a, b, a], X)", "X");
+    assert_eq!(result, Some("[a, b]".to_string()));
+}
+
+#[test]
+fn test_sort_empty() {
+    let result = first_binding("", "sort([], X)", "X");
+    assert_eq!(result, Some("[]".to_string()));
+}
+
+#[test]
+fn test_number_chars_integer() {
+    let result = first_binding("", "number_chars(123, X)", "X");
+    assert_eq!(result, Some("[1, 2, 3]".to_string()));
+}
+
+#[test]
+fn test_number_chars_reverse() {
+    let result = first_binding("", "number_chars(X, [4, 5, 6])", "X");
+    assert_eq!(result, Some("456".to_string()));
+}
+
+#[test]
+fn test_number_codes_integer() {
+    let result = first_binding("", "number_codes(65, X)", "X");
+    // Character codes for '6' and '5': 54, 53
+    assert!(result.is_some());
+}
+
+#[test]
+fn test_number_codes_reverse() {
+    // ASCII codes for '1', '2', '3' are 49, 50, 51
+    let result = first_binding("", "number_codes(X, [49, 50, 51])", "X");
+    assert_eq!(result, Some("123".to_string()));
+}
+
+#[test]
+fn test_between_with_findall() {
+    let result = first_binding("", "findall(X, between(1, 5, X), L)", "L");
+    assert_eq!(result, Some("[1, 2, 3, 4, 5]".to_string()));
+}
+
+#[test]
+fn test_sort_in_rule() {
+    let source = r#"
+        score(alice, 85).
+        score(bob, 92).
+        score(carol, 78).
+        sorted_names(Sorted) :- findall(Name, score(Name, _), L), sort(L, Sorted).
+    "#;
+    let result = first_binding(source, "sorted_names(X)", "X");
+    assert_eq!(result, Some("[alice, bob, carol]".to_string()));
+}
+
+#[test]
+fn test_functor_in_rule() {
+    let source = r#"
+        arity_of(Term, A) :- functor(Term, _, A).
+    "#;
+    let result = first_binding(source, "arity_of(foo(a, b), A)", "A");
+    assert_eq!(result, Some("2".to_string()));
+}
+
+#[test]
+fn test_univ_in_rule() {
+    // Test =.. decompose into head/tail pattern inside a rule
+    let source = r#"
+        get_functor(Term, F) :- Term =.. [F|_].
+    "#;
+    let result = first_binding(source, "get_functor(foo(a, b), F)", "F");
+    assert_eq!(result, Some("foo".to_string()));
+}
+
+#[test]
+fn test_univ_reconstruct_in_rule() {
+    // Test =.. reconstruction from a list
+    let source = r#"
+        rebuild(Term, R) :-
+            Term =.. L,
+            R =.. L.
+    "#;
+    let result = first_binding(source, "rebuild(foo(a, b), R)", "R");
+    assert_eq!(result, Some("foo(a, b)".to_string()));
+}

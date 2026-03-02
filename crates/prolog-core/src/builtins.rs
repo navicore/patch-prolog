@@ -6,7 +6,7 @@ pub fn is_builtin(goal: &Term, interner: &StringInterner) -> bool {
     match goal {
         Term::Atom(id) => {
             let name = interner.resolve(*id);
-            matches!(name, "true" | "fail" | "false" | "!")
+            matches!(name, "true" | "fail" | "false" | "!" | "nl")
         }
         Term::Compound { functor, args } => {
             let name = interner.resolve(*functor);
@@ -26,6 +26,23 @@ pub fn is_builtin(goal: &Term, interner: &StringInterner) -> bool {
                 ("once", 1) | ("call", 1) => true,
                 // Atom/string predicates
                 ("atom_length", 2) | ("atom_concat", 3) | ("atom_chars", 2) => true,
+                // I/O predicates
+                ("write", 1) | ("writeln", 1) => true,
+                // Term ordering
+                ("compare", 3) => true,
+                ("@<", 2) | ("@>", 2) | ("@=<", 2) | ("@>=", 2) => true,
+                // Term introspection
+                ("functor", 3) | ("arg", 3) | ("=..", 2) => true,
+                // Integer enumeration
+                ("between", 3) => true,
+                // Term copying
+                ("copy_term", 2) => true,
+                // Peano arithmetic
+                ("succ", 2) | ("plus", 3) => true,
+                // List sorting
+                ("msort", 2) | ("sort", 2) => true,
+                // Number/string conversion
+                ("number_chars", 2) | ("number_codes", 2) => true,
                 _ => false,
             }
         }
@@ -64,6 +81,36 @@ pub enum BuiltinResult {
     AtomConcat(Term, Term, Term),
     /// atom_chars/2: atom, char list
     AtomChars(Term, Term),
+    /// write/1: write term to stdout (no newline).
+    Write(Term),
+    /// writeln/1: write term to stdout with newline.
+    Writeln(Term),
+    /// nl/0: write newline to stdout.
+    Nl,
+    /// compare/3: Order, Term1, Term2 — standard term ordering.
+    Compare(Term, Term, Term),
+    /// functor/3: Term, Name, Arity.
+    Functor(Term, Term, Term),
+    /// arg/3: N, Term, Arg.
+    Arg(Term, Term, Term),
+    /// =../2: Term, List (univ).
+    Univ(Term, Term),
+    /// between/3: Low, High, X — integer enumeration.
+    Between(Term, Term, Term),
+    /// copy_term/2: Original, Copy.
+    CopyTerm(Term, Term),
+    /// succ/2: X, S — successor relation.
+    Succ(Term, Term),
+    /// plus/3: X, Y, Z — addition relation.
+    Plus(Term, Term, Term),
+    /// msort/2: List, Sorted.
+    MSort(Term, Term),
+    /// sort/2: List, Sorted.
+    Sort(Term, Term),
+    /// number_chars/2: Number, Chars.
+    NumberChars(Term, Term),
+    /// number_codes/2: Number, Codes.
+    NumberCodes(Term, Term),
 }
 
 /// Execute a built-in predicate.
@@ -79,6 +126,7 @@ pub fn exec_builtin(
                 "true" => Ok(BuiltinResult::Success),
                 "fail" | "false" => Ok(BuiltinResult::Failure),
                 "!" => Ok(BuiltinResult::Cut),
+                "nl" => Ok(BuiltinResult::Nl),
                 _ => Err(format!("Unknown builtin atom: {}", name)),
             }
         }
@@ -270,6 +318,84 @@ pub fn exec_builtin(
                     args[2].clone(),
                 )),
                 ("atom_chars", 2) => Ok(BuiltinResult::AtomChars(args[0].clone(), args[1].clone())),
+                // I/O
+                ("write", 1) => Ok(BuiltinResult::Write(args[0].clone())),
+                ("writeln", 1) => Ok(BuiltinResult::Writeln(args[0].clone())),
+                // Term ordering
+                ("compare", 3) => Ok(BuiltinResult::Compare(
+                    args[0].clone(),
+                    args[1].clone(),
+                    args[2].clone(),
+                )),
+                ("@<", 2) => {
+                    let cmp = term_compare(&subst.walk(&args[0]), &subst.walk(&args[1]), interner);
+                    if cmp == std::cmp::Ordering::Less {
+                        Ok(BuiltinResult::Success)
+                    } else {
+                        Ok(BuiltinResult::Failure)
+                    }
+                }
+                ("@>", 2) => {
+                    let cmp = term_compare(&subst.walk(&args[0]), &subst.walk(&args[1]), interner);
+                    if cmp == std::cmp::Ordering::Greater {
+                        Ok(BuiltinResult::Success)
+                    } else {
+                        Ok(BuiltinResult::Failure)
+                    }
+                }
+                ("@=<", 2) => {
+                    let cmp = term_compare(&subst.walk(&args[0]), &subst.walk(&args[1]), interner);
+                    if cmp != std::cmp::Ordering::Greater {
+                        Ok(BuiltinResult::Success)
+                    } else {
+                        Ok(BuiltinResult::Failure)
+                    }
+                }
+                ("@>=", 2) => {
+                    let cmp = term_compare(&subst.walk(&args[0]), &subst.walk(&args[1]), interner);
+                    if cmp != std::cmp::Ordering::Less {
+                        Ok(BuiltinResult::Success)
+                    } else {
+                        Ok(BuiltinResult::Failure)
+                    }
+                }
+                // Term introspection
+                ("functor", 3) => Ok(BuiltinResult::Functor(
+                    args[0].clone(),
+                    args[1].clone(),
+                    args[2].clone(),
+                )),
+                ("arg", 3) => Ok(BuiltinResult::Arg(
+                    args[0].clone(),
+                    args[1].clone(),
+                    args[2].clone(),
+                )),
+                ("=..", 2) => Ok(BuiltinResult::Univ(args[0].clone(), args[1].clone())),
+                // Integer enumeration
+                ("between", 3) => Ok(BuiltinResult::Between(
+                    args[0].clone(),
+                    args[1].clone(),
+                    args[2].clone(),
+                )),
+                // Term copying
+                ("copy_term", 2) => Ok(BuiltinResult::CopyTerm(args[0].clone(), args[1].clone())),
+                // Peano arithmetic
+                ("succ", 2) => Ok(BuiltinResult::Succ(args[0].clone(), args[1].clone())),
+                ("plus", 3) => Ok(BuiltinResult::Plus(
+                    args[0].clone(),
+                    args[1].clone(),
+                    args[2].clone(),
+                )),
+                // List sorting
+                ("msort", 2) => Ok(BuiltinResult::MSort(args[0].clone(), args[1].clone())),
+                ("sort", 2) => Ok(BuiltinResult::Sort(args[0].clone(), args[1].clone())),
+                // Number/string conversion
+                ("number_chars", 2) => {
+                    Ok(BuiltinResult::NumberChars(args[0].clone(), args[1].clone()))
+                }
+                ("number_codes", 2) => {
+                    Ok(BuiltinResult::NumberCodes(args[0].clone(), args[1].clone()))
+                }
                 _ => Err(format!("Unknown builtin: {}/{}", name, args.len())),
             }
         }
@@ -497,6 +623,105 @@ fn arith_min(a: &ArithVal, b: &ArithVal) -> ArithVal {
     }
 }
 
+/// Standard order of terms (ISO Prolog):
+/// Variables < Numbers < Atoms < Compound terms
+/// Within numbers: by value. Within atoms: alphabetical.
+/// Within compounds: by arity, then functor name, then arguments left-to-right.
+pub fn term_compare(a: &Term, b: &Term, interner: &StringInterner) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    fn type_rank(t: &Term) -> u8 {
+        match t {
+            Term::Var(_) => 0,
+            Term::Float(_) => 1,
+            Term::Integer(_) => 1,
+            Term::Atom(_) => 2,
+            Term::List { .. } => 3,
+            Term::Compound { .. } => 3,
+        }
+    }
+
+    let ra = type_rank(a);
+    let rb = type_rank(b);
+    if ra != rb {
+        return ra.cmp(&rb);
+    }
+
+    match (a, b) {
+        (Term::Var(a), Term::Var(b)) => a.cmp(b),
+        (Term::Integer(a), Term::Integer(b)) => a.cmp(b),
+        (Term::Float(a), Term::Float(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
+        (Term::Integer(a), Term::Float(b)) => (*a as f64).partial_cmp(b).unwrap_or(Ordering::Equal),
+        (Term::Float(a), Term::Integer(b)) => {
+            a.partial_cmp(&(*b as f64)).unwrap_or(Ordering::Equal)
+        }
+        (Term::Atom(a), Term::Atom(b)) => interner.resolve(*a).cmp(interner.resolve(*b)),
+        (
+            Term::Compound {
+                functor: f1,
+                args: a1,
+            },
+            Term::Compound {
+                functor: f2,
+                args: a2,
+            },
+        ) => {
+            // Compare by arity first, then functor name, then args
+            a1.len()
+                .cmp(&a2.len())
+                .then_with(|| interner.resolve(*f1).cmp(interner.resolve(*f2)))
+                .then_with(|| {
+                    for (x, y) in a1.iter().zip(a2.iter()) {
+                        let c = term_compare(x, y, interner);
+                        if c != Ordering::Equal {
+                            return c;
+                        }
+                    }
+                    Ordering::Equal
+                })
+        }
+        (Term::List { head: h1, tail: t1 }, Term::List { head: h2, tail: t2 }) => {
+            term_compare(h1, h2, interner).then_with(|| term_compare(t1, t2, interner))
+        }
+        // List vs Compound: lists are .(H,T) which is arity 2
+        (Term::List { .. }, Term::Compound { args, .. }) => {
+            2usize.cmp(&args.len()).then(Ordering::Less) // '.' functor sorts before most
+        }
+        (Term::Compound { args, .. }, Term::List { .. }) => {
+            args.len().cmp(&2usize).then(Ordering::Greater)
+        }
+        _ => Ordering::Equal,
+    }
+}
+
+/// Collect list elements from a term. Returns None if not a proper list.
+pub fn collect_list(term: &Term, interner: &StringInterner) -> Option<Vec<Term>> {
+    let mut elements = Vec::new();
+    let mut current = term;
+    loop {
+        match current {
+            Term::Atom(id) if interner.resolve(*id) == "[]" => return Some(elements),
+            Term::List { head, tail } => {
+                elements.push(head.as_ref().clone());
+                current = tail;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Build a list term from elements.
+pub fn build_list(elements: Vec<Term>, interner: &StringInterner) -> Term {
+    let nil_id = interner.lookup("[]").expect("[] must be interned");
+    let mut list = Term::Atom(nil_id);
+    for elem in elements.into_iter().rev() {
+        list = Term::List {
+            head: Box::new(elem),
+            tail: Box::new(list),
+        };
+    }
+    list
+}
+
 /// Check if a term is a proper list (ends with []).
 fn is_proper_list(term: &Term, interner: &StringInterner) -> bool {
     match term {
@@ -508,7 +733,7 @@ fn is_proper_list(term: &Term, interner: &StringInterner) -> bool {
 
 /// Helper: check if a goal atom name matches a known builtin name.
 pub fn builtin_atom_names() -> &'static [&'static str] {
-    &["true", "fail", "false", "!"]
+    &["true", "fail", "false", "!", "nl"]
 }
 
 pub fn builtin_functor_names() -> &'static [(&'static str, usize)] {
@@ -540,6 +765,24 @@ pub fn builtin_functor_names() -> &'static [(&'static str, usize)] {
         ("atom_length", 2),
         ("atom_concat", 3),
         ("atom_chars", 2),
+        ("write", 1),
+        ("writeln", 1),
+        ("compare", 3),
+        ("@<", 2),
+        ("@>", 2),
+        ("@=<", 2),
+        ("@>=", 2),
+        ("functor", 3),
+        ("arg", 3),
+        ("=..", 2),
+        ("between", 3),
+        ("copy_term", 2),
+        ("succ", 2),
+        ("plus", 3),
+        ("msort", 2),
+        ("sort", 2),
+        ("number_chars", 2),
+        ("number_codes", 2),
     ]
 }
 

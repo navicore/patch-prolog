@@ -1,4 +1,6 @@
-use crate::builtins::{exec_builtin, is_builtin, BuiltinResult};
+use crate::builtins::{
+    build_list, collect_list, exec_builtin, is_builtin, term_compare, BuiltinResult,
+};
 use crate::database::CompiledDatabase;
 use crate::term::{Clause, Term, VarId};
 use crate::unify::Substitution;
@@ -378,6 +380,546 @@ impl<'a> Solver<'a> {
                             );
                         }
                     }
+                    Ok(BuiltinResult::Write(term)) => {
+                        let walked = self.subst.walk(&term);
+                        let s = term_to_string(&walked, &self.interner);
+                        print!("{}", s);
+                        continue;
+                    }
+                    Ok(BuiltinResult::Writeln(term)) => {
+                        let walked = self.subst.walk(&term);
+                        let s = term_to_string(&walked, &self.interner);
+                        println!("{}", s);
+                        continue;
+                    }
+                    Ok(BuiltinResult::Nl) => {
+                        println!();
+                        continue;
+                    }
+                    Ok(BuiltinResult::Compare(order_arg, t1, t2)) => {
+                        let w1 = self.subst.walk(&t1);
+                        let w2 = self.subst.walk(&t2);
+                        let cmp = term_compare(&w1, &w2, &self.interner);
+                        let order_name = match cmp {
+                            std::cmp::Ordering::Less => "<",
+                            std::cmp::Ordering::Equal => "=",
+                            std::cmp::Ordering::Greater => ">",
+                        };
+                        let order_id = self.interner.intern(order_name);
+                        if self.subst.unify(&order_arg, &Term::Atom(order_id)) {
+                            continue;
+                        } else {
+                            return self.backtrack();
+                        }
+                    }
+                    Ok(BuiltinResult::Functor(term_arg, name_arg, arity_arg)) => {
+                        let walked = self.subst.walk(&term_arg);
+                        match &walked {
+                            Term::Atom(id) => {
+                                // functor(atom, atom, 0)
+                                if self.subst.unify(&name_arg, &Term::Atom(*id))
+                                    && self.subst.unify(&arity_arg, &Term::Integer(0))
+                                {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                            Term::Integer(_) | Term::Float(_) => {
+                                if self.subst.unify(&name_arg, &walked)
+                                    && self.subst.unify(&arity_arg, &Term::Integer(0))
+                                {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                            Term::Compound { functor, args } => {
+                                if self.subst.unify(&name_arg, &Term::Atom(*functor))
+                                    && self
+                                        .subst
+                                        .unify(&arity_arg, &Term::Integer(args.len() as i64))
+                                {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                            Term::List { .. } => {
+                                // Lists are ./2
+                                let dot_id = self.interner.intern(".");
+                                if self.subst.unify(&name_arg, &Term::Atom(dot_id))
+                                    && self.subst.unify(&arity_arg, &Term::Integer(2))
+                                {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                            Term::Var(_) => {
+                                // First arg is a variable — try to construct from name+arity
+                                let wname = self.subst.walk(&name_arg);
+                                let warity = self.subst.walk(&arity_arg);
+                                if let (Term::Atom(name_id), Term::Integer(0)) = (&wname, &warity) {
+                                    if self.subst.unify(&term_arg, &Term::Atom(*name_id)) {
+                                        continue;
+                                    }
+                                    return self.backtrack();
+                                }
+                                if let (Term::Integer(_), Term::Integer(0)) = (&wname, &warity) {
+                                    if self.subst.unify(&term_arg, &wname) {
+                                        continue;
+                                    }
+                                    return self.backtrack();
+                                }
+                                if let (Term::Float(_), Term::Integer(0)) = (&wname, &warity) {
+                                    if self.subst.unify(&term_arg, &wname) {
+                                        continue;
+                                    }
+                                    return self.backtrack();
+                                }
+                                if let (Term::Atom(name_id), Term::Integer(arity)) =
+                                    (&wname, &warity)
+                                {
+                                    if *arity > 0 {
+                                        let args: Vec<Term> = (0..*arity as u32)
+                                            .map(|_| {
+                                                let v = self.var_counter;
+                                                self.var_counter += 1;
+                                                Term::Var(v)
+                                            })
+                                            .collect();
+                                        let constructed = Term::Compound {
+                                            functor: *name_id,
+                                            args,
+                                        };
+                                        if self.subst.unify(&term_arg, &constructed) {
+                                            continue;
+                                        }
+                                        return self.backtrack();
+                                    }
+                                }
+                                return SolveResult::Error(
+                                    "functor/3: insufficient arguments".to_string(),
+                                );
+                            }
+                        }
+                    }
+                    Ok(BuiltinResult::Arg(n_arg, term_arg, result_arg)) => {
+                        let wn = self.subst.walk(&n_arg);
+                        let wterm = self.subst.walk(&term_arg);
+                        if let Term::Integer(n) = wn {
+                            let args_list = match &wterm {
+                                Term::Compound { args, .. } => Some(args.as_slice()),
+                                Term::List { .. } => {
+                                    // Treat as .(H,T) with 2 args — handled below
+                                    None
+                                }
+                                _ => {
+                                    return SolveResult::Error(
+                                        "arg/3: second argument must be compound".to_string(),
+                                    );
+                                }
+                            };
+                            if let Some(args) = args_list {
+                                if n >= 1 && (n as usize) <= args.len() {
+                                    let arg = args[(n - 1) as usize].clone();
+                                    if self.subst.unify(&result_arg, &arg) {
+                                        continue;
+                                    }
+                                    return self.backtrack();
+                                }
+                                return self.backtrack();
+                            }
+                            // Handle list case: .(H,T)
+                            if let Term::List { head, tail } = &wterm {
+                                match n {
+                                    1 => {
+                                        if self.subst.unify(&result_arg, head) {
+                                            continue;
+                                        }
+                                        return self.backtrack();
+                                    }
+                                    2 => {
+                                        if self.subst.unify(&result_arg, tail) {
+                                            continue;
+                                        }
+                                        return self.backtrack();
+                                    }
+                                    _ => return self.backtrack(),
+                                }
+                            }
+                            return self.backtrack();
+                        }
+                        return SolveResult::Error(
+                            "arg/3: first argument must be integer".to_string(),
+                        );
+                    }
+                    Ok(BuiltinResult::Univ(term_arg, list_arg)) => {
+                        let walked = self.subst.walk(&term_arg);
+                        match &walked {
+                            Term::Var(_) => {
+                                // Construct term from list (apply to deeply resolve variables)
+                                let wlist = self.subst.apply(&list_arg);
+                                if let Some(elems) = collect_list(&wlist, &self.interner) {
+                                    if elems.is_empty() {
+                                        return SolveResult::Error(
+                                            "=../2: list must not be empty".to_string(),
+                                        );
+                                    }
+                                    if let Term::Atom(functor_id) = &elems[0] {
+                                        if elems.len() == 1 {
+                                            if self.subst.unify(&term_arg, &Term::Atom(*functor_id))
+                                            {
+                                                continue;
+                                            }
+                                        } else {
+                                            let constructed = Term::Compound {
+                                                functor: *functor_id,
+                                                args: elems[1..].to_vec(),
+                                            };
+                                            if self.subst.unify(&term_arg, &constructed) {
+                                                continue;
+                                            }
+                                        }
+                                    } else if elems.len() == 1 {
+                                        // number =.. [number]
+                                        if self.subst.unify(&term_arg, &elems[0]) {
+                                            continue;
+                                        }
+                                    }
+                                    return self.backtrack();
+                                }
+                                return SolveResult::Error(
+                                    "=../2: second argument must be a list".to_string(),
+                                );
+                            }
+                            Term::Atom(id) => {
+                                let elems = vec![Term::Atom(*id)];
+                                let list = build_list(elems, &self.interner);
+                                if self.subst.unify(&list_arg, &list) {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                            Term::Integer(_) | Term::Float(_) => {
+                                let elems = vec![walked.clone()];
+                                let list = build_list(elems, &self.interner);
+                                if self.subst.unify(&list_arg, &list) {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                            Term::Compound { functor, args } => {
+                                let mut elems = vec![Term::Atom(*functor)];
+                                elems.extend(args.clone());
+                                let list = build_list(elems, &self.interner);
+                                if self.subst.unify(&list_arg, &list) {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                            Term::List { head, tail } => {
+                                let dot_id = self.interner.intern(".");
+                                let elems = vec![Term::Atom(dot_id), *head.clone(), *tail.clone()];
+                                let list = build_list(elems, &self.interner);
+                                if self.subst.unify(&list_arg, &list) {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                        }
+                    }
+                    Ok(BuiltinResult::Between(low_arg, high_arg, x_arg)) => {
+                        let wlow = self.subst.walk(&low_arg);
+                        let whigh = self.subst.walk(&high_arg);
+                        if let (Term::Integer(low), Term::Integer(high)) = (&wlow, &whigh) {
+                            if low > high {
+                                return self.backtrack();
+                            }
+                            let mark = self.subst.trail_mark();
+                            let saved_counter = self.var_counter;
+                            // Push choice points for low+1..=high
+                            if *low < *high {
+                                let new_low = Term::Integer(low + 1);
+                                let between_functor = self.interner.intern("between");
+                                let alt_goal = Term::Compound {
+                                    functor: between_functor,
+                                    args: vec![new_low, whigh.clone(), x_arg.clone()],
+                                };
+                                let mut alt_goals = vec![alt_goal];
+                                alt_goals.extend(goals.clone());
+                                self.choice_stack.push(ChoicePoint {
+                                    goals: alt_goals,
+                                    untried: vec![],
+                                    trail_mark: mark,
+                                    var_counter: saved_counter,
+                                    cut_barrier: false,
+                                    disjunction: true,
+                                });
+                            }
+                            if self.subst.unify(&x_arg, &Term::Integer(*low)) {
+                                continue;
+                            }
+                            return self.backtrack();
+                        }
+                        return SolveResult::Error(
+                            "between/3: first two arguments must be integers".to_string(),
+                        );
+                    }
+                    Ok(BuiltinResult::CopyTerm(original, copy)) => {
+                        let walked = self.subst.walk(&original);
+                        let copied = self.copy_term_fresh(&walked);
+                        if self.subst.unify(&copy, &copied) {
+                            continue;
+                        }
+                        return self.backtrack();
+                    }
+                    Ok(BuiltinResult::Succ(x_arg, s_arg)) => {
+                        let wx = self.subst.walk(&x_arg);
+                        let ws = self.subst.walk(&s_arg);
+                        match (&wx, &ws) {
+                            (Term::Integer(x), _) if *x >= 0 => {
+                                if self.subst.unify(&s_arg, &Term::Integer(x + 1)) {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                            (_, Term::Integer(s)) if *s > 0 => {
+                                if self.subst.unify(&x_arg, &Term::Integer(s - 1)) {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                            (Term::Integer(_), _) => {
+                                return SolveResult::Error(
+                                    "succ/2: argument must be non-negative".to_string(),
+                                );
+                            }
+                            (_, Term::Integer(_)) => {
+                                return SolveResult::Error(
+                                    "succ/2: successor must be positive".to_string(),
+                                );
+                            }
+                            _ => {
+                                return SolveResult::Error(
+                                    "succ/2: at least one argument must be an integer".to_string(),
+                                );
+                            }
+                        }
+                    }
+                    Ok(BuiltinResult::Plus(x_arg, y_arg, z_arg)) => {
+                        let wx = self.subst.walk(&x_arg);
+                        let wy = self.subst.walk(&y_arg);
+                        let wz = self.subst.walk(&z_arg);
+                        match (&wx, &wy, &wz) {
+                            (Term::Integer(x), Term::Integer(y), _) => {
+                                if self.subst.unify(&z_arg, &Term::Integer(x + y)) {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                            (Term::Integer(x), _, Term::Integer(z)) => {
+                                if self.subst.unify(&y_arg, &Term::Integer(z - x)) {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                            (_, Term::Integer(y), Term::Integer(z)) => {
+                                if self.subst.unify(&x_arg, &Term::Integer(z - y)) {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                            _ => {
+                                return SolveResult::Error(
+                                    "plus/3: at least two arguments must be integers".to_string(),
+                                );
+                            }
+                        }
+                    }
+                    Ok(BuiltinResult::MSort(list_arg, sorted_arg)) => {
+                        let wlist = self.subst.apply(&list_arg);
+                        if let Some(mut elems) = collect_list(&wlist, &self.interner) {
+                            elems.sort_by(|a, b| term_compare(a, b, &self.interner));
+                            let sorted = build_list(elems, &self.interner);
+                            if self.subst.unify(&sorted_arg, &sorted) {
+                                continue;
+                            }
+                            return self.backtrack();
+                        }
+                        return SolveResult::Error(
+                            "msort/2: first argument must be a list".to_string(),
+                        );
+                    }
+                    Ok(BuiltinResult::Sort(list_arg, sorted_arg)) => {
+                        let wlist = self.subst.apply(&list_arg);
+                        if let Some(mut elems) = collect_list(&wlist, &self.interner) {
+                            elems.sort_by(|a, b| term_compare(a, b, &self.interner));
+                            elems.dedup_by(|a, b| {
+                                term_compare(a, b, &self.interner) == std::cmp::Ordering::Equal
+                            });
+                            let sorted = build_list(elems, &self.interner);
+                            if self.subst.unify(&sorted_arg, &sorted) {
+                                continue;
+                            }
+                            return self.backtrack();
+                        }
+                        return SolveResult::Error(
+                            "sort/2: first argument must be a list".to_string(),
+                        );
+                    }
+                    Ok(BuiltinResult::NumberChars(num_arg, chars_arg)) => {
+                        let wnum = self.subst.walk(&num_arg);
+                        match &wnum {
+                            Term::Integer(n) => {
+                                let s = n.to_string();
+                                let nil_id =
+                                    self.interner.lookup("[]").expect("[] must be interned");
+                                let mut list = Term::Atom(nil_id);
+                                for ch in s.chars().rev() {
+                                    let ch_id = self.interner.intern(&ch.to_string());
+                                    list = Term::List {
+                                        head: Box::new(Term::Atom(ch_id)),
+                                        tail: Box::new(list),
+                                    };
+                                }
+                                if self.subst.unify(&chars_arg, &list) {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                            Term::Float(f) => {
+                                let s = format!("{}", f);
+                                let nil_id =
+                                    self.interner.lookup("[]").expect("[] must be interned");
+                                let mut list = Term::Atom(nil_id);
+                                for ch in s.chars().rev() {
+                                    let ch_id = self.interner.intern(&ch.to_string());
+                                    list = Term::List {
+                                        head: Box::new(Term::Atom(ch_id)),
+                                        tail: Box::new(list),
+                                    };
+                                }
+                                if self.subst.unify(&chars_arg, &list) {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                            Term::Var(_) => {
+                                // Try to parse chars back to number
+                                let wchars = self.subst.apply(&chars_arg);
+                                if let Some(elems) = collect_list(&wchars, &self.interner) {
+                                    let s: String = elems
+                                        .iter()
+                                        .filter_map(|e| match e {
+                                            Term::Atom(id) => {
+                                                let ch = self.interner.resolve(*id);
+                                                if ch.len() == 1 {
+                                                    Some(ch.to_string())
+                                                } else {
+                                                    None
+                                                }
+                                            }
+                                            // Also accept single-digit integers (since forward direction
+                                            // produces atoms that display identically to integers)
+                                            Term::Integer(n) if *n >= 0 && *n <= 9 => {
+                                                Some(n.to_string())
+                                            }
+                                            _ => None,
+                                        })
+                                        .collect();
+                                    if let Ok(n) = s.parse::<i64>() {
+                                        if self.subst.unify(&num_arg, &Term::Integer(n)) {
+                                            continue;
+                                        }
+                                    } else if let Ok(f) = s.parse::<f64>() {
+                                        if self.subst.unify(&num_arg, &Term::Float(f)) {
+                                            continue;
+                                        }
+                                    }
+                                    return self.backtrack();
+                                }
+                                return SolveResult::Error(
+                                    "number_chars/2: at least one argument must be bound"
+                                        .to_string(),
+                                );
+                            }
+                            _ => {
+                                return SolveResult::Error(
+                                    "number_chars/2: first argument must be a number".to_string(),
+                                );
+                            }
+                        }
+                    }
+                    Ok(BuiltinResult::NumberCodes(num_arg, codes_arg)) => {
+                        let wnum = self.subst.walk(&num_arg);
+                        match &wnum {
+                            Term::Integer(n) => {
+                                let s = n.to_string();
+                                let nil_id =
+                                    self.interner.lookup("[]").expect("[] must be interned");
+                                let mut list = Term::Atom(nil_id);
+                                for ch in s.chars().rev() {
+                                    list = Term::List {
+                                        head: Box::new(Term::Integer(ch as i64)),
+                                        tail: Box::new(list),
+                                    };
+                                }
+                                if self.subst.unify(&codes_arg, &list) {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                            Term::Float(f) => {
+                                let s = format!("{}", f);
+                                let nil_id =
+                                    self.interner.lookup("[]").expect("[] must be interned");
+                                let mut list = Term::Atom(nil_id);
+                                for ch in s.chars().rev() {
+                                    list = Term::List {
+                                        head: Box::new(Term::Integer(ch as i64)),
+                                        tail: Box::new(list),
+                                    };
+                                }
+                                if self.subst.unify(&codes_arg, &list) {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                            Term::Var(_) => {
+                                // Try to parse codes back to number
+                                let wcodes = self.subst.apply(&codes_arg);
+                                if let Some(elems) = collect_list(&wcodes, &self.interner) {
+                                    let s: String = elems
+                                        .iter()
+                                        .filter_map(|e| {
+                                            if let Term::Integer(code) = e {
+                                                char::from_u32(*code as u32)
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect();
+                                    if let Ok(n) = s.parse::<i64>() {
+                                        if self.subst.unify(&num_arg, &Term::Integer(n)) {
+                                            continue;
+                                        }
+                                    } else if let Ok(f) = s.parse::<f64>() {
+                                        if self.subst.unify(&num_arg, &Term::Float(f)) {
+                                            continue;
+                                        }
+                                    }
+                                    return self.backtrack();
+                                }
+                                return SolveResult::Error(
+                                    "number_codes/2: at least one argument must be bound"
+                                        .to_string(),
+                                );
+                            }
+                            _ => {
+                                return SolveResult::Error(
+                                    "number_codes/2: first argument must be a number".to_string(),
+                                );
+                            }
+                        }
+                    }
                     Err(e) => return SolveResult::Error(e),
                 }
             } else {
@@ -623,6 +1165,17 @@ impl<'a> Solver<'a> {
                         }
                         return false;
                     }
+                    Ok(other) => {
+                        // Handle remaining builtins via try_exec_misc
+                        if let Some(success) = self.try_exec_misc(other, &mut goal_list) {
+                            if success {
+                                continue;
+                            } else {
+                                return false;
+                            }
+                        }
+                        return false;
+                    }
                     Err(_) => return false,
                 }
             }
@@ -826,7 +1379,39 @@ impl<'a> Solver<'a> {
                     }
                     return false;
                 }
-                Ok(BuiltinResult::Failure) | Err(_) => return false,
+                Ok(BuiltinResult::Failure) => return false,
+                Ok(BuiltinResult::Between(low_arg, high_arg, x_arg)) => {
+                    // between/3 needs special handling to enumerate all values
+                    let wlow = self.subst.walk(&low_arg);
+                    let whigh = self.subst.walk(&high_arg);
+                    if let (Term::Integer(low), Term::Integer(high)) = (&wlow, &whigh) {
+                        let mut found_any = false;
+                        for val in *low..=*high {
+                            let mark = self.subst.trail_mark();
+                            let saved_counter = self.var_counter;
+                            if self.subst.unify(&x_arg, &Term::Integer(val)) {
+                                let remaining = goal_list.clone();
+                                if self.try_solve_collecting(remaining, template, results) {
+                                    found_any = true;
+                                }
+                            }
+                            self.subst.undo_to(mark);
+                            self.var_counter = saved_counter;
+                        }
+                        return found_any;
+                    }
+                    return false;
+                }
+                Ok(other) => {
+                    // Handle remaining builtins via try_exec_misc
+                    if let Some(success) = self.try_exec_misc(other, &mut goal_list) {
+                        if success {
+                            return self.try_solve_collecting(goal_list, template, results);
+                        }
+                    }
+                    return false;
+                }
+                Err(_) => return false,
             }
         }
 
@@ -884,6 +1469,282 @@ impl<'a> Solver<'a> {
                 tail: Box::new(self.rename_term(tail, var_map)),
             },
             _ => term.clone(),
+        }
+    }
+
+    /// Handle miscellaneous builtins shared between try_solve_once and try_solve_collecting.
+    /// Returns Some(true) on success, Some(false) on failure, None on error (treat as failure).
+    fn try_exec_misc(&mut self, result: BuiltinResult, _goal_list: &mut Vec<Term>) -> Option<bool> {
+        match result {
+            BuiltinResult::Write(term) => {
+                let walked = self.subst.walk(&term);
+                print!("{}", term_to_string(&walked, &self.interner));
+                Some(true)
+            }
+            BuiltinResult::Writeln(term) => {
+                let walked = self.subst.walk(&term);
+                println!("{}", term_to_string(&walked, &self.interner));
+                Some(true)
+            }
+            BuiltinResult::Nl => {
+                println!();
+                Some(true)
+            }
+            BuiltinResult::Compare(order_arg, t1, t2) => {
+                let w1 = self.subst.walk(&t1);
+                let w2 = self.subst.walk(&t2);
+                let cmp = term_compare(&w1, &w2, &self.interner);
+                let order_name = match cmp {
+                    std::cmp::Ordering::Less => "<",
+                    std::cmp::Ordering::Equal => "=",
+                    std::cmp::Ordering::Greater => ">",
+                };
+                let order_id = self.interner.intern(order_name);
+                Some(self.subst.unify(&order_arg, &Term::Atom(order_id)))
+            }
+            BuiltinResult::Functor(term_arg, name_arg, arity_arg) => {
+                let walked = self.subst.walk(&term_arg);
+                match &walked {
+                    Term::Atom(id) => Some(
+                        self.subst.unify(&name_arg, &Term::Atom(*id))
+                            && self.subst.unify(&arity_arg, &Term::Integer(0)),
+                    ),
+                    Term::Integer(_) | Term::Float(_) => Some(
+                        self.subst.unify(&name_arg, &walked)
+                            && self.subst.unify(&arity_arg, &Term::Integer(0)),
+                    ),
+                    Term::Compound { functor, args } => Some(
+                        self.subst.unify(&name_arg, &Term::Atom(*functor))
+                            && self
+                                .subst
+                                .unify(&arity_arg, &Term::Integer(args.len() as i64)),
+                    ),
+                    _ => Some(false),
+                }
+            }
+            BuiltinResult::Arg(n_arg, term_arg, result_arg) => {
+                let wn = self.subst.walk(&n_arg);
+                let wterm = self.subst.walk(&term_arg);
+                if let Term::Integer(n) = wn {
+                    if let Term::Compound { args, .. } = &wterm {
+                        if n >= 1 && (n as usize) <= args.len() {
+                            return Some(self.subst.unify(&result_arg, &args[(n - 1) as usize]));
+                        }
+                    }
+                    if let Term::List { head, tail } = &wterm {
+                        return match n {
+                            1 => Some(self.subst.unify(&result_arg, head)),
+                            2 => Some(self.subst.unify(&result_arg, tail)),
+                            _ => Some(false),
+                        };
+                    }
+                }
+                Some(false)
+            }
+            BuiltinResult::Univ(term_arg, list_arg) => {
+                let walked = self.subst.walk(&term_arg);
+                match &walked {
+                    Term::Atom(id) => {
+                        let list = build_list(vec![Term::Atom(*id)], &self.interner);
+                        Some(self.subst.unify(&list_arg, &list))
+                    }
+                    Term::Integer(_) | Term::Float(_) => {
+                        let list = build_list(vec![walked.clone()], &self.interner);
+                        Some(self.subst.unify(&list_arg, &list))
+                    }
+                    Term::Compound { functor, args } => {
+                        let mut elems = vec![Term::Atom(*functor)];
+                        elems.extend(args.clone());
+                        let list = build_list(elems, &self.interner);
+                        Some(self.subst.unify(&list_arg, &list))
+                    }
+                    Term::Var(_) => {
+                        let wlist = self.subst.apply(&list_arg);
+                        if let Some(elems) = collect_list(&wlist, &self.interner) {
+                            if !elems.is_empty() {
+                                if let Term::Atom(fid) = &elems[0] {
+                                    if elems.len() == 1 {
+                                        return Some(
+                                            self.subst.unify(&term_arg, &Term::Atom(*fid)),
+                                        );
+                                    }
+                                    let constructed = Term::Compound {
+                                        functor: *fid,
+                                        args: elems[1..].to_vec(),
+                                    };
+                                    return Some(self.subst.unify(&term_arg, &constructed));
+                                } else if elems.len() == 1 {
+                                    return Some(self.subst.unify(&term_arg, &elems[0]));
+                                }
+                            }
+                        }
+                        Some(false)
+                    }
+                    _ => Some(false),
+                }
+            }
+            BuiltinResult::Between(low_arg, _high_arg, x_arg) => {
+                // In try_solve_once context, just try first value
+                let wlow = self.subst.walk(&low_arg);
+                let whigh = self.subst.walk(&_high_arg);
+                if let (Term::Integer(low), Term::Integer(high)) = (&wlow, &whigh) {
+                    if low <= high {
+                        return Some(self.subst.unify(&x_arg, &Term::Integer(*low)));
+                    }
+                }
+                Some(false)
+            }
+            BuiltinResult::CopyTerm(original, copy) => {
+                let walked = self.subst.walk(&original);
+                let copied = self.copy_term_fresh(&walked);
+                Some(self.subst.unify(&copy, &copied))
+            }
+            BuiltinResult::Succ(x_arg, s_arg) => {
+                let wx = self.subst.walk(&x_arg);
+                let ws = self.subst.walk(&s_arg);
+                match (&wx, &ws) {
+                    (Term::Integer(x), _) if *x >= 0 => {
+                        Some(self.subst.unify(&s_arg, &Term::Integer(x + 1)))
+                    }
+                    (_, Term::Integer(s)) if *s > 0 => {
+                        Some(self.subst.unify(&x_arg, &Term::Integer(s - 1)))
+                    }
+                    _ => Some(false),
+                }
+            }
+            BuiltinResult::Plus(x_arg, y_arg, z_arg) => {
+                let wx = self.subst.walk(&x_arg);
+                let wy = self.subst.walk(&y_arg);
+                let wz = self.subst.walk(&z_arg);
+                match (&wx, &wy, &wz) {
+                    (Term::Integer(x), Term::Integer(y), _) => {
+                        Some(self.subst.unify(&z_arg, &Term::Integer(x + y)))
+                    }
+                    (Term::Integer(x), _, Term::Integer(z)) => {
+                        Some(self.subst.unify(&y_arg, &Term::Integer(z - x)))
+                    }
+                    (_, Term::Integer(y), Term::Integer(z)) => {
+                        Some(self.subst.unify(&x_arg, &Term::Integer(z - y)))
+                    }
+                    _ => Some(false),
+                }
+            }
+            BuiltinResult::MSort(list_arg, sorted_arg) => {
+                let wlist = self.subst.apply(&list_arg);
+                if let Some(mut elems) = collect_list(&wlist, &self.interner) {
+                    elems.sort_by(|a, b| term_compare(a, b, &self.interner));
+                    let sorted = build_list(elems, &self.interner);
+                    return Some(self.subst.unify(&sorted_arg, &sorted));
+                }
+                Some(false)
+            }
+            BuiltinResult::Sort(list_arg, sorted_arg) => {
+                let wlist = self.subst.apply(&list_arg);
+                if let Some(mut elems) = collect_list(&wlist, &self.interner) {
+                    elems.sort_by(|a, b| term_compare(a, b, &self.interner));
+                    elems.dedup_by(|a, b| {
+                        term_compare(a, b, &self.interner) == std::cmp::Ordering::Equal
+                    });
+                    let sorted = build_list(elems, &self.interner);
+                    return Some(self.subst.unify(&sorted_arg, &sorted));
+                }
+                Some(false)
+            }
+            BuiltinResult::NumberChars(num_arg, chars_arg) => {
+                let wnum = self.subst.walk(&num_arg);
+                match &wnum {
+                    Term::Integer(n) => {
+                        let s = n.to_string();
+                        let nil_id = self.interner.lookup("[]").expect("[] must be interned");
+                        let mut list = Term::Atom(nil_id);
+                        for ch in s.chars().rev() {
+                            let ch_id = self.interner.intern(&ch.to_string());
+                            list = Term::List {
+                                head: Box::new(Term::Atom(ch_id)),
+                                tail: Box::new(list),
+                            };
+                        }
+                        Some(self.subst.unify(&chars_arg, &list))
+                    }
+                    Term::Float(f) => {
+                        let s = format!("{}", f);
+                        let nil_id = self.interner.lookup("[]").expect("[] must be interned");
+                        let mut list = Term::Atom(nil_id);
+                        for ch in s.chars().rev() {
+                            let ch_id = self.interner.intern(&ch.to_string());
+                            list = Term::List {
+                                head: Box::new(Term::Atom(ch_id)),
+                                tail: Box::new(list),
+                            };
+                        }
+                        Some(self.subst.unify(&chars_arg, &list))
+                    }
+                    _ => Some(false),
+                }
+            }
+            BuiltinResult::NumberCodes(num_arg, codes_arg) => {
+                let wnum = self.subst.walk(&num_arg);
+                match &wnum {
+                    Term::Integer(n) => {
+                        let s = n.to_string();
+                        let nil_id = self.interner.lookup("[]").expect("[] must be interned");
+                        let mut list = Term::Atom(nil_id);
+                        for ch in s.chars().rev() {
+                            list = Term::List {
+                                head: Box::new(Term::Integer(ch as i64)),
+                                tail: Box::new(list),
+                            };
+                        }
+                        Some(self.subst.unify(&codes_arg, &list))
+                    }
+                    Term::Float(f) => {
+                        let s = format!("{}", f);
+                        let nil_id = self.interner.lookup("[]").expect("[] must be interned");
+                        let mut list = Term::Atom(nil_id);
+                        for ch in s.chars().rev() {
+                            list = Term::List {
+                                head: Box::new(Term::Integer(ch as i64)),
+                                tail: Box::new(list),
+                            };
+                        }
+                        Some(self.subst.unify(&codes_arg, &list))
+                    }
+                    _ => Some(false),
+                }
+            }
+            _ => None, // Unhandled variants
+        }
+    }
+
+    /// Copy a term with all variables replaced by fresh ones (for copy_term/2).
+    fn copy_term_fresh(&mut self, term: &Term) -> Term {
+        let mut var_map: FnvHashMap<VarId, VarId> = FnvHashMap::default();
+        self.copy_term_impl(term, &mut var_map)
+    }
+
+    fn copy_term_impl(&mut self, term: &Term, var_map: &mut FnvHashMap<VarId, VarId>) -> Term {
+        let walked = self.subst.walk(term);
+        match &walked {
+            Term::Var(id) => {
+                let new_id = *var_map.entry(*id).or_insert_with(|| {
+                    let fresh = self.var_counter;
+                    self.var_counter += 1;
+                    fresh
+                });
+                Term::Var(new_id)
+            }
+            Term::Atom(_) | Term::Integer(_) | Term::Float(_) => walked.clone(),
+            Term::Compound { functor, args } => Term::Compound {
+                functor: *functor,
+                args: args
+                    .iter()
+                    .map(|a| self.copy_term_impl(a, var_map))
+                    .collect(),
+            },
+            Term::List { head, tail } => Term::List {
+                head: Box::new(self.copy_term_impl(head, var_map)),
+                tail: Box::new(self.copy_term_impl(tail, var_map)),
+            },
         }
     }
 
