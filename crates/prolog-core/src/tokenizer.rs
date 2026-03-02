@@ -4,41 +4,41 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TokenKind {
     // Identifiers
-    Atom(String),       // lowercase-starting or single-quoted
-    Variable(String),   // uppercase-starting or _
+    Atom(String),     // lowercase-starting or single-quoted
+    Variable(String), // uppercase-starting or _
     Integer(i64),
     Float(f64),
 
     // Operators
-    Neck,       // :-
-    QueryOp,    // ?-
-    Equals,     // =
-    NotEquals,  // \=
-    Is,         // is
-    Lt,         // <
-    Gt,         // >
-    Lte,        // =<
-    Gte,        // >=
-    ArithEq,    // =:=
-    ArithNeq,   // =\=
-    Plus,       // +
-    Minus,      // -
-    Star,       // *
-    Slash,      // /
-    Mod,        // mod
-    Not,        // \+
-    Cut,        // !
-    Arrow,      // ->
-    Semicolon,  // ;
+    Neck,      // :-
+    QueryOp,   // ?-
+    Equals,    // =
+    NotEquals, // \=
+    Is,        // is
+    Lt,        // <
+    Gt,        // >
+    Lte,       // =<
+    Gte,       // >=
+    ArithEq,   // =:=
+    ArithNeq,  // =\=
+    Plus,      // +
+    Minus,     // -
+    Star,      // *
+    Slash,     // /
+    Mod,       // mod
+    Not,       // \+
+    Cut,       // !
+    Arrow,     // ->
+    Semicolon, // ;
 
     // Punctuation
-    Dot,        // .
-    Comma,      // ,
-    LParen,     // (
-    RParen,     // )
-    LBracket,   // [
-    RBracket,   // ]
-    Pipe,       // |
+    Dot,      // .
+    Comma,    // ,
+    LParen,   // (
+    RParen,   // )
+    LBracket, // [
+    RBracket, // ]
+    Pipe,     // |
 
     // End of input
     Eof,
@@ -156,41 +156,112 @@ impl<'a> Tokenizer<'a> {
         let col = self.col;
 
         let ch = match self.peek() {
-            None => return Ok(Token { kind: TokenKind::Eof, line, col }),
+            None => {
+                return Ok(Token {
+                    kind: TokenKind::Eof,
+                    line,
+                    col,
+                })
+            }
             Some(ch) => ch,
         };
 
         match ch {
-            b'(' => { self.advance(); Ok(Token { kind: TokenKind::LParen, line, col }) }
-            b')' => { self.advance(); Ok(Token { kind: TokenKind::RParen, line, col }) }
+            b'(' => {
+                self.advance();
+                Ok(Token {
+                    kind: TokenKind::LParen,
+                    line,
+                    col,
+                })
+            }
+            b')' => {
+                self.advance();
+                Ok(Token {
+                    kind: TokenKind::RParen,
+                    line,
+                    col,
+                })
+            }
             b'[' => {
                 self.advance();
                 // Check for []
                 if self.peek() == Some(b']') {
                     self.advance();
-                    Ok(Token { kind: TokenKind::Atom("[]".into()), line, col })
+                    Ok(Token {
+                        kind: TokenKind::Atom("[]".into()),
+                        line,
+                        col,
+                    })
                 } else {
-                    Ok(Token { kind: TokenKind::LBracket, line, col })
+                    Ok(Token {
+                        kind: TokenKind::LBracket,
+                        line,
+                        col,
+                    })
                 }
             }
-            b']' => { self.advance(); Ok(Token { kind: TokenKind::RBracket, line, col }) }
-            b'|' => { self.advance(); Ok(Token { kind: TokenKind::Pipe, line, col }) }
-            b',' => { self.advance(); Ok(Token { kind: TokenKind::Comma, line, col }) }
-            b'!' => { self.advance(); Ok(Token { kind: TokenKind::Cut, line, col }) }
-            b';' => { self.advance(); Ok(Token { kind: TokenKind::Semicolon, line, col }) }
+            b']' => {
+                self.advance();
+                Ok(Token {
+                    kind: TokenKind::RBracket,
+                    line,
+                    col,
+                })
+            }
+            b'|' => {
+                self.advance();
+                Ok(Token {
+                    kind: TokenKind::Pipe,
+                    line,
+                    col,
+                })
+            }
+            b',' => {
+                self.advance();
+                Ok(Token {
+                    kind: TokenKind::Comma,
+                    line,
+                    col,
+                })
+            }
+            b'!' => {
+                self.advance();
+                Ok(Token {
+                    kind: TokenKind::Cut,
+                    line,
+                    col,
+                })
+            }
+            b';' => {
+                self.advance();
+                Ok(Token {
+                    kind: TokenKind::Semicolon,
+                    line,
+                    col,
+                })
+            }
 
             b'.' => {
                 self.advance();
                 // Check if followed by whitespace/EOF/comment (end of clause)
                 // vs followed by digit (float - but we handle that in number parsing)
-                Ok(Token { kind: TokenKind::Dot, line, col })
+                Ok(Token {
+                    kind: TokenKind::Dot,
+                    line,
+                    col,
+                })
             }
 
             b':' => {
                 self.advance();
                 if self.peek() == Some(b'-') {
                     self.advance();
-                    Ok(Token { kind: TokenKind::Neck, line, col })
+                    Ok(Token {
+                        kind: TokenKind::Neck,
+                        line,
+                        col,
+                    })
                 } else {
                     Err(format!("Unexpected ':' at line {} col {}", line, col))
                 }
@@ -200,7 +271,11 @@ impl<'a> Tokenizer<'a> {
                 self.advance();
                 if self.peek() == Some(b'-') {
                     self.advance();
-                    Ok(Token { kind: TokenKind::QueryOp, line, col })
+                    Ok(Token {
+                        kind: TokenKind::QueryOp,
+                        line,
+                        col,
+                    })
                 } else {
                     Err(format!("Unexpected '?' at line {} col {}", line, col))
                 }
@@ -210,20 +285,36 @@ impl<'a> Tokenizer<'a> {
                 self.advance();
                 match self.peek() {
                     Some(b':') if self.peek_at(1) == Some(b'=') => {
-                        self.advance(); self.advance();
-                        Ok(Token { kind: TokenKind::ArithEq, line, col })
+                        self.advance();
+                        self.advance();
+                        Ok(Token {
+                            kind: TokenKind::ArithEq,
+                            line,
+                            col,
+                        })
                     }
                     Some(b'\\') if self.peek_at(1) == Some(b'=') => {
-                        self.advance(); self.advance();
-                        Ok(Token { kind: TokenKind::ArithNeq, line, col })
+                        self.advance();
+                        self.advance();
+                        Ok(Token {
+                            kind: TokenKind::ArithNeq,
+                            line,
+                            col,
+                        })
                     }
                     Some(b'<') => {
                         self.advance();
-                        Ok(Token { kind: TokenKind::Lte, line, col })
+                        Ok(Token {
+                            kind: TokenKind::Lte,
+                            line,
+                            col,
+                        })
                     }
-                    _ => {
-                        Ok(Token { kind: TokenKind::Equals, line, col })
-                    }
+                    _ => Ok(Token {
+                        kind: TokenKind::Equals,
+                        line,
+                        col,
+                    }),
                 }
             }
 
@@ -232,45 +323,101 @@ impl<'a> Tokenizer<'a> {
                 match self.peek() {
                     Some(b'=') => {
                         self.advance();
-                        Ok(Token { kind: TokenKind::NotEquals, line, col })
+                        Ok(Token {
+                            kind: TokenKind::NotEquals,
+                            line,
+                            col,
+                        })
                     }
                     Some(b'+') => {
                         self.advance();
-                        Ok(Token { kind: TokenKind::Not, line, col })
+                        Ok(Token {
+                            kind: TokenKind::Not,
+                            line,
+                            col,
+                        })
                     }
                     _ => Err(format!("Unexpected '\\' at line {} col {}", line, col)),
                 }
             }
 
-            b'<' => { self.advance(); Ok(Token { kind: TokenKind::Lt, line, col }) }
+            b'<' => {
+                self.advance();
+                Ok(Token {
+                    kind: TokenKind::Lt,
+                    line,
+                    col,
+                })
+            }
             b'>' => {
                 self.advance();
                 if self.peek() == Some(b'=') {
                     self.advance();
-                    Ok(Token { kind: TokenKind::Gte, line, col })
+                    Ok(Token {
+                        kind: TokenKind::Gte,
+                        line,
+                        col,
+                    })
                 } else {
-                    Ok(Token { kind: TokenKind::Gt, line, col })
+                    Ok(Token {
+                        kind: TokenKind::Gt,
+                        line,
+                        col,
+                    })
                 }
             }
 
-            b'+' => { self.advance(); Ok(Token { kind: TokenKind::Plus, line, col }) }
-            b'*' => { self.advance(); Ok(Token { kind: TokenKind::Star, line, col }) }
-            b'/' => { self.advance(); Ok(Token { kind: TokenKind::Slash, line, col }) }
+            b'+' => {
+                self.advance();
+                Ok(Token {
+                    kind: TokenKind::Plus,
+                    line,
+                    col,
+                })
+            }
+            b'*' => {
+                self.advance();
+                Ok(Token {
+                    kind: TokenKind::Star,
+                    line,
+                    col,
+                })
+            }
+            b'/' => {
+                self.advance();
+                Ok(Token {
+                    kind: TokenKind::Slash,
+                    line,
+                    col,
+                })
+            }
 
             b'-' => {
                 self.advance();
                 // Check for -> (arrow)
                 if self.peek() == Some(b'>') {
                     self.advance();
-                    return Ok(Token { kind: TokenKind::Arrow, line, col });
+                    return Ok(Token {
+                        kind: TokenKind::Arrow,
+                        line,
+                        col,
+                    });
                 }
                 // Check if this is a negative number: dash followed by digit
                 if let Some(d) = self.peek() {
                     if d.is_ascii_digit() {
-                        return Ok(Token { kind: TokenKind::Minus, line, col });
+                        return Ok(Token {
+                            kind: TokenKind::Minus,
+                            line,
+                            col,
+                        });
                     }
                 }
-                Ok(Token { kind: TokenKind::Minus, line, col })
+                Ok(Token {
+                    kind: TokenKind::Minus,
+                    line,
+                    col,
+                })
             }
 
             b'\'' => self.read_quoted_atom(line, col),
@@ -283,7 +430,10 @@ impl<'a> Tokenizer<'a> {
 
             _ => {
                 self.advance();
-                Err(format!("Unexpected character '{}' at line {} col {}", ch as char, line, col))
+                Err(format!(
+                    "Unexpected character '{}' at line {} col {}",
+                    ch as char, line, col
+                ))
             }
         }
     }
@@ -315,7 +465,11 @@ impl<'a> Tokenizer<'a> {
                 break;
             }
         }
-        Ok(Token { kind: TokenKind::Variable(s), line, col })
+        Ok(Token {
+            kind: TokenKind::Variable(s),
+            line,
+            col,
+        })
     }
 
     fn read_number(&mut self, line: usize, col: usize) -> Result<Token, String> {
@@ -350,11 +504,23 @@ impl<'a> Tokenizer<'a> {
         }
 
         if is_float {
-            let val: f64 = s.parse().map_err(|e| format!("Invalid float '{}': {}", s, e))?;
-            Ok(Token { kind: TokenKind::Float(val), line, col })
+            let val: f64 = s
+                .parse()
+                .map_err(|e| format!("Invalid float '{}': {}", s, e))?;
+            Ok(Token {
+                kind: TokenKind::Float(val),
+                line,
+                col,
+            })
         } else {
-            let val: i64 = s.parse().map_err(|e| format!("Invalid integer '{}': {}", s, e))?;
-            Ok(Token { kind: TokenKind::Integer(val), line, col })
+            let val: i64 = s
+                .parse()
+                .map_err(|e| format!("Invalid integer '{}': {}", s, e))?;
+            Ok(Token {
+                kind: TokenKind::Integer(val),
+                line,
+                col,
+            })
         }
     }
 
@@ -363,7 +529,12 @@ impl<'a> Tokenizer<'a> {
         let mut s = String::new();
         loop {
             match self.peek() {
-                None => return Err(format!("Unterminated quoted atom at line {} col {}", line, col)),
+                None => {
+                    return Err(format!(
+                        "Unterminated quoted atom at line {} col {}",
+                        line, col
+                    ))
+                }
                 Some(b'\'') => {
                     self.advance();
                     // Check for escaped quote ''
@@ -377,12 +548,32 @@ impl<'a> Tokenizer<'a> {
                 Some(b'\\') => {
                     self.advance();
                     match self.peek() {
-                        Some(b'\'') => { s.push('\''); self.advance(); }
-                        Some(b'\\') => { s.push('\\'); self.advance(); }
-                        Some(b'n') => { s.push('\n'); self.advance(); }
-                        Some(b't') => { s.push('\t'); self.advance(); }
-                        Some(ch) => { s.push(ch as char); self.advance(); }
-                        None => return Err(format!("Unterminated escape at line {} col {}", self.line, self.col)),
+                        Some(b'\'') => {
+                            s.push('\'');
+                            self.advance();
+                        }
+                        Some(b'\\') => {
+                            s.push('\\');
+                            self.advance();
+                        }
+                        Some(b'n') => {
+                            s.push('\n');
+                            self.advance();
+                        }
+                        Some(b't') => {
+                            s.push('\t');
+                            self.advance();
+                        }
+                        Some(ch) => {
+                            s.push(ch as char);
+                            self.advance();
+                        }
+                        None => {
+                            return Err(format!(
+                                "Unterminated escape at line {} col {}",
+                                self.line, self.col
+                            ))
+                        }
                     }
                 }
                 Some(ch) => {
@@ -391,7 +582,11 @@ impl<'a> Tokenizer<'a> {
                 }
             }
         }
-        Ok(Token { kind: TokenKind::Atom(s), line, col })
+        Ok(Token {
+            kind: TokenKind::Atom(s),
+            line,
+            col,
+        })
     }
 }
 
@@ -417,7 +612,10 @@ mod tests {
 
     #[test]
     fn test_quoted_atoms() {
-        assert_eq!(tok("'hello world'"), vec![TokenKind::Atom("hello world".into())]);
+        assert_eq!(
+            tok("'hello world'"),
+            vec![TokenKind::Atom("hello world".into())]
+        );
         assert_eq!(tok("'it''s'"), vec![TokenKind::Atom("it's".into())]);
     }
 
@@ -454,14 +652,18 @@ mod tests {
 
     #[test]
     fn test_punctuation() {
-        assert_eq!(tok("( ) | , ."), vec![
-            TokenKind::LParen, TokenKind::RParen,
-            TokenKind::Pipe, TokenKind::Comma, TokenKind::Dot,
-        ]);
+        assert_eq!(
+            tok("( ) | , ."),
+            vec![
+                TokenKind::LParen,
+                TokenKind::RParen,
+                TokenKind::Pipe,
+                TokenKind::Comma,
+                TokenKind::Dot,
+            ]
+        );
         // [ ] with space is separate tokens, not []
-        assert_eq!(tok("[ ]"), vec![
-            TokenKind::LBracket, TokenKind::RBracket,
-        ]);
+        assert_eq!(tok("[ ]"), vec![TokenKind::LBracket, TokenKind::RBracket,]);
     }
 
     #[test]
@@ -472,65 +674,74 @@ mod tests {
     #[test]
     fn test_clause() {
         let tokens = tok("parent(tom, mary).");
-        assert_eq!(tokens, vec![
-            TokenKind::Atom("parent".into()),
-            TokenKind::LParen,
-            TokenKind::Atom("tom".into()),
-            TokenKind::Comma,
-            TokenKind::Atom("mary".into()),
-            TokenKind::RParen,
-            TokenKind::Dot,
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::Atom("parent".into()),
+                TokenKind::LParen,
+                TokenKind::Atom("tom".into()),
+                TokenKind::Comma,
+                TokenKind::Atom("mary".into()),
+                TokenKind::RParen,
+                TokenKind::Dot,
+            ]
+        );
     }
 
     #[test]
     fn test_rule() {
         let tokens = tok("happy(X) :- likes(X, food).");
-        assert_eq!(tokens, vec![
-            TokenKind::Atom("happy".into()),
-            TokenKind::LParen,
-            TokenKind::Variable("X".into()),
-            TokenKind::RParen,
-            TokenKind::Neck,
-            TokenKind::Atom("likes".into()),
-            TokenKind::LParen,
-            TokenKind::Variable("X".into()),
-            TokenKind::Comma,
-            TokenKind::Atom("food".into()),
-            TokenKind::RParen,
-            TokenKind::Dot,
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::Atom("happy".into()),
+                TokenKind::LParen,
+                TokenKind::Variable("X".into()),
+                TokenKind::RParen,
+                TokenKind::Neck,
+                TokenKind::Atom("likes".into()),
+                TokenKind::LParen,
+                TokenKind::Variable("X".into()),
+                TokenKind::Comma,
+                TokenKind::Atom("food".into()),
+                TokenKind::RParen,
+                TokenKind::Dot,
+            ]
+        );
     }
 
     #[test]
     fn test_arithmetic() {
         let tokens = tok("X is 2 + 3 * 4.");
-        assert_eq!(tokens, vec![
-            TokenKind::Variable("X".into()),
-            TokenKind::Is,
-            TokenKind::Integer(2),
-            TokenKind::Plus,
-            TokenKind::Integer(3),
-            TokenKind::Star,
-            TokenKind::Integer(4),
-            TokenKind::Dot,
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::Variable("X".into()),
+                TokenKind::Is,
+                TokenKind::Integer(2),
+                TokenKind::Plus,
+                TokenKind::Integer(3),
+                TokenKind::Star,
+                TokenKind::Integer(4),
+                TokenKind::Dot,
+            ]
+        );
     }
 
     #[test]
     fn test_line_comment() {
-        assert_eq!(tok("foo % this is a comment\nbar"), vec![
-            TokenKind::Atom("foo".into()),
-            TokenKind::Atom("bar".into()),
-        ]);
+        assert_eq!(
+            tok("foo % this is a comment\nbar"),
+            vec![TokenKind::Atom("foo".into()), TokenKind::Atom("bar".into()),]
+        );
     }
 
     #[test]
     fn test_block_comment() {
-        assert_eq!(tok("foo /* block */ bar"), vec![
-            TokenKind::Atom("foo".into()),
-            TokenKind::Atom("bar".into()),
-        ]);
+        assert_eq!(
+            tok("foo /* block */ bar"),
+            vec![TokenKind::Atom("foo".into()), TokenKind::Atom("bar".into()),]
+        );
     }
 
     #[test]
@@ -541,23 +752,29 @@ mod tests {
     #[test]
     fn test_list_syntax() {
         let tokens = tok("[1, 2, 3]");
-        assert_eq!(tokens, vec![
-            TokenKind::LBracket,
-            TokenKind::Integer(1),
-            TokenKind::Comma,
-            TokenKind::Integer(2),
-            TokenKind::Comma,
-            TokenKind::Integer(3),
-            TokenKind::RBracket,
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::LBracket,
+                TokenKind::Integer(1),
+                TokenKind::Comma,
+                TokenKind::Integer(2),
+                TokenKind::Comma,
+                TokenKind::Integer(3),
+                TokenKind::RBracket,
+            ]
+        );
     }
 
     #[test]
     fn test_minus_operator() {
-        assert_eq!(tok("5 - 3"), vec![
-            TokenKind::Integer(5),
-            TokenKind::Minus,
-            TokenKind::Integer(3),
-        ]);
+        assert_eq!(
+            tok("5 - 3"),
+            vec![
+                TokenKind::Integer(5),
+                TokenKind::Minus,
+                TokenKind::Integer(3),
+            ]
+        );
     }
 }

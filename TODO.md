@@ -43,25 +43,25 @@ patch-prolog is a Rust-based Prolog engine for linting generative AI output. It 
 
 ---
 
-## Phase 3: Usability
+## Phase 3: Usability — COMPLETE
 
 ### 3a. `once/1` and `call/1`
-- [ ] `once/1` — solve goal, take first solution, cut
-- [ ] `call/1` — execute a term as a goal (basic meta-call)
+- [x] `once/1` — solve goal, take first solution, cut (uses `try_solve_once` + choice stack truncation)
+- [x] `call/1` — execute a term as a goal (basic meta-call)
 - Files: `builtins.rs`, `solver.rs`
 
 ### 3b. Atom/string predicates
-- [ ] `atom_length/2`
-- [ ] `atom_concat/3`
-- [ ] `atom_chars/2`
-- File: `builtins.rs`
+- [x] `atom_length/2`
+- [x] `atom_concat/3`
+- [x] `atom_chars/2`
+- Files: `builtins.rs` (BuiltinResult variants), `solver.rs` (execution with mutable interner)
 
 ### 3c. Additional arithmetic functions
-Add to `is/2` evaluation:
-- [ ] `abs/1`
-- [ ] `max/2`
-- [ ] `min/2`
-- [ ] `sign/1`
+Added to `is/2` evaluation:
+- [x] `abs/1`
+- [x] `max/2`
+- [x] `min/2`
+- [x] `sign/1`
 - File: `builtins.rs`
 
 ---
@@ -85,9 +85,9 @@ Add to `is/2` evaluation:
   - [x] List predicates tested end-to-end in integration tests
 
 ### Test counts
-- 111 unit tests in prolog-core
-- 23 integration tests in tests/integration.rs
-- **134 total**
+- 132 unit tests in prolog-core
+- 33 integration tests in tests/integration.rs
+- **165 total**
 
 ---
 
@@ -111,20 +111,23 @@ Add to `is/2` evaluation:
 - **Workspace**: root `patch-prolog` binary + `crates/prolog-core` library
 - **Build-time compilation**: `build.rs` compiles `knowledge/*.pl` into binary via bincode
 - **Core modules**: term, tokenizer, parser, unify, builtins, solver, database, index
-- **`[]` always interned**: `CompiledDatabase::new()` ensures this (required for findall, list ops)
+- **`[]` and `!` always interned**: `CompiledDatabase::new()` ensures this (required for findall, list ops, once/1)
+- **Solver runtime interner**: Solver clones db.interner for atom predicates that create new atoms at runtime (atom_concat, atom_chars)
 - **BuiltinResult enum**: handles control flow — solver processes Disjunction, IfThenElse, Conjunction, FindAll variants
 - **Disjunction choice points**: use `disjunction: bool` flag on ChoicePoint to distinguish from clause alternatives
 - **Parenthesized expressions**: `parse_paren_body()` handles `;`, `->`, and `,` as control flow operators
 
-## Current Built-in Predicates (~30 total)
+## Current Built-in Predicates (~40 total)
 
 | Category | Predicates |
 |----------|-----------|
 | Core | `true`, `fail`, `false`, `!`, `=`, `\=`, `is`, `<`, `>`, `=<`, `>=`, `=:=`, `=\=`, `\+` |
 | Type checking | `var/1`, `nonvar/1`, `atom/1`, `number/1`, `integer/1`, `float/1`, `compound/1`, `is_list/1` |
 | Control flow | `;/2` (disjunction), `->/2` (if-then), `,/2` (conjunction) |
+| Meta-call | `once/1`, `call/1` |
 | Collection | `findall/3` |
-| Arithmetic ops | `+`, `-`, `*`, `/`, `mod`, unary `-` |
+| Atom/string | `atom_length/2`, `atom_concat/3`, `atom_chars/2` |
+| Arithmetic ops | `+`, `-`, `*`, `/`, `mod`, unary `-`, `abs/1`, `max/2`, `min/2`, `sign/1` |
 
 ## Stdlib (knowledge/stdlib.pl)
 

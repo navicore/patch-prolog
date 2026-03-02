@@ -14,7 +14,10 @@ pub struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     /// Parse a complete program (multiple clauses) from source text.
-    pub fn parse_program(input: &str, interner: &mut StringInterner) -> Result<Vec<Clause>, String> {
+    pub fn parse_program(
+        input: &str,
+        interner: &mut StringInterner,
+    ) -> Result<Vec<Clause>, String> {
         let tokens = Tokenizer::tokenize(input)?;
         let mut parser = Parser {
             tokens,
@@ -107,8 +110,12 @@ impl<'a> Parser<'a> {
             }
             Some(tok) => {
                 let tok = tok.clone();
-                Err(format!("Expected '.' or ':-', got {:?} at line {} col {}",
-                    tok, self.current().unwrap().line, self.current().unwrap().col))
+                Err(format!(
+                    "Expected '.' or ':-', got {:?} at line {} col {}",
+                    tok,
+                    self.current().unwrap().line,
+                    self.current().unwrap().col
+                ))
             }
             None => Err("Unexpected end of input in clause".to_string()),
         }
@@ -299,8 +306,12 @@ impl<'a> Parser<'a> {
                 })
             }
             Some(ref tok) => {
-                let msg = format!("Unexpected token {:?} at line {} col {}",
-                    tok, self.current().unwrap().line, self.current().unwrap().col);
+                let msg = format!(
+                    "Unexpected token {:?} at line {} col {}",
+                    tok,
+                    self.current().unwrap().line,
+                    self.current().unwrap().col
+                );
                 Err(msg)
             }
             None => Err("Unexpected end of input".to_string()),
@@ -566,10 +577,16 @@ mod tests {
         let (clauses, _) = parse_clauses("foo(X, Y) :- bar(X, Y).");
         let clause = &clauses[0];
         // Extract var ids from head
-        if let Term::Compound { args: head_args, .. } = &clause.head {
+        if let Term::Compound {
+            args: head_args, ..
+        } = &clause.head
+        {
             if let (Term::Var(hx), Term::Var(hy)) = (&head_args[0], &head_args[1]) {
                 // Same vars in body
-                if let Term::Compound { args: body_args, .. } = &clause.body[0] {
+                if let Term::Compound {
+                    args: body_args, ..
+                } = &clause.body[0]
+                {
                     if let (Term::Var(bx), Term::Var(by)) = (&body_args[0], &body_args[1]) {
                         assert_eq!(hx, bx, "X in head and body should be same var");
                         assert_eq!(hy, by, "Y in head and body should be same var");

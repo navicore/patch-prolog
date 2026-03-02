@@ -62,11 +62,7 @@ pub fn build_index(clauses: &[Clause]) -> PredicateIndex {
 
 /// Look up candidate clause indices for a goal.
 /// Returns indices into the clauses Vec.
-pub fn lookup_clauses(
-    index: &PredicateIndex,
-    goal: &Term,
-    clauses: &[Clause],
-) -> Vec<usize> {
+pub fn lookup_clauses(index: &PredicateIndex, goal: &Term, clauses: &[Clause]) -> Vec<usize> {
     let _ = clauses; // used for type reference only
     let (functor, arity) = match goal.functor_arity() {
         Some(fa) => fa,

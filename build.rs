@@ -14,12 +14,7 @@ fn main() {
         let mut entries: Vec<_> = fs::read_dir(knowledge_dir)
             .expect("Failed to read knowledge/ directory")
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map(|ext| ext == "pl")
-                    .unwrap_or(false)
-            })
+            .filter(|e| e.path().extension().map(|ext| ext == "pl").unwrap_or(false))
             .collect();
 
         // Sort for deterministic builds
@@ -45,7 +40,9 @@ fn main() {
     };
 
     let db = prolog_core::CompiledDatabase::new(interner, clauses);
-    let bytes = db.to_bytes().expect("Failed to serialize compiled database");
+    let bytes = db
+        .to_bytes()
+        .expect("Failed to serialize compiled database");
 
     // Write the compiled database to OUT_DIR
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");

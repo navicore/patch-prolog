@@ -134,16 +134,9 @@ impl Substitution {
             }
 
             // List: unify head and tail
-            (
-                Term::List {
-                    head: h1,
-                    tail: t1,
-                },
-                Term::List {
-                    head: h2,
-                    tail: t2,
-                },
-            ) => self.unify(h1, h2) && self.unify(t1, t2),
+            (Term::List { head: h1, tail: t1 }, Term::List { head: h2, tail: t2 }) => {
+                self.unify(h1, h2) && self.unify(t1, t2)
+            }
 
             // Anything else fails
             _ => false,
@@ -163,9 +156,7 @@ impl Substitution {
                 }
             }
             Term::Compound { args, .. } => args.iter().any(|a| self.occurs_in(var, a)),
-            Term::List { head, tail } => {
-                self.occurs_in(var, head) || self.occurs_in(var, tail)
-            }
+            Term::List { head, tail } => self.occurs_in(var, head) || self.occurs_in(var, tail),
             _ => false,
         }
     }

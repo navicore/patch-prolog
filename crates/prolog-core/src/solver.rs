@@ -51,6 +51,8 @@ pub struct Solver<'a> {
     depth: usize,
     /// Maximum allowed depth before returning an error.
     max_depth: usize,
+    /// Mutable interner for runtime atom creation (atom_concat, atom_chars, etc.).
+    interner: crate::term::StringInterner,
 }
 
 impl<'a> Solver<'a> {
@@ -62,6 +64,7 @@ impl<'a> Solver<'a> {
     ) -> Self {
         // Start var counter at 1000 to avoid collisions with query-level var IDs
         let mut solver = Solver {
+            interner: db.interner.clone(),
             db,
             subst: Substitution::new(),
             var_counter: 1000,
@@ -95,6 +98,11 @@ impl<'a> Solver<'a> {
         self
     }
 
+    /// Get the solver's interner (includes any runtime-created atoms).
+    pub fn interner(&self) -> &crate::term::StringInterner {
+        &self.interner
+    }
+
     /// Get the next solution (or failure/error).
     pub fn next(&mut self) -> SolveResult {
         if let Some(limit) = self.limit {
@@ -115,12 +123,19 @@ impl<'a> Solver<'a> {
     }
 
     /// Enumerate all solutions.
-    pub fn all_solutions(mut self) -> Result<Vec<Solution>, String> {
+    pub fn all_solutions(self) -> Result<Vec<Solution>, String> {
+        self.all_solutions_with_interner().map(|(sols, _)| sols)
+    }
+
+    /// Enumerate all solutions, returning the interner for term display.
+    pub fn all_solutions_with_interner(
+        mut self,
+    ) -> Result<(Vec<Solution>, crate::term::StringInterner), String> {
         let mut solutions = Vec::new();
         loop {
             match self.next() {
                 SolveResult::Success(sol) => solutions.push(sol),
-                SolveResult::Failure => return Ok(solutions),
+                SolveResult::Failure => return Ok((solutions, self.interner)),
                 SolveResult::Error(e) => return Err(e),
             }
         }
@@ -138,15 +153,16 @@ impl<'a> Solver<'a> {
             self.depth += 1;
             if self.depth > self.max_depth {
                 return SolveResult::Error(format!(
-                    "Maximum recursion depth exceeded ({})", self.max_depth
+                    "Maximum recursion depth exceeded ({})",
+                    self.max_depth
                 ));
             }
 
             let goal = goals.remove(0);
             let walked_goal = self.subst.walk(&goal);
 
-            if is_builtin(&walked_goal, &self.db.interner) {
-                match exec_builtin(&walked_goal, &mut self.subst, &self.db.interner) {
+            if is_builtin(&walked_goal, &self.interner) {
+                match exec_builtin(&walked_goal, &mut self.subst, &self.interner) {
                     Ok(BuiltinResult::Success) => {
                         // Continue with remaining goals
                         continue;
@@ -280,6 +296,88 @@ impl<'a> Solver<'a> {
                             Err(e) => return SolveResult::Error(e),
                         }
                     }
+                    Ok(BuiltinResult::Once(inner_goal)) => {
+                        // once/1: solve inner goal, keep bindings from first success,
+                        // remove any choice points created by the inner goal.
+                        let saved_stack_len = self.choice_stack.len();
+
+                        // try_solve_once keeps bindings on success
+                        if self.try_solve_once(vec![inner_goal]) {
+                            // Truncate choice stack to remove inner choice points
+                            self.choice_stack.truncate(saved_stack_len);
+                            continue;
+                        } else {
+                            self.choice_stack.truncate(saved_stack_len);
+                            return self.backtrack();
+                        }
+                    }
+                    Ok(BuiltinResult::Call(inner_goal)) => {
+                        // call/1: just execute the term as a goal
+                        let walked = self.subst.walk(&inner_goal);
+                        goals.insert(0, walked);
+                        continue;
+                    }
+                    Ok(BuiltinResult::AtomLength(atom_arg, len_arg)) => {
+                        let walked = self.subst.walk(&atom_arg);
+                        if let Term::Atom(id) = walked {
+                            let name_str = self.interner.resolve(id);
+                            let len = name_str.chars().count() as i64;
+                            if self.subst.unify(&len_arg, &Term::Integer(len)) {
+                                continue;
+                            } else {
+                                return self.backtrack();
+                            }
+                        } else {
+                            return SolveResult::Error(
+                                "atom_length/2: first argument must be an atom".to_string(),
+                            );
+                        }
+                    }
+                    Ok(BuiltinResult::AtomConcat(a_arg, b_arg, result_arg)) => {
+                        let a = self.subst.walk(&a_arg);
+                        let b = self.subst.walk(&b_arg);
+                        if let (Term::Atom(id_a), Term::Atom(id_b)) = (&a, &b) {
+                            let s = format!(
+                                "{}{}",
+                                self.interner.resolve(*id_a),
+                                self.interner.resolve(*id_b)
+                            );
+                            let result_id = self.interner.intern(&s);
+                            if self.subst.unify(&result_arg, &Term::Atom(result_id)) {
+                                continue;
+                            } else {
+                                return self.backtrack();
+                            }
+                        } else {
+                            return SolveResult::Error(
+                                "atom_concat/3: first two arguments must be atoms".to_string(),
+                            );
+                        }
+                    }
+                    Ok(BuiltinResult::AtomChars(atom_arg, list_arg)) => {
+                        let walked = self.subst.walk(&atom_arg);
+                        if let Term::Atom(id) = walked {
+                            let name_str = self.interner.resolve(id).to_string();
+                            let nil_id = self.interner.lookup("[]").expect("[] must be interned");
+                            let mut list = Term::Atom(nil_id);
+                            for ch in name_str.chars().rev() {
+                                let ch_id = self.interner.intern(&ch.to_string());
+                                list = Term::List {
+                                    head: Box::new(Term::Atom(ch_id)),
+                                    tail: Box::new(list),
+                                };
+                            }
+                            if self.subst.unify(&list_arg, &list) {
+                                continue;
+                            } else {
+                                return self.backtrack();
+                            }
+                        } else {
+                            return SolveResult::Error(
+                                "atom_chars/2: first argument must be an atom".to_string(),
+                            );
+                        }
+                    }
                     Err(e) => return SolveResult::Error(e),
                 }
             } else {
@@ -392,8 +490,8 @@ impl<'a> Solver<'a> {
             let goal = goal_list.remove(0);
             let walked_goal = self.subst.walk(&goal);
 
-            if is_builtin(&walked_goal, &self.db.interner) {
-                match exec_builtin(&walked_goal, &mut self.subst, &self.db.interner) {
+            if is_builtin(&walked_goal, &self.interner) {
+                match exec_builtin(&walked_goal, &mut self.subst, &self.interner) {
                     Ok(BuiltinResult::Success) => continue,
                     Ok(BuiltinResult::Failure) => return false,
                     Ok(BuiltinResult::Cut) => continue,
@@ -469,6 +567,62 @@ impl<'a> Solver<'a> {
                             Err(_) => return false,
                         }
                     }
+                    Ok(BuiltinResult::Once(inner_goal)) => {
+                        // once/1 in try_solve_once: just solve the inner goal once
+                        let walked = self.subst.walk(&inner_goal);
+                        goal_list.insert(0, walked);
+                        continue;
+                    }
+                    Ok(BuiltinResult::Call(inner_goal)) => {
+                        let walked = self.subst.walk(&inner_goal);
+                        goal_list.insert(0, walked);
+                        continue;
+                    }
+                    Ok(BuiltinResult::AtomLength(atom_arg, len_arg)) => {
+                        let walked = self.subst.walk(&atom_arg);
+                        if let Term::Atom(id) = walked {
+                            let len = self.interner.resolve(id).chars().count() as i64;
+                            if self.subst.unify(&len_arg, &Term::Integer(len)) {
+                                continue;
+                            }
+                        }
+                        return false;
+                    }
+                    Ok(BuiltinResult::AtomConcat(a_arg, b_arg, result_arg)) => {
+                        let a = self.subst.walk(&a_arg);
+                        let b = self.subst.walk(&b_arg);
+                        if let (Term::Atom(id_a), Term::Atom(id_b)) = (&a, &b) {
+                            let s = format!(
+                                "{}{}",
+                                self.interner.resolve(*id_a),
+                                self.interner.resolve(*id_b)
+                            );
+                            let result_id = self.interner.intern(&s);
+                            if self.subst.unify(&result_arg, &Term::Atom(result_id)) {
+                                continue;
+                            }
+                        }
+                        return false;
+                    }
+                    Ok(BuiltinResult::AtomChars(atom_arg, list_arg)) => {
+                        let walked = self.subst.walk(&atom_arg);
+                        if let Term::Atom(id) = walked {
+                            let name_str = self.interner.resolve(id).to_string();
+                            let nil_id = self.interner.lookup("[]").expect("[] must be interned");
+                            let mut list = Term::Atom(nil_id);
+                            for ch in name_str.chars().rev() {
+                                let ch_id = self.interner.intern(&ch.to_string());
+                                list = Term::List {
+                                    head: Box::new(Term::Atom(ch_id)),
+                                    tail: Box::new(list),
+                                };
+                            }
+                            if self.subst.unify(&list_arg, &list) {
+                                continue;
+                            }
+                        }
+                        return false;
+                    }
                     Err(_) => return false,
                 }
             }
@@ -510,8 +664,7 @@ impl<'a> Solver<'a> {
         self.choice_stack.truncate(saved_stack_len);
 
         // Build the result list from collected terms
-        let nil_id = self.db.interner.lookup("[]")
-            .expect("[] must be interned");
+        let nil_id = self.interner.lookup("[]").expect("[] must be interned");
         let mut result = Term::Atom(nil_id);
         for term in collected.into_iter().rev() {
             result = Term::List {
@@ -524,7 +677,12 @@ impl<'a> Solver<'a> {
     }
 
     /// Try to solve a list of goals, collecting template instances for each success.
-    fn try_solve_collecting(&mut self, goals: Vec<Term>, template: &Term, results: &mut Vec<Term>) -> bool {
+    fn try_solve_collecting(
+        &mut self,
+        goals: Vec<Term>,
+        template: &Term,
+        results: &mut Vec<Term>,
+    ) -> bool {
         if goals.is_empty() {
             results.push(self.subst.apply(template));
             return true;
@@ -534,8 +692,8 @@ impl<'a> Solver<'a> {
         let goal = goal_list.remove(0);
         let walked_goal = self.subst.walk(&goal);
 
-        if is_builtin(&walked_goal, &self.db.interner) {
-            match exec_builtin(&walked_goal, &mut self.subst, &self.db.interner) {
+        if is_builtin(&walked_goal, &self.interner) {
+            match exec_builtin(&walked_goal, &mut self.subst, &self.interner) {
                 Ok(BuiltinResult::Success) => {
                     return self.try_solve_collecting(goal_list, template, results);
                 }
@@ -612,6 +770,61 @@ impl<'a> Solver<'a> {
                         }
                         Err(_) => return false,
                     }
+                }
+                Ok(BuiltinResult::Once(inner_goal)) => {
+                    let walked = self.subst.walk(&inner_goal);
+                    goal_list.insert(0, walked);
+                    return self.try_solve_collecting(goal_list, template, results);
+                }
+                Ok(BuiltinResult::Call(inner_goal)) => {
+                    let walked = self.subst.walk(&inner_goal);
+                    goal_list.insert(0, walked);
+                    return self.try_solve_collecting(goal_list, template, results);
+                }
+                Ok(BuiltinResult::AtomLength(atom_arg, len_arg)) => {
+                    let walked = self.subst.walk(&atom_arg);
+                    if let Term::Atom(id) = walked {
+                        let len = self.interner.resolve(id).chars().count() as i64;
+                        if self.subst.unify(&len_arg, &Term::Integer(len)) {
+                            return self.try_solve_collecting(goal_list, template, results);
+                        }
+                    }
+                    return false;
+                }
+                Ok(BuiltinResult::AtomConcat(a_arg, b_arg, result_arg)) => {
+                    let a = self.subst.walk(&a_arg);
+                    let b = self.subst.walk(&b_arg);
+                    if let (Term::Atom(id_a), Term::Atom(id_b)) = (&a, &b) {
+                        let s = format!(
+                            "{}{}",
+                            self.interner.resolve(*id_a),
+                            self.interner.resolve(*id_b)
+                        );
+                        let result_id = self.interner.intern(&s);
+                        if self.subst.unify(&result_arg, &Term::Atom(result_id)) {
+                            return self.try_solve_collecting(goal_list, template, results);
+                        }
+                    }
+                    return false;
+                }
+                Ok(BuiltinResult::AtomChars(atom_arg, list_arg)) => {
+                    let walked = self.subst.walk(&atom_arg);
+                    if let Term::Atom(id) = walked {
+                        let name_str = self.interner.resolve(id).to_string();
+                        let nil_id = self.interner.lookup("[]").expect("[] must be interned");
+                        let mut list = Term::Atom(nil_id);
+                        for ch in name_str.chars().rev() {
+                            let ch_id = self.interner.intern(&ch.to_string());
+                            list = Term::List {
+                                head: Box::new(Term::Atom(ch_id)),
+                                tail: Box::new(list),
+                            };
+                        }
+                        if self.subst.unify(&list_arg, &list) {
+                            return self.try_solve_collecting(goal_list, template, results);
+                        }
+                    }
+                    return false;
                 }
                 Ok(BuiltinResult::Failure) | Err(_) => return false,
             }
@@ -769,12 +982,12 @@ mod tests {
         let (goals, vars) = Parser::parse_query_with_vars(query_str, &mut interner).unwrap();
         let db = CompiledDatabase::new(interner, clauses);
         let solver = Solver::new(&db, goals, vars);
-        let solutions = solver.all_solutions().unwrap();
+        let (solutions, solver_interner) = solver.all_solutions_with_interner().unwrap();
         solutions.first().and_then(|sol| {
             sol.bindings
                 .iter()
                 .find(|(name, _)| name == var_name)
-                .map(|(_, term)| term_to_string(term, &db.interner))
+                .map(|(_, term)| term_to_string(term, &solver_interner))
         })
     }
 
@@ -1063,5 +1276,114 @@ mod tests {
         let mut solver = Solver::new(&db, goals, vars).with_max_depth(100);
         let result = solver.next();
         assert!(matches!(result, SolveResult::Error(ref e) if e.contains("depth")));
+    }
+
+    // Phase 3 tests: once/1, call/1, atom predicates, arithmetic functions
+
+    #[test]
+    fn test_once_basic() {
+        let source = "color(red). color(green). color(blue).";
+        // once/1 should return only the first solution
+        let solutions = query(source, "once(color(X))");
+        assert_eq!(solutions.len(), 1);
+    }
+
+    #[test]
+    fn test_once_prevents_backtracking() {
+        let source = "n(1). n(2). n(3).";
+        let result = query_first_binding(source, "once(n(X))", "X");
+        assert_eq!(result, Some("1".to_string()));
+    }
+
+    #[test]
+    fn test_once_fails_if_goal_fails() {
+        let source = "color(red).";
+        let solutions = query(source, "once(shape(X))");
+        assert_eq!(solutions.len(), 0);
+    }
+
+    #[test]
+    fn test_call_basic() {
+        let source = "color(red). color(blue).";
+        let solutions = query(source, "call(color(red))");
+        assert_eq!(solutions.len(), 1);
+    }
+
+    #[test]
+    fn test_call_with_variable() {
+        let source = "color(red). color(blue). color(green).";
+        let solutions = query(source, "call(color(X))");
+        assert_eq!(solutions.len(), 3);
+    }
+
+    #[test]
+    fn test_call_fails() {
+        let source = "color(red).";
+        let solutions = query(source, "call(shape(X))");
+        assert_eq!(solutions.len(), 0);
+    }
+
+    #[test]
+    fn test_atom_length() {
+        let source = "";
+        let result = query_first_binding(source, "atom_length(hello, N)", "N");
+        assert_eq!(result, Some("5".to_string()));
+    }
+
+    #[test]
+    fn test_atom_length_empty() {
+        let source = "";
+        // Parse an empty atom using quotes
+        let result = query_first_binding(source, "atom_length('', N)", "N");
+        assert_eq!(result, Some("0".to_string()));
+    }
+
+    #[test]
+    fn test_atom_concat() {
+        let source = "";
+        let result = query_first_binding(source, "atom_concat(hello, world, X)", "X");
+        assert_eq!(result, Some("helloworld".to_string()));
+    }
+
+    #[test]
+    fn test_atom_chars() {
+        let source = "";
+        let result = query_first_binding(source, "atom_chars(abc, X)", "X");
+        assert_eq!(result, Some("[a, b, c]".to_string()));
+    }
+
+    #[test]
+    fn test_atom_chars_single() {
+        let source = "";
+        let result = query_first_binding(source, "atom_chars(x, X)", "X");
+        assert_eq!(result, Some("[x]".to_string()));
+    }
+
+    #[test]
+    fn test_arith_abs_in_rule() {
+        let source = "dist(X, Y, D) :- D is abs(X - Y).";
+        let result = query_first_binding(source, "dist(3, 7, D)", "D");
+        assert_eq!(result, Some("4".to_string()));
+    }
+
+    #[test]
+    fn test_arith_max_in_rule() {
+        let source = "bigger(X, Y, Z) :- Z is max(X, Y).";
+        let result = query_first_binding(source, "bigger(3, 7, Z)", "Z");
+        assert_eq!(result, Some("7".to_string()));
+    }
+
+    #[test]
+    fn test_arith_min_in_rule() {
+        let source = "smaller(X, Y, Z) :- Z is min(X, Y).";
+        let result = query_first_binding(source, "smaller(3, 7, Z)", "Z");
+        assert_eq!(result, Some("3".to_string()));
+    }
+
+    #[test]
+    fn test_arith_sign_in_rule() {
+        let source = "direction(X, S) :- S is sign(X).";
+        let result = query_first_binding(source, "direction(-42, S)", "S");
+        assert_eq!(result, Some("-1".to_string()));
     }
 }

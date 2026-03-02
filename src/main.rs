@@ -8,7 +8,10 @@ use std::process;
 static COMPILED_DB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/compiled_db.bin"));
 
 #[derive(ClapParser)]
-#[command(name = "patch-prolog", about = "Prolog engine for linting generative AI output")]
+#[command(
+    name = "patch-prolog",
+    about = "Prolog engine for linting generative AI output"
+)]
 struct Cli {
     /// Prolog query to execute
     #[arg(short, long)]

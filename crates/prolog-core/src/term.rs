@@ -76,14 +76,8 @@ pub enum Term {
     Var(VarId),
     Integer(i64),
     Float(f64),
-    Compound {
-        functor: AtomId,
-        args: Vec<Term>,
-    },
-    List {
-        head: Box<Term>,
-        tail: Box<Term>,
-    },
+    Compound { functor: AtomId, args: Vec<Term> },
+    List { head: Box<Term>, tail: Box<Term> },
 }
 
 impl Term {
@@ -108,9 +102,7 @@ impl Term {
         match first {
             Term::Atom(id) => Some(FirstArgKey::Atom(*id)),
             Term::Integer(n) => Some(FirstArgKey::Integer(*n)),
-            Term::Compound { functor, args } => {
-                Some(FirstArgKey::Functor(*functor, args.len()))
-            }
+            Term::Compound { functor, args } => Some(FirstArgKey::Functor(*functor, args.len())),
             _ => None, // Var, Float, List -> not indexable
         }
     }

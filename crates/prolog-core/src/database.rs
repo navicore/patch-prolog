@@ -14,8 +14,9 @@ pub struct CompiledDatabase {
 impl CompiledDatabase {
     /// Build a compiled database from clauses and interner.
     pub fn new(mut interner: StringInterner, clauses: Vec<Clause>) -> Self {
-        // Ensure the empty list atom is always interned
+        // Ensure required atoms are always interned
         interner.intern("[]");
+        interner.intern("!");
         let predicate_index = build_index(&clauses);
         CompiledDatabase {
             interner,
@@ -62,9 +63,7 @@ mod tests {
 
     #[test]
     fn test_lookup_indexed() {
-        let db = build_db(
-            "color(red). color(blue). color(green). shape(circle). shape(square).",
-        );
+        let db = build_db("color(red). color(blue). color(green). shape(circle). shape(square).");
         // color/1 should have 3 clauses
         let color_id = db.interner.lookup("color").unwrap();
         let goal = Term::Compound {

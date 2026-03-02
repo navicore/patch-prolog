@@ -22,6 +22,10 @@ pub fn is_builtin(goal: &Term, interner: &StringInterner) -> bool {
                 (";", 2) | ("->", 2) | (",", 2) => true,
                 // Solution collection
                 ("findall", 3) => true,
+                // Meta-call
+                ("once", 1) | ("call", 1) => true,
+                // Atom/string predicates
+                ("atom_length", 2) | ("atom_concat", 3) | ("atom_chars", 2) => true,
                 _ => false,
             }
         }
@@ -50,6 +54,16 @@ pub enum BuiltinResult {
     Conjunction(Term, Term),
     /// findall/3: Template, Goal, Result list.
     FindAll(Term, Term, Term),
+    /// once/1: solve goal, take first solution only.
+    Once(Term),
+    /// call/1: execute a term as a goal.
+    Call(Term),
+    /// atom_length/2: atom, length
+    AtomLength(Term, Term),
+    /// atom_concat/3: atom1, atom2, result
+    AtomConcat(Term, Term, Term),
+    /// atom_chars/2: atom, char list
+    AtomChars(Term, Term),
 }
 
 /// Execute a built-in predicate.
@@ -221,7 +235,11 @@ pub fn exec_builtin(
                 (";", 2) => {
                     // Check if left arg is ->(Cond, Then) => if-then-else
                     let left = subst.walk(&args[0]);
-                    if let Term::Compound { functor, args: inner_args } = &left {
+                    if let Term::Compound {
+                        functor,
+                        args: inner_args,
+                    } = &left
+                    {
                         if interner.resolve(*functor) == "->" && inner_args.len() == 2 {
                             return Ok(BuiltinResult::IfThenElse(
                                 inner_args[0].clone(),
@@ -233,19 +251,25 @@ pub fn exec_builtin(
                     // Plain disjunction
                     Ok(BuiltinResult::Disjunction(args[0].clone(), args[1].clone()))
                 }
-                ("->", 2) => {
-                    Ok(BuiltinResult::IfThen(args[0].clone(), args[1].clone()))
+                ("->", 2) => Ok(BuiltinResult::IfThen(args[0].clone(), args[1].clone())),
+                (",", 2) => Ok(BuiltinResult::Conjunction(args[0].clone(), args[1].clone())),
+                ("findall", 3) => Ok(BuiltinResult::FindAll(
+                    args[0].clone(),
+                    args[1].clone(),
+                    args[2].clone(),
+                )),
+                ("once", 1) => Ok(BuiltinResult::Once(args[0].clone())),
+                ("call", 1) => Ok(BuiltinResult::Call(args[0].clone())),
+                // Atom/string predicates
+                ("atom_length", 2) => {
+                    Ok(BuiltinResult::AtomLength(args[0].clone(), args[1].clone()))
                 }
-                (",", 2) => {
-                    Ok(BuiltinResult::Conjunction(args[0].clone(), args[1].clone()))
-                }
-                ("findall", 3) => {
-                    Ok(BuiltinResult::FindAll(
-                        args[0].clone(),
-                        args[1].clone(),
-                        args[2].clone(),
-                    ))
-                }
+                ("atom_concat", 3) => Ok(BuiltinResult::AtomConcat(
+                    args[0].clone(),
+                    args[1].clone(),
+                    args[2].clone(),
+                )),
+                ("atom_chars", 2) => Ok(BuiltinResult::AtomChars(args[0].clone(), args[1].clone())),
                 _ => Err(format!("Unknown builtin: {}/{}", name, args.len())),
             }
         }
@@ -299,9 +323,7 @@ fn eval_arith(
     match &term {
         Term::Integer(n) => Ok(ArithVal::Int(*n)),
         Term::Float(f) => Ok(ArithVal::Float(*f)),
-        Term::Var(id) => Err(format!(
-            "Arithmetic error: unbound variable _{}", id
-        )),
+        Term::Var(id) => Err(format!("Arithmetic error: unbound variable _{}", id)),
         Term::Compound { functor, args } => {
             let name = interner.resolve(*functor);
             match (name, args.len()) {
@@ -334,6 +356,24 @@ fn eval_arith(
                     let v = eval_arith(&args[0], subst, interner)?;
                     arith_neg(&v)
                 }
+                ("abs", 1) => {
+                    let v = eval_arith(&args[0], subst, interner)?;
+                    arith_abs(&v)
+                }
+                ("sign", 1) => {
+                    let v = eval_arith(&args[0], subst, interner)?;
+                    Ok(arith_sign(&v))
+                }
+                ("max", 2) => {
+                    let l = eval_arith(&args[0], subst, interner)?;
+                    let r = eval_arith(&args[1], subst, interner)?;
+                    Ok(arith_max(&l, &r))
+                }
+                ("min", 2) => {
+                    let l = eval_arith(&args[0], subst, interner)?;
+                    let r = eval_arith(&args[1], subst, interner)?;
+                    Ok(arith_min(&l, &r))
+                }
                 _ => Err(format!(
                     "Unknown arithmetic operator: {}/{}",
                     name,
@@ -358,7 +398,8 @@ fn check_float(f: f64) -> Result<ArithVal, String> {
 
 fn arith_add(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
     match (a, b) {
-        (ArithVal::Int(a), ArithVal::Int(b)) => a.checked_add(*b)
+        (ArithVal::Int(a), ArithVal::Int(b)) => a
+            .checked_add(*b)
             .map(ArithVal::Int)
             .ok_or_else(|| "Arithmetic error: integer overflow in addition".to_string()),
         (ArithVal::Float(a), ArithVal::Float(b)) => check_float(a + b),
@@ -369,7 +410,8 @@ fn arith_add(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
 
 fn arith_sub(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
     match (a, b) {
-        (ArithVal::Int(a), ArithVal::Int(b)) => a.checked_sub(*b)
+        (ArithVal::Int(a), ArithVal::Int(b)) => a
+            .checked_sub(*b)
             .map(ArithVal::Int)
             .ok_or_else(|| "Arithmetic error: integer overflow in subtraction".to_string()),
         (ArithVal::Float(a), ArithVal::Float(b)) => check_float(a - b),
@@ -380,7 +422,8 @@ fn arith_sub(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
 
 fn arith_mul(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
     match (a, b) {
-        (ArithVal::Int(a), ArithVal::Int(b)) => a.checked_mul(*b)
+        (ArithVal::Int(a), ArithVal::Int(b)) => a
+            .checked_mul(*b)
             .map(ArithVal::Int)
             .ok_or_else(|| "Arithmetic error: integer overflow in multiplication".to_string()),
         (ArithVal::Float(a), ArithVal::Float(b)) => check_float(a * b),
@@ -392,7 +435,8 @@ fn arith_mul(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
 fn arith_div(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
     match (a, b) {
         (ArithVal::Int(_), ArithVal::Int(0)) => Err("Division by zero".to_string()),
-        (ArithVal::Int(a), ArithVal::Int(b)) => a.checked_div(*b)
+        (ArithVal::Int(a), ArithVal::Int(b)) => a
+            .checked_div(*b)
             .map(ArithVal::Int)
             .ok_or_else(|| "Arithmetic error: integer overflow in division".to_string()),
         (_, ArithVal::Float(b)) if *b == 0.0 => Err("Division by zero".to_string()),
@@ -412,10 +456,44 @@ fn arith_mod(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
 
 fn arith_neg(a: &ArithVal) -> Result<ArithVal, String> {
     match a {
-        ArithVal::Int(n) => n.checked_neg()
+        ArithVal::Int(n) => n
+            .checked_neg()
             .map(ArithVal::Int)
             .ok_or_else(|| "Arithmetic error: integer overflow in negation".to_string()),
         ArithVal::Float(f) => check_float(-f),
+    }
+}
+
+fn arith_abs(a: &ArithVal) -> Result<ArithVal, String> {
+    match a {
+        ArithVal::Int(n) => n
+            .checked_abs()
+            .map(ArithVal::Int)
+            .ok_or_else(|| "Arithmetic error: integer overflow in abs".to_string()),
+        ArithVal::Float(f) => check_float(f.abs()),
+    }
+}
+
+fn arith_sign(a: &ArithVal) -> ArithVal {
+    match a {
+        ArithVal::Int(n) => ArithVal::Int(n.signum()),
+        ArithVal::Float(f) => ArithVal::Float(f.signum()),
+    }
+}
+
+fn arith_max(a: &ArithVal, b: &ArithVal) -> ArithVal {
+    if arith_lt(a, b) {
+        b.clone()
+    } else {
+        a.clone()
+    }
+}
+
+fn arith_min(a: &ArithVal, b: &ArithVal) -> ArithVal {
+    if arith_lt(a, b) {
+        a.clone()
+    } else {
+        b.clone()
     }
 }
 
@@ -457,6 +535,11 @@ pub fn builtin_functor_names() -> &'static [(&'static str, usize)] {
         ("->", 2),
         (",", 2),
         ("findall", 3),
+        ("once", 1),
+        ("call", 1),
+        ("atom_length", 2),
+        ("atom_concat", 3),
+        ("atom_chars", 2),
     ]
 }
 
@@ -731,5 +814,65 @@ mod tests {
         let result = exec_builtin(&goals[0], &mut subst, &interner);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("overflow"));
+    }
+
+    #[test]
+    fn test_arith_abs() {
+        let mut interner = setup();
+        let goals = Parser::parse_query("X is abs(-5)", &mut interner).unwrap();
+        let mut subst = Substitution::new();
+        let result = exec_builtin(&goals[0], &mut subst, &interner).unwrap();
+        assert!(matches!(result, BuiltinResult::Success));
+        assert_eq!(subst.walk(&Term::Var(0)), Term::Integer(5));
+    }
+
+    #[test]
+    fn test_arith_abs_positive() {
+        let mut interner = setup();
+        let goals = Parser::parse_query("X is abs(3)", &mut interner).unwrap();
+        let mut subst = Substitution::new();
+        let result = exec_builtin(&goals[0], &mut subst, &interner).unwrap();
+        assert!(matches!(result, BuiltinResult::Success));
+        assert_eq!(subst.walk(&Term::Var(0)), Term::Integer(3));
+    }
+
+    #[test]
+    fn test_arith_sign() {
+        let mut interner = setup();
+        let goals = Parser::parse_query("X is sign(-42)", &mut interner).unwrap();
+        let mut subst = Substitution::new();
+        let result = exec_builtin(&goals[0], &mut subst, &interner).unwrap();
+        assert!(matches!(result, BuiltinResult::Success));
+        assert_eq!(subst.walk(&Term::Var(0)), Term::Integer(-1));
+    }
+
+    #[test]
+    fn test_arith_sign_zero() {
+        let mut interner = setup();
+        let goals = Parser::parse_query("X is sign(0)", &mut interner).unwrap();
+        let mut subst = Substitution::new();
+        let result = exec_builtin(&goals[0], &mut subst, &interner).unwrap();
+        assert!(matches!(result, BuiltinResult::Success));
+        assert_eq!(subst.walk(&Term::Var(0)), Term::Integer(0));
+    }
+
+    #[test]
+    fn test_arith_max() {
+        let mut interner = setup();
+        let goals = Parser::parse_query("X is max(3, 7)", &mut interner).unwrap();
+        let mut subst = Substitution::new();
+        let result = exec_builtin(&goals[0], &mut subst, &interner).unwrap();
+        assert!(matches!(result, BuiltinResult::Success));
+        assert_eq!(subst.walk(&Term::Var(0)), Term::Integer(7));
+    }
+
+    #[test]
+    fn test_arith_min() {
+        let mut interner = setup();
+        let goals = Parser::parse_query("X is min(3, 7)", &mut interner).unwrap();
+        let mut subst = Substitution::new();
+        let result = exec_builtin(&goals[0], &mut subst, &interner).unwrap();
+        assert!(matches!(result, BuiltinResult::Success));
+        assert_eq!(subst.walk(&Term::Var(0)), Term::Integer(3));
     }
 }

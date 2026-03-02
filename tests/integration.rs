@@ -13,13 +13,13 @@ fn solve_all(source: &str, query_str: &str) -> Vec<Vec<(String, String)>> {
     let (goals, vars) = Parser::parse_query_with_vars(query_str, &mut interner).unwrap();
     let db = CompiledDatabase::new(interner, clauses);
     let solver = Solver::new(&db, goals, vars);
-    let solutions = solver.all_solutions().unwrap();
+    let (solutions, solver_interner) = solver.all_solutions_with_interner().unwrap();
     solutions
         .iter()
         .map(|sol| {
             sol.bindings
                 .iter()
-                .map(|(name, term)| (name.clone(), term_to_string(term, &db.interner)))
+                .map(|(name, term)| (name.clone(), term_to_string(term, &solver_interner)))
                 .collect()
         })
         .collect()
@@ -209,11 +209,7 @@ fn test_findall_with_filter() {
         score(carol, 78).
         score(dave, 95).
     "#;
-    let result = first_binding(
-        source,
-        "findall(Name, (score(Name, S), S > 90), L)",
-        "L",
-    );
+    let result = first_binding(source, "findall(Name, (score(Name, S), S > 90), L)", "L");
     assert_eq!(result, Some("[bob, dave]".to_string()));
 }
 
@@ -293,8 +289,7 @@ fn test_division_by_zero() {
     let source = "";
     let mut interner = StringInterner::new();
     let clauses = Parser::parse_program(source, &mut interner).unwrap();
-    let (goals, vars) =
-        Parser::parse_query_with_vars("X is 10 / 0", &mut interner).unwrap();
+    let (goals, vars) = Parser::parse_query_with_vars("X is 10 / 0", &mut interner).unwrap();
     let db = CompiledDatabase::new(interner, clauses);
     let mut solver = Solver::new(&db, goals, vars);
     match solver.next() {
@@ -365,4 +360,103 @@ fn test_ground_query_false() {
     let source = "likes(mary, food).";
     let solutions = solve_all(source, "likes(mary, beer)");
     assert!(solutions.is_empty());
+}
+
+// ========================================================================
+// Phase 3: Usability — once/1, call/1, atom predicates, arithmetic
+// ========================================================================
+
+#[test]
+fn test_once_limits_to_first_solution() {
+    let source = "color(red). color(green). color(blue).";
+    let solutions = solve_all(source, "once(color(X))");
+    assert_eq!(solutions.len(), 1);
+    assert_eq!(solutions[0][0].1, "red");
+}
+
+#[test]
+fn test_once_in_rule() {
+    let source = r#"
+        n(1). n(2). n(3).
+        first_n(X) :- once(n(X)).
+    "#;
+    let result = first_binding(source, "first_n(X)", "X");
+    assert_eq!(result, Some("1".to_string()));
+}
+
+#[test]
+fn test_call_meta_predicate() {
+    let source = r#"
+        color(red). color(blue). color(green).
+        apply(Goal) :- call(Goal).
+    "#;
+    let solutions = solve_all(source, "apply(color(X))");
+    assert_eq!(solutions.len(), 3);
+}
+
+#[test]
+fn test_atom_length_in_rule() {
+    let source = r#"
+        long_name(X) :- atom_length(X, N), N > 5.
+    "#;
+    let solutions = solve_all(source, "long_name(elephant)");
+    assert_eq!(solutions.len(), 1);
+
+    let solutions = solve_all(source, "long_name(cat)");
+    assert_eq!(solutions.len(), 0);
+}
+
+#[test]
+fn test_atom_concat_in_rule() {
+    let source = r#"
+        greet(Name, Greeting) :- atom_concat(hello, Name, Greeting).
+    "#;
+    let result = first_binding(source, "greet(world, G)", "G");
+    assert_eq!(result, Some("helloworld".to_string()));
+}
+
+#[test]
+fn test_atom_chars_pipeline() {
+    let source = r#"
+        starts_with(Atom, Char) :- atom_chars(Atom, [Char|_]).
+    "#;
+    let result = first_binding(source, "starts_with(hello, C)", "C");
+    assert_eq!(result, Some("h".to_string()));
+}
+
+#[test]
+fn test_arithmetic_abs() {
+    let result = first_binding("", "X is abs(-42)", "X");
+    assert_eq!(result, Some("42".to_string()));
+
+    let result = first_binding("", "X is abs(42)", "X");
+    assert_eq!(result, Some("42".to_string()));
+}
+
+#[test]
+fn test_arithmetic_max_min() {
+    let result = first_binding("", "X is max(10, 20)", "X");
+    assert_eq!(result, Some("20".to_string()));
+
+    let result = first_binding("", "X is min(10, 20)", "X");
+    assert_eq!(result, Some("10".to_string()));
+}
+
+#[test]
+fn test_arithmetic_sign() {
+    let result = first_binding("", "X is sign(42)", "X");
+    assert_eq!(result, Some("1".to_string()));
+
+    let result = first_binding("", "X is sign(0)", "X");
+    assert_eq!(result, Some("0".to_string()));
+
+    let result = first_binding("", "X is sign(-7)", "X");
+    assert_eq!(result, Some("-1".to_string()));
+}
+
+#[test]
+fn test_arithmetic_combined() {
+    // abs(min(3, -5)) should be 5
+    let result = first_binding("", "X is abs(min(3, -5))", "X");
+    assert_eq!(result, Some("5".to_string()));
 }
