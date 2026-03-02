@@ -938,3 +938,48 @@ fn test_once_between_conjunction() {
     let val = first_binding(source, "once((between(1, 5, X), X > 3))", "X");
     assert_eq!(val.as_deref(), Some("4"));
 }
+
+// ========================================================================
+// PR Review Round 3 — Regression tests
+// ========================================================================
+
+#[test]
+fn test_functor_list_in_once() {
+    // Bug: functor/3 in try_exec_misc was missing Term::List case
+    let source = "";
+    let val = first_binding(source, "once(functor([a,b], F, A)), F = '.', A = 2", "F");
+    assert_eq!(val.as_deref(), Some("."));
+}
+
+#[test]
+fn test_functor_construct_in_once() {
+    // Bug: functor/3 in try_exec_misc was missing Term::Var construction case
+    let source = "";
+    let solutions = solve_all(source, "once(functor(T, foo, 2)), nonvar(T)");
+    assert_eq!(solutions.len(), 1);
+}
+
+#[test]
+fn test_univ_list_in_once() {
+    // Bug: =../2 in try_exec_misc was missing Term::List case
+    let source = "";
+    let val = first_binding(source, "once([a,b] =.. L)", "L");
+    // Should decompose to ['.', a, [b]]
+    assert!(val.is_some(), "once([a,b] =.. L) should succeed");
+}
+
+#[test]
+fn test_functor_arity_too_large() {
+    // Bug: large arity caused silent wraparound or OOM
+    let source = "";
+    let err = solve_expect_error(source, "functor(T, f, 9999999)");
+    assert!(err.contains("arity too large"));
+}
+
+#[test]
+fn test_findall_functor_list() {
+    // functor/3 with list inside findall should work
+    let source = "";
+    let val = first_binding(source, "findall(A, functor([1,2,3], _, A), As)", "As");
+    assert_eq!(val.as_deref(), Some("[2]"));
+}

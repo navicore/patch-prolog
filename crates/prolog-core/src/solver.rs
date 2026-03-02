@@ -373,7 +373,7 @@ impl<'a> Solver<'a> {
                                     .filter_map(|e| {
                                         if let Term::Atom(id) = e {
                                             let ch = self.interner.resolve(*id);
-                                            if ch.len() == 1 {
+                                            if ch.chars().count() == 1 {
                                                 Some(ch.to_string())
                                             } else {
                                                 None
@@ -497,6 +497,11 @@ impl<'a> Solver<'a> {
                                 if let (Term::Atom(name_id), Term::Integer(arity)) =
                                     (&wname, &warity)
                                 {
+                                    if *arity > 1024 {
+                                        return SolveResult::Error(
+                                            "functor/3: arity too large (max 1024)".to_string(),
+                                        );
+                                    }
                                     if *arity > 0 {
                                         let args: Vec<Term> = (0..*arity as u32)
                                             .map(|_| {
@@ -859,7 +864,7 @@ impl<'a> Solver<'a> {
                                         .filter_map(|e| match e {
                                             Term::Atom(id) => {
                                                 let ch = self.interner.resolve(*id);
-                                                if ch.len() == 1 {
+                                                if ch.chars().count() == 1 {
                                                     Some(ch.to_string())
                                                 } else {
                                                     None
@@ -939,7 +944,11 @@ impl<'a> Solver<'a> {
                                         .iter()
                                         .filter_map(|e| {
                                             if let Term::Integer(code) = e {
-                                                char::from_u32(*code as u32)
+                                                if *code >= 0 && *code <= 0x10FFFF {
+                                                    char::from_u32(*code as u32)
+                                                } else {
+                                                    None
+                                                }
                                             } else {
                                                 None
                                             }
@@ -1215,7 +1224,7 @@ impl<'a> Solver<'a> {
                                     .filter_map(|e| {
                                         if let Term::Atom(id) = e {
                                             let ch = self.interner.resolve(*id);
-                                            if ch.len() == 1 {
+                                            if ch.chars().count() == 1 {
                                                 Some(ch.to_string())
                                             } else {
                                                 None
@@ -1470,7 +1479,7 @@ impl<'a> Solver<'a> {
                                 .filter_map(|e| {
                                     if let Term::Atom(id) = e {
                                         let ch = self.interner.resolve(*id);
-                                        if ch.len() == 1 {
+                                        if ch.chars().count() == 1 {
                                             Some(ch.to_string())
                                         } else {
                                             None
@@ -1632,7 +1641,42 @@ impl<'a> Solver<'a> {
                                 .subst
                                 .unify(&arity_arg, &Term::Integer(args.len() as i64)),
                     ),
-                    _ => Some(false),
+                    Term::List { .. } => {
+                        let dot_id = self.interner.intern(".");
+                        Some(
+                            self.subst.unify(&name_arg, &Term::Atom(dot_id))
+                                && self.subst.unify(&arity_arg, &Term::Integer(2)),
+                        )
+                    }
+                    Term::Var(_) => {
+                        let wname = self.subst.walk(&name_arg);
+                        let warity = self.subst.walk(&arity_arg);
+                        match (&wname, &warity) {
+                            (Term::Atom(name_id), Term::Integer(0)) => {
+                                Some(self.subst.unify(&term_arg, &Term::Atom(*name_id)))
+                            }
+                            (Term::Integer(_) | Term::Float(_), Term::Integer(0)) => {
+                                Some(self.subst.unify(&term_arg, &wname))
+                            }
+                            (Term::Atom(name_id), Term::Integer(arity))
+                                if *arity > 0 && *arity <= 1024 =>
+                            {
+                                let args: Vec<Term> = (0..*arity as u32)
+                                    .map(|_| {
+                                        let v = self.var_counter;
+                                        self.var_counter += 1;
+                                        Term::Var(v)
+                                    })
+                                    .collect();
+                                let constructed = Term::Compound {
+                                    functor: *name_id,
+                                    args,
+                                };
+                                Some(self.subst.unify(&term_arg, &constructed))
+                            }
+                            _ => Some(false),
+                        }
+                    }
                 }
             }
             BuiltinResult::Arg(n_arg, term_arg, result_arg) => {
@@ -1671,6 +1715,12 @@ impl<'a> Solver<'a> {
                         let list = build_list(elems, &self.interner);
                         Some(self.subst.unify(&list_arg, &list))
                     }
+                    Term::List { head, tail } => {
+                        let dot_id = self.interner.intern(".");
+                        let elems = vec![Term::Atom(dot_id), *head.clone(), *tail.clone()];
+                        let list = build_list(elems, &self.interner);
+                        Some(self.subst.unify(&list_arg, &list))
+                    }
                     Term::Var(_) => {
                         let wlist = self.subst.apply(&list_arg);
                         if let Some(elems) = collect_list(&wlist, &self.interner) {
@@ -1693,21 +1743,7 @@ impl<'a> Solver<'a> {
                         }
                         Some(false)
                     }
-                    _ => Some(false),
                 }
-            }
-            BuiltinResult::Between(low_arg, high_arg, x_arg) => {
-                // Iterate full range — needed for \+ between(1,5,3) and once(between(..))
-                let wlow = self.subst.walk(&low_arg);
-                let whigh = self.subst.walk(&high_arg);
-                if let (Term::Integer(low), Term::Integer(high)) = (&wlow, &whigh) {
-                    for val in *low..=*high {
-                        if self.subst.unify(&x_arg, &Term::Integer(val)) {
-                            return Some(true);
-                        }
-                    }
-                }
-                Some(false)
             }
             BuiltinResult::CopyTerm(original, copy) => {
                 let walked = self.subst.walk(&original);
@@ -1807,7 +1843,7 @@ impl<'a> Solver<'a> {
                                 .filter_map(|e| match e {
                                     Term::Atom(id) => {
                                         let ch = self.interner.resolve(*id);
-                                        if ch.len() == 1 {
+                                        if ch.chars().count() == 1 {
                                             Some(ch.to_string())
                                         } else {
                                             None
@@ -1863,7 +1899,11 @@ impl<'a> Solver<'a> {
                                 .iter()
                                 .filter_map(|e| {
                                     if let Term::Integer(code) = e {
-                                        char::from_u32(*code as u32)
+                                        if *code >= 0 && *code <= 0x10FFFF {
+                                            char::from_u32(*code as u32)
+                                        } else {
+                                            None
+                                        }
                                     } else {
                                         None
                                     }
