@@ -870,3 +870,71 @@ fn test_plus_overflow() {
     let err = solve_expect_error(source, &format!("plus({}, 1, X)", i64::MAX));
     assert!(err.contains("overflow"));
 }
+
+// ========================================================================
+// PR Review Round 2 — Regression tests
+// ========================================================================
+
+#[test]
+fn test_number_chars_reverse_in_once() {
+    // Bug: number_chars/2 reverse mode was missing from try_exec_misc
+    // once(number_chars(X, ['1','2','3'])) should bind X = 123
+    let source = "";
+    let val = first_binding(source, "once(number_chars(X, ['1','2','3']))", "X");
+    assert_eq!(val.as_deref(), Some("123"));
+}
+
+#[test]
+fn test_number_codes_reverse_in_once() {
+    // number_codes/2 reverse mode was also missing from try_exec_misc
+    let source = "";
+    let val = first_binding(source, "once(number_codes(X, [52, 50]))", "X");
+    assert_eq!(val.as_deref(), Some("42"));
+}
+
+#[test]
+fn test_negation_number_chars_reverse() {
+    // \+ number_chars(_, ['9']) should fail (because 9 is a valid number)
+    let source = "";
+    let solutions = solve_all(source, "\\+ number_chars(_, ['9'])");
+    assert!(
+        solutions.is_empty(),
+        "\\+ number_chars(_, ['9']) should fail since 9 is valid"
+    );
+}
+
+#[test]
+fn test_iso_float_integer_ordering() {
+    // ISO 8.4.2.1: float < integer when same arithmetic value
+    // compare(Order, 1.0, 1) should give Order = <
+    let source = "";
+    let val = first_binding(source, "compare(Order, 1.0, 1)", "Order");
+    assert_eq!(val.as_deref(), Some("<"));
+}
+
+#[test]
+fn test_iso_integer_float_ordering() {
+    // compare(Order, 1, 1.0) should give Order = >
+    let source = "";
+    let val = first_binding(source, "compare(Order, 1, 1.0)", "Order");
+    assert_eq!(val.as_deref(), Some(">"));
+}
+
+#[test]
+fn test_between_conjunction_in_negation() {
+    // \+ (between(1, 5, X), X > 3) should fail because X=4 satisfies the conjunction
+    let source = "";
+    let solutions = solve_all(source, "\\+ (between(1, 5, X), X > 3)");
+    assert!(
+        solutions.is_empty(),
+        "\\+ (between(1,5,X), X > 3) should fail because X=4 or X=5 satisfy the conjunction"
+    );
+}
+
+#[test]
+fn test_once_between_conjunction() {
+    // once((between(1, 5, X), X > 3)) should bind X = 4
+    let source = "";
+    let val = first_binding(source, "once((between(1, 5, X), X > 3))", "X");
+    assert_eq!(val.as_deref(), Some("4"));
+}

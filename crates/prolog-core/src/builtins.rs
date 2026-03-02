@@ -653,10 +653,39 @@ pub fn term_compare(a: &Term, b: &Term, interner: &StringInterner) -> std::cmp::
     match (a, b) {
         (Term::Var(a), Term::Var(b)) => a.cmp(b),
         (Term::Integer(a), Term::Integer(b)) => a.cmp(b),
-        (Term::Float(a), Term::Float(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
-        (Term::Integer(a), Term::Float(b)) => (*a as f64).partial_cmp(b).unwrap_or(Ordering::Equal),
+        (Term::Float(a), Term::Float(b)) => {
+            // NaN sorts after all other floats (deterministic total order)
+            a.partial_cmp(b)
+                .unwrap_or_else(|| match (a.is_nan(), b.is_nan()) {
+                    (true, true) => Ordering::Equal,
+                    (true, false) => Ordering::Greater,
+                    (false, true) => Ordering::Less,
+                    (false, false) => unreachable!(),
+                })
+        }
+        (Term::Integer(a), Term::Float(b)) => {
+            // NaN sorts after everything; ISO: float < integer when same value
+            if b.is_nan() {
+                return Ordering::Less;
+            }
+            let cmp = (*a as f64).partial_cmp(b).unwrap_or(Ordering::Less);
+            if cmp == Ordering::Equal {
+                Ordering::Greater // integer > float for same value (ISO 8.4.2.1)
+            } else {
+                cmp
+            }
+        }
         (Term::Float(a), Term::Integer(b)) => {
-            a.partial_cmp(&(*b as f64)).unwrap_or(Ordering::Equal)
+            // NaN sorts after everything; ISO: float < integer when same value
+            if a.is_nan() {
+                return Ordering::Greater;
+            }
+            let cmp = a.partial_cmp(&(*b as f64)).unwrap_or(Ordering::Greater);
+            if cmp == Ordering::Equal {
+                Ordering::Less // float < integer for same value (ISO 8.4.2.1)
+            } else {
+                cmp
+            }
         }
         (Term::Atom(a), Term::Atom(b)) => interner.resolve(*a).cmp(interner.resolve(*b)),
         (

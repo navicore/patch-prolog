@@ -401,14 +401,14 @@ impl<'a> Solver<'a> {
                         }
                     }
                     Ok(BuiltinResult::Write(term)) => {
-                        let walked = self.subst.walk(&term);
-                        let s = term_to_string(&walked, &self.interner);
+                        let resolved = self.subst.apply(&term);
+                        let s = term_to_string(&resolved, &self.interner);
                         print!("{}", s);
                         continue;
                     }
                     Ok(BuiltinResult::Writeln(term)) => {
-                        let walked = self.subst.walk(&term);
-                        let s = term_to_string(&walked, &self.interner);
+                        let resolved = self.subst.apply(&term);
+                        let s = term_to_string(&resolved, &self.interner);
                         println!("{}", s);
                         continue;
                     }
@@ -1233,6 +1233,28 @@ impl<'a> Solver<'a> {
                         }
                         return false;
                     }
+                    Ok(BuiltinResult::Between(low_arg, high_arg, x_arg)) => {
+                        // between/3 needs explicit handling to backtrack through values
+                        // in conjunctions like \+ (between(1,5,X), X > 3)
+                        let wlow = self.subst.walk(&low_arg);
+                        let whigh = self.subst.walk(&high_arg);
+                        if let (Term::Integer(low), Term::Integer(high)) = (&wlow, &whigh) {
+                            for val in *low..=*high {
+                                let mark = self.subst.trail_mark();
+                                let saved_counter = self.var_counter;
+                                if self.subst.unify(&x_arg, &Term::Integer(val)) {
+                                    let remaining: Vec<Term> = goal_list.iter().cloned().collect();
+                                    if self.try_solve_once(remaining) {
+                                        return true;
+                                    }
+                                }
+                                self.subst.undo_to(mark);
+                                self.var_counter = saved_counter;
+                            }
+                            return false;
+                        }
+                        return false;
+                    }
                     Ok(other) => {
                         // Handle remaining builtins via try_exec_misc
                         if let Some(success) = self.try_exec_misc(other, &mut goal_list) {
@@ -1568,13 +1590,13 @@ impl<'a> Solver<'a> {
     ) -> Option<bool> {
         match result {
             BuiltinResult::Write(term) => {
-                let walked = self.subst.walk(&term);
-                print!("{}", term_to_string(&walked, &self.interner));
+                let resolved = self.subst.apply(&term);
+                print!("{}", term_to_string(&resolved, &self.interner));
                 Some(true)
             }
             BuiltinResult::Writeln(term) => {
-                let walked = self.subst.walk(&term);
-                println!("{}", term_to_string(&walked, &self.interner));
+                let resolved = self.subst.apply(&term);
+                println!("{}", term_to_string(&resolved, &self.interner));
                 Some(true)
             }
             BuiltinResult::Nl => {
@@ -1776,6 +1798,33 @@ impl<'a> Solver<'a> {
                         }
                         Some(self.subst.unify(&chars_arg, &list))
                     }
+                    Term::Var(_) => {
+                        // Reverse: char list -> number
+                        let wchars = self.subst.apply(&chars_arg);
+                        if let Some(elems) = collect_list(&wchars, &self.interner) {
+                            let s: String = elems
+                                .iter()
+                                .filter_map(|e| match e {
+                                    Term::Atom(id) => {
+                                        let ch = self.interner.resolve(*id);
+                                        if ch.len() == 1 {
+                                            Some(ch.to_string())
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                    Term::Integer(n) if *n >= 0 && *n <= 9 => Some(n.to_string()),
+                                    _ => None,
+                                })
+                                .collect();
+                            if let Ok(n) = s.parse::<i64>() {
+                                return Some(self.subst.unify(&num_arg, &Term::Integer(n)));
+                            } else if let Ok(f) = s.parse::<f64>() {
+                                return Some(self.subst.unify(&num_arg, &Term::Float(f)));
+                            }
+                        }
+                        Some(false)
+                    }
                     _ => Some(false),
                 }
             }
@@ -1805,6 +1854,28 @@ impl<'a> Solver<'a> {
                             };
                         }
                         Some(self.subst.unify(&codes_arg, &list))
+                    }
+                    Term::Var(_) => {
+                        // Reverse: code list -> number
+                        let wcodes = self.subst.apply(&codes_arg);
+                        if let Some(elems) = collect_list(&wcodes, &self.interner) {
+                            let s: String = elems
+                                .iter()
+                                .filter_map(|e| {
+                                    if let Term::Integer(code) = e {
+                                        char::from_u32(*code as u32)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            if let Ok(n) = s.parse::<i64>() {
+                                return Some(self.subst.unify(&num_arg, &Term::Integer(n)));
+                            } else if let Ok(f) = s.parse::<f64>() {
+                                return Some(self.subst.unify(&num_arg, &Term::Float(f)));
+                            }
+                        }
+                        Some(false)
                     }
                     _ => Some(false),
                 }
