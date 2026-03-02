@@ -780,3 +780,93 @@ fn test_univ_reconstruct_in_rule() {
     let result = first_binding(source, "rebuild(foo(a, b), R)", "R");
     assert_eq!(result, Some("foo(a, b)".to_string()));
 }
+
+// ========================================================================
+// PR review regression tests
+// ========================================================================
+
+#[test]
+fn test_negation_between_bound() {
+    // \+ between(1,5,3) should fail (3 IS between 1 and 5)
+    let solutions = solve_all("", "\\+ between(1, 5, 3)");
+    assert_eq!(solutions.len(), 0); // negation should fail
+
+    // \+ between(1,5,10) should succeed (10 is NOT between 1 and 5)
+    let solutions = solve_all("", "\\+ between(1, 5, 10)");
+    assert_eq!(solutions.len(), 1);
+}
+
+#[test]
+fn test_compare_compound_with_bound_vars() {
+    // compare/3 should deeply resolve variables inside compounds
+    let source = r#"
+        test(Order) :- X = 1, Y = 2, compare(Order, f(X), f(Y)).
+    "#;
+    let result = first_binding(source, "test(O)", "O");
+    assert_eq!(result, Some("<".to_string()));
+}
+
+#[test]
+fn test_term_ordering_compound_with_bound_vars() {
+    let source = r#"
+        test :- X = apple, Y = banana, f(X) @< f(Y).
+    "#;
+    let solutions = solve_all(source, "test");
+    assert_eq!(solutions.len(), 1);
+}
+
+#[test]
+fn test_if_then_else_keeps_bindings() {
+    // The condition bindings should be kept for the then branch
+    let source = r#"
+        classify(X, Result) :- (X > 0 -> Result = positive ; Result = non_positive).
+    "#;
+    let result = first_binding(source, "classify(5, R)", "R");
+    assert_eq!(result, Some("positive".to_string()));
+
+    let result = first_binding(source, "classify(-1, R)", "R");
+    assert_eq!(result, Some("non_positive".to_string()));
+}
+
+#[test]
+fn test_if_then_else_condition_bindings_propagate() {
+    // Bindings from condition should be available in then branch
+    let source = r#"
+        test(X, R) :- (X = hello -> R = matched ; R = no_match).
+    "#;
+    let result = first_binding(source, "test(hello, R)", "R");
+    assert_eq!(result, Some("matched".to_string()));
+
+    let result = first_binding(source, "test(world, R)", "R");
+    assert_eq!(result, Some("no_match".to_string()));
+}
+
+#[test]
+fn test_atom_chars_reverse() {
+    // atom_chars/2 reverse: char list -> atom
+    let result = first_binding("", "atom_chars(X, [h, e, l, l, o])", "X");
+    assert_eq!(result, Some("hello".to_string()));
+}
+
+#[test]
+fn test_atom_chars_roundtrip() {
+    let source = r#"
+        roundtrip(Atom, Result) :- atom_chars(Atom, Chars), atom_chars(Result, Chars).
+    "#;
+    let result = first_binding(source, "roundtrip(hello, R)", "R");
+    assert_eq!(result, Some("hello".to_string()));
+}
+
+#[test]
+fn test_succ_overflow() {
+    let source = "";
+    let err = solve_expect_error(source, &format!("succ({}, X)", i64::MAX));
+    assert!(err.contains("overflow"));
+}
+
+#[test]
+fn test_plus_overflow() {
+    let source = "";
+    let err = solve_expect_error(source, &format!("plus({}, 1, X)", i64::MAX));
+    assert!(err.contains("overflow"));
+}

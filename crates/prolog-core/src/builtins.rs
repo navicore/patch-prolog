@@ -328,7 +328,8 @@ pub fn exec_builtin(
                     args[2].clone(),
                 )),
                 ("@<", 2) => {
-                    let cmp = term_compare(&subst.walk(&args[0]), &subst.walk(&args[1]), interner);
+                    let cmp =
+                        term_compare(&subst.apply(&args[0]), &subst.apply(&args[1]), interner);
                     if cmp == std::cmp::Ordering::Less {
                         Ok(BuiltinResult::Success)
                     } else {
@@ -336,7 +337,8 @@ pub fn exec_builtin(
                     }
                 }
                 ("@>", 2) => {
-                    let cmp = term_compare(&subst.walk(&args[0]), &subst.walk(&args[1]), interner);
+                    let cmp =
+                        term_compare(&subst.apply(&args[0]), &subst.apply(&args[1]), interner);
                     if cmp == std::cmp::Ordering::Greater {
                         Ok(BuiltinResult::Success)
                     } else {
@@ -344,7 +346,8 @@ pub fn exec_builtin(
                     }
                 }
                 ("@=<", 2) => {
-                    let cmp = term_compare(&subst.walk(&args[0]), &subst.walk(&args[1]), interner);
+                    let cmp =
+                        term_compare(&subst.apply(&args[0]), &subst.apply(&args[1]), interner);
                     if cmp != std::cmp::Ordering::Greater {
                         Ok(BuiltinResult::Success)
                     } else {
@@ -352,7 +355,8 @@ pub fn exec_builtin(
                     }
                 }
                 ("@>=", 2) => {
-                    let cmp = term_compare(&subst.walk(&args[0]), &subst.walk(&args[1]), interner);
+                    let cmp =
+                        term_compare(&subst.apply(&args[0]), &subst.apply(&args[1]), interner);
                     if cmp != std::cmp::Ordering::Less {
                         Ok(BuiltinResult::Success)
                     } else {
@@ -683,12 +687,52 @@ pub fn term_compare(a: &Term, b: &Term, interner: &StringInterner) -> std::cmp::
             term_compare(h1, h2, interner).then_with(|| term_compare(t1, t2, interner))
         }
         // List vs Compound: lists are .(H,T) which is arity 2
-        (Term::List { .. }, Term::Compound { args, .. }) => {
-            2usize.cmp(&args.len()).then(Ordering::Less) // '.' functor sorts before most
+        (
+            Term::List { head: h, tail: t },
+            Term::Compound {
+                functor: f2,
+                args: a2,
+            },
+        ) => {
+            // List is ./2; compare arity, then functor ".", then args
+            2usize
+                .cmp(&a2.len())
+                .then_with(|| ".".cmp(interner.resolve(*f2)))
+                .then_with(|| {
+                    if a2.len() >= 1 {
+                        let c = term_compare(h, &a2[0], interner);
+                        if c != Ordering::Equal {
+                            return c;
+                        }
+                    }
+                    if a2.len() >= 2 {
+                        return term_compare(t, &a2[1], interner);
+                    }
+                    Ordering::Equal
+                })
         }
-        (Term::Compound { args, .. }, Term::List { .. }) => {
-            args.len().cmp(&2usize).then(Ordering::Greater)
-        }
+        (
+            Term::Compound {
+                functor: f1,
+                args: a1,
+            },
+            Term::List { head: h, tail: t },
+        ) => a1
+            .len()
+            .cmp(&2usize)
+            .then_with(|| interner.resolve(*f1).cmp("."))
+            .then_with(|| {
+                if a1.len() >= 1 {
+                    let c = term_compare(&a1[0], h, interner);
+                    if c != Ordering::Equal {
+                        return c;
+                    }
+                }
+                if a1.len() >= 2 {
+                    return term_compare(&a1[1], t, interner);
+                }
+                Ordering::Equal
+            }),
         _ => Ordering::Equal,
     }
 }

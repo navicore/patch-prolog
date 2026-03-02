@@ -6,6 +6,7 @@ use crate::term::{Clause, Term, VarId};
 use crate::unify::Substitution;
 use fnv::FnvHashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 
 /// A solution: variable name -> resolved term.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,7 +28,7 @@ pub enum SolveResult {
 /// Choice point for backtracking.
 struct ChoicePoint {
     /// Goal list at the time this choice was created.
-    goals: Vec<Term>,
+    goals: VecDeque<Term>,
     /// Remaining untried clause indices.
     untried: Vec<usize>,
     /// Trail mark for undoing substitution bindings.
@@ -80,7 +81,7 @@ impl<'a> Solver<'a> {
         // Push the initial goal list as a choice point with no alternatives
         // (this is just to set up the initial state; the real solving starts in next())
         solver.choice_stack.push(ChoicePoint {
-            goals,
+            goals: VecDeque::from(goals),
             untried: vec![],
             trail_mark: 0,
             var_counter: 1000,
@@ -144,7 +145,7 @@ impl<'a> Solver<'a> {
     }
 
     /// Core solve loop: process goals one at a time.
-    fn solve(&mut self, mut goals: Vec<Term>) -> SolveResult {
+    fn solve(&mut self, mut goals: VecDeque<Term>) -> SolveResult {
         loop {
             if goals.is_empty() {
                 // Success! Extract the solution.
@@ -160,7 +161,7 @@ impl<'a> Solver<'a> {
                 ));
             }
 
-            let goal = goals.remove(0);
+            let goal = goals.pop_front().unwrap();
             let walked_goal = self.subst.walk(&goal);
 
             if is_builtin(&walked_goal, &self.interner) {
@@ -211,8 +212,8 @@ impl<'a> Solver<'a> {
                         let saved_counter = self.var_counter;
 
                         // Build the alternative goal list: right + remaining goals
-                        let mut alt_goals = vec![right];
-                        alt_goals.extend(goals.clone());
+                        let mut alt_goals = VecDeque::from(vec![right]);
+                        alt_goals.extend(goals.iter().cloned());
 
                         // Push a disjunction choice point
                         self.choice_stack.push(ChoicePoint {
@@ -225,7 +226,7 @@ impl<'a> Solver<'a> {
                         });
 
                         // Continue with left branch + remaining goals
-                        goals.insert(0, left);
+                        goals.push_front(left);
                         continue;
                     }
                     Ok(BuiltinResult::IfThenElse(cond, then, else_branch)) => {
@@ -235,19 +236,10 @@ impl<'a> Solver<'a> {
                         let saved_counter = self.var_counter;
                         let saved_stack_len = self.choice_stack.len();
 
-                        if self.try_solve_once(vec![cond.clone()]) {
-                            // Cond succeeded — keep bindings, continue with then + rest
-                            // (Don't restore state — bindings from cond are kept)
-                            // But we need to re-run cond to re-establish bindings since
-                            // try_solve_once doesn't preserve them. Let's use a different approach.
-                            self.subst.undo_to(mark);
-                            self.var_counter = saved_counter;
+                        if self.try_solve_once(vec![cond]) {
+                            // Cond succeeded — keep bindings, truncate only choice stack
                             self.choice_stack.truncate(saved_stack_len);
-
-                            // Re-run: prepend cond, then goals
-                            // Use conjunction: cond, then, rest
-                            goals.insert(0, then);
-                            goals.insert(0, cond);
+                            goals.push_front(then);
                             continue;
                         } else {
                             // Cond failed — restore and try else
@@ -255,7 +247,7 @@ impl<'a> Solver<'a> {
                             self.var_counter = saved_counter;
                             self.choice_stack.truncate(saved_stack_len);
 
-                            goals.insert(0, else_branch);
+                            goals.push_front(else_branch);
                             continue;
                         }
                     }
@@ -265,13 +257,10 @@ impl<'a> Solver<'a> {
                         let saved_counter = self.var_counter;
                         let saved_stack_len = self.choice_stack.len();
 
-                        if self.try_solve_once(vec![cond.clone()]) {
-                            self.subst.undo_to(mark);
-                            self.var_counter = saved_counter;
+                        if self.try_solve_once(vec![cond]) {
+                            // Cond succeeded — keep bindings, truncate only choice stack
                             self.choice_stack.truncate(saved_stack_len);
-
-                            goals.insert(0, then);
-                            goals.insert(0, cond);
+                            goals.push_front(then);
                             continue;
                         } else {
                             self.subst.undo_to(mark);
@@ -282,8 +271,8 @@ impl<'a> Solver<'a> {
                     }
                     Ok(BuiltinResult::Conjunction(a, b)) => {
                         // Flatten conjunction into goal list
-                        goals.insert(0, b);
-                        goals.insert(0, a);
+                        goals.push_front(b);
+                        goals.push_front(a);
                         continue;
                     }
                     Ok(BuiltinResult::FindAll(template, goal, result_var)) => {
@@ -316,7 +305,7 @@ impl<'a> Solver<'a> {
                     Ok(BuiltinResult::Call(inner_goal)) => {
                         // call/1: just execute the term as a goal
                         let walked = self.subst.walk(&inner_goal);
-                        goals.insert(0, walked);
+                        goals.push_front(walked);
                         continue;
                     }
                     Ok(BuiltinResult::AtomLength(atom_arg, len_arg)) => {
@@ -359,6 +348,7 @@ impl<'a> Solver<'a> {
                     Ok(BuiltinResult::AtomChars(atom_arg, list_arg)) => {
                         let walked = self.subst.walk(&atom_arg);
                         if let Term::Atom(id) = walked {
+                            // Forward: atom -> char list
                             let name_str = self.interner.resolve(id).to_string();
                             let nil_id = self.interner.lookup("[]").expect("[] must be interned");
                             let mut list = Term::Atom(nil_id);
@@ -374,9 +364,39 @@ impl<'a> Solver<'a> {
                             } else {
                                 return self.backtrack();
                             }
+                        } else if let Term::Var(_) = walked {
+                            // Reverse: char list -> atom
+                            let wlist = self.subst.apply(&list_arg);
+                            if let Some(elems) = collect_list(&wlist, &self.interner) {
+                                let s: String = elems
+                                    .iter()
+                                    .filter_map(|e| {
+                                        if let Term::Atom(id) = e {
+                                            let ch = self.interner.resolve(*id);
+                                            if ch.len() == 1 {
+                                                Some(ch.to_string())
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+                                let atom_id = self.interner.intern(&s);
+                                if self.subst.unify(&atom_arg, &Term::Atom(atom_id)) {
+                                    continue;
+                                }
+                                return self.backtrack();
+                            }
+                            return SolveResult::Error(
+                                "atom_chars/2: second argument must be a character list"
+                                    .to_string(),
+                            );
                         } else {
                             return SolveResult::Error(
-                                "atom_chars/2: first argument must be an atom".to_string(),
+                                "atom_chars/2: first argument must be an atom or variable"
+                                    .to_string(),
                             );
                         }
                     }
@@ -397,8 +417,8 @@ impl<'a> Solver<'a> {
                         continue;
                     }
                     Ok(BuiltinResult::Compare(order_arg, t1, t2)) => {
-                        let w1 = self.subst.walk(&t1);
-                        let w2 = self.subst.walk(&t2);
+                        let w1 = self.subst.apply(&t1);
+                        let w2 = self.subst.apply(&t2);
                         let cmp = term_compare(&w1, &w2, &self.interner);
                         let order_name = match cmp {
                             std::cmp::Ordering::Less => "<",
@@ -643,8 +663,8 @@ impl<'a> Solver<'a> {
                                     functor: between_functor,
                                     args: vec![new_low, whigh.clone(), x_arg.clone()],
                                 };
-                                let mut alt_goals = vec![alt_goal];
-                                alt_goals.extend(goals.clone());
+                                let mut alt_goals = VecDeque::from(vec![alt_goal]);
+                                alt_goals.extend(goals.iter().cloned());
                                 self.choice_stack.push(ChoicePoint {
                                     goals: alt_goals,
                                     untried: vec![],
@@ -675,12 +695,19 @@ impl<'a> Solver<'a> {
                         let wx = self.subst.walk(&x_arg);
                         let ws = self.subst.walk(&s_arg);
                         match (&wx, &ws) {
-                            (Term::Integer(x), _) if *x >= 0 => {
-                                if self.subst.unify(&s_arg, &Term::Integer(x + 1)) {
-                                    continue;
+                            (Term::Integer(x), _) if *x >= 0 => match x.checked_add(1) {
+                                Some(result) => {
+                                    if self.subst.unify(&s_arg, &Term::Integer(result)) {
+                                        continue;
+                                    }
+                                    return self.backtrack();
                                 }
-                                return self.backtrack();
-                            }
+                                None => {
+                                    return SolveResult::Error(
+                                        "succ/2: integer overflow".to_string(),
+                                    )
+                                }
+                            },
                             (_, Term::Integer(s)) if *s > 0 => {
                                 if self.subst.unify(&x_arg, &Term::Integer(s - 1)) {
                                     continue;
@@ -709,24 +736,45 @@ impl<'a> Solver<'a> {
                         let wy = self.subst.walk(&y_arg);
                         let wz = self.subst.walk(&z_arg);
                         match (&wx, &wy, &wz) {
-                            (Term::Integer(x), Term::Integer(y), _) => {
-                                if self.subst.unify(&z_arg, &Term::Integer(x + y)) {
-                                    continue;
+                            (Term::Integer(x), Term::Integer(y), _) => match x.checked_add(*y) {
+                                Some(result) => {
+                                    if self.subst.unify(&z_arg, &Term::Integer(result)) {
+                                        continue;
+                                    }
+                                    return self.backtrack();
                                 }
-                                return self.backtrack();
-                            }
-                            (Term::Integer(x), _, Term::Integer(z)) => {
-                                if self.subst.unify(&y_arg, &Term::Integer(z - x)) {
-                                    continue;
+                                None => {
+                                    return SolveResult::Error(
+                                        "plus/3: integer overflow".to_string(),
+                                    )
                                 }
-                                return self.backtrack();
-                            }
-                            (_, Term::Integer(y), Term::Integer(z)) => {
-                                if self.subst.unify(&x_arg, &Term::Integer(z - y)) {
-                                    continue;
+                            },
+                            (Term::Integer(x), _, Term::Integer(z)) => match z.checked_sub(*x) {
+                                Some(result) => {
+                                    if self.subst.unify(&y_arg, &Term::Integer(result)) {
+                                        continue;
+                                    }
+                                    return self.backtrack();
                                 }
-                                return self.backtrack();
-                            }
+                                None => {
+                                    return SolveResult::Error(
+                                        "plus/3: integer overflow".to_string(),
+                                    )
+                                }
+                            },
+                            (_, Term::Integer(y), Term::Integer(z)) => match z.checked_sub(*y) {
+                                Some(result) => {
+                                    if self.subst.unify(&x_arg, &Term::Integer(result)) {
+                                        continue;
+                                    }
+                                    return self.backtrack();
+                                }
+                                None => {
+                                    return SolveResult::Error(
+                                        "plus/3: integer overflow".to_string(),
+                                    )
+                                }
+                            },
                             _ => {
                                 return SolveResult::Error(
                                     "plus/3: at least two arguments must be integers".to_string(),
@@ -944,9 +992,9 @@ impl<'a> Solver<'a> {
     fn try_clauses(
         &mut self,
         goal: Term,
-        rest_goals: Vec<Term>,
+        rest_goals: VecDeque<Term>,
         candidates: Vec<usize>,
-    ) -> Option<Vec<Term>> {
+    ) -> Option<VecDeque<Term>> {
         for (i, &clause_idx) in candidates.iter().enumerate() {
             let mark = self.subst.trail_mark();
             let saved_counter = self.var_counter;
@@ -956,14 +1004,14 @@ impl<'a> Solver<'a> {
 
             if self.subst.unify(&goal, &renamed.head) {
                 // Build new goals: body of matched clause + remaining goals
-                let mut new_goals = renamed.body;
-                new_goals.extend(rest_goals.clone());
+                let mut new_goals: VecDeque<Term> = VecDeque::from(renamed.body);
+                new_goals.extend(rest_goals.iter().cloned());
 
                 // If there are more candidates, push a choice point
                 if i + 1 < candidates.len() {
                     self.choice_stack.push(ChoicePoint {
                         goals: {
-                            let mut g = vec![goal.clone()];
+                            let mut g = VecDeque::from(vec![goal.clone()]);
                             g.extend(rest_goals);
                             g
                         },
@@ -1003,11 +1051,12 @@ impl<'a> Solver<'a> {
             }
 
             // The first goal in cp.goals is the one we need to retry
-            let goal = cp.goals[0].clone();
-            let rest_goals: Vec<Term> = cp.goals[1..].to_vec();
+            let mut cp_goals = cp.goals;
+            let goal = cp_goals.pop_front().unwrap();
+            let rest_goals = cp_goals;
             let candidates = cp.untried;
 
-            match self.try_clauses(goal, rest_goals.clone(), candidates) {
+            match self.try_clauses(goal, rest_goals, candidates) {
                 Some(new_goals) => {
                     return self.solve(new_goals);
                 }
@@ -1023,13 +1072,13 @@ impl<'a> Solver<'a> {
     /// Try to solve goals (used for negation-as-failure check).
     /// Returns true if the goals succeed at least once.
     fn try_solve_once(&mut self, goals: Vec<Term>) -> bool {
-        let mut goal_list = goals;
+        let mut goal_list = VecDeque::from(goals);
         loop {
             if goal_list.is_empty() {
                 return true;
             }
 
-            let goal = goal_list.remove(0);
+            let goal = goal_list.pop_front().unwrap();
             let walked_goal = self.subst.walk(&goal);
 
             if is_builtin(&walked_goal, &self.interner) {
@@ -1047,8 +1096,8 @@ impl<'a> Solver<'a> {
                         continue;
                     }
                     Ok(BuiltinResult::Conjunction(a, b)) => {
-                        goal_list.insert(0, b);
-                        goal_list.insert(0, a);
+                        goal_list.push_front(b);
+                        goal_list.push_front(a);
                         continue;
                     }
                     Ok(BuiltinResult::Disjunction(left, right)) => {
@@ -1056,40 +1105,36 @@ impl<'a> Solver<'a> {
                         let mark = self.subst.trail_mark();
                         let saved_counter = self.var_counter;
                         let mut left_goals = vec![left];
-                        left_goals.extend(goal_list.clone());
+                        left_goals.extend(goal_list.iter().cloned());
                         if self.try_solve_once(left_goals) {
                             return true;
                         }
                         self.subst.undo_to(mark);
                         self.var_counter = saved_counter;
                         // Try right
-                        goal_list.insert(0, right);
+                        goal_list.push_front(right);
                         continue;
                     }
                     Ok(BuiltinResult::IfThenElse(cond, then, else_branch)) => {
                         let mark = self.subst.trail_mark();
                         let saved_counter = self.var_counter;
-                        if self.try_solve_once(vec![cond.clone()]) {
-                            self.subst.undo_to(mark);
-                            self.var_counter = saved_counter;
-                            goal_list.insert(0, then);
-                            goal_list.insert(0, cond);
+                        if self.try_solve_once(vec![cond]) {
+                            // Keep bindings from cond
+                            goal_list.push_front(then);
                             continue;
                         } else {
                             self.subst.undo_to(mark);
                             self.var_counter = saved_counter;
-                            goal_list.insert(0, else_branch);
+                            goal_list.push_front(else_branch);
                             continue;
                         }
                     }
                     Ok(BuiltinResult::IfThen(cond, then)) => {
                         let mark = self.subst.trail_mark();
                         let saved_counter = self.var_counter;
-                        if self.try_solve_once(vec![cond.clone()]) {
-                            self.subst.undo_to(mark);
-                            self.var_counter = saved_counter;
-                            goal_list.insert(0, then);
-                            goal_list.insert(0, cond);
+                        if self.try_solve_once(vec![cond]) {
+                            // Keep bindings from cond
+                            goal_list.push_front(then);
                             continue;
                         } else {
                             self.subst.undo_to(mark);
@@ -1112,12 +1157,12 @@ impl<'a> Solver<'a> {
                     Ok(BuiltinResult::Once(inner_goal)) => {
                         // once/1 in try_solve_once: just solve the inner goal once
                         let walked = self.subst.walk(&inner_goal);
-                        goal_list.insert(0, walked);
+                        goal_list.push_front(walked);
                         continue;
                     }
                     Ok(BuiltinResult::Call(inner_goal)) => {
                         let walked = self.subst.walk(&inner_goal);
-                        goal_list.insert(0, walked);
+                        goal_list.push_front(walked);
                         continue;
                     }
                     Ok(BuiltinResult::AtomLength(atom_arg, len_arg)) => {
@@ -1161,6 +1206,29 @@ impl<'a> Solver<'a> {
                             }
                             if self.subst.unify(&list_arg, &list) {
                                 continue;
+                            }
+                        } else if let Term::Var(_) = walked {
+                            let wlist = self.subst.apply(&list_arg);
+                            if let Some(elems) = collect_list(&wlist, &self.interner) {
+                                let s: String = elems
+                                    .iter()
+                                    .filter_map(|e| {
+                                        if let Term::Atom(id) = e {
+                                            let ch = self.interner.resolve(*id);
+                                            if ch.len() == 1 {
+                                                Some(ch.to_string())
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+                                let atom_id = self.interner.intern(&s);
+                                if self.subst.unify(&atom_arg, &Term::Atom(atom_id)) {
+                                    continue;
+                                }
                             }
                         }
                         return false;
@@ -1209,7 +1277,7 @@ impl<'a> Solver<'a> {
         let saved_stack_len = self.choice_stack.len();
 
         let mut collected = Vec::new();
-        self.try_solve_collecting(vec![goal], &template, &mut collected);
+        self.try_solve_collecting(VecDeque::from(vec![goal]), &template, &mut collected);
 
         // Restore state
         self.subst.undo_to(mark);
@@ -1232,7 +1300,7 @@ impl<'a> Solver<'a> {
     /// Try to solve a list of goals, collecting template instances for each success.
     fn try_solve_collecting(
         &mut self,
-        goals: Vec<Term>,
+        goals: VecDeque<Term>,
         template: &Term,
         results: &mut Vec<Term>,
     ) -> bool {
@@ -1242,7 +1310,7 @@ impl<'a> Solver<'a> {
         }
 
         let mut goal_list = goals;
-        let goal = goal_list.remove(0);
+        let goal = goal_list.pop_front().unwrap();
         let walked_goal = self.subst.walk(&goal);
 
         if is_builtin(&walked_goal, &self.interner) {
@@ -1254,8 +1322,8 @@ impl<'a> Solver<'a> {
                     return self.try_solve_collecting(goal_list, template, results);
                 }
                 Ok(BuiltinResult::Conjunction(a, b)) => {
-                    goal_list.insert(0, b);
-                    goal_list.insert(0, a);
+                    goal_list.push_front(b);
+                    goal_list.push_front(a);
                     return self.try_solve_collecting(goal_list, template, results);
                 }
                 Ok(BuiltinResult::NegationAsFailure(inner)) => {
@@ -1271,13 +1339,13 @@ impl<'a> Solver<'a> {
                     // Try left branch
                     let mark = self.subst.trail_mark();
                     let saved_counter = self.var_counter;
-                    let mut left_goals = vec![left];
-                    left_goals.extend(goal_list.clone());
+                    let mut left_goals = VecDeque::from(vec![left]);
+                    left_goals.extend(goal_list.iter().cloned());
                     let found_left = self.try_solve_collecting(left_goals, template, results);
                     self.subst.undo_to(mark);
                     self.var_counter = saved_counter;
                     // Try right branch
-                    let mut right_goals = vec![right];
+                    let mut right_goals = VecDeque::from(vec![right]);
                     right_goals.extend(goal_list);
                     let found_right = self.try_solve_collecting(right_goals, template, results);
                     return found_left || found_right;
@@ -1285,27 +1353,23 @@ impl<'a> Solver<'a> {
                 Ok(BuiltinResult::IfThenElse(cond, then, else_branch)) => {
                     let mark = self.subst.trail_mark();
                     let saved_counter = self.var_counter;
-                    if self.try_solve_once(vec![cond.clone()]) {
-                        self.subst.undo_to(mark);
-                        self.var_counter = saved_counter;
-                        goal_list.insert(0, then);
-                        goal_list.insert(0, cond);
+                    if self.try_solve_once(vec![cond]) {
+                        // Keep bindings from cond
+                        goal_list.push_front(then);
                         return self.try_solve_collecting(goal_list, template, results);
                     } else {
                         self.subst.undo_to(mark);
                         self.var_counter = saved_counter;
-                        goal_list.insert(0, else_branch);
+                        goal_list.push_front(else_branch);
                         return self.try_solve_collecting(goal_list, template, results);
                     }
                 }
                 Ok(BuiltinResult::IfThen(cond, then)) => {
                     let mark = self.subst.trail_mark();
                     let saved_counter = self.var_counter;
-                    if self.try_solve_once(vec![cond.clone()]) {
-                        self.subst.undo_to(mark);
-                        self.var_counter = saved_counter;
-                        goal_list.insert(0, then);
-                        goal_list.insert(0, cond);
+                    if self.try_solve_once(vec![cond]) {
+                        // Keep bindings from cond
+                        goal_list.push_front(then);
                         return self.try_solve_collecting(goal_list, template, results);
                     } else {
                         self.subst.undo_to(mark);
@@ -1326,12 +1390,12 @@ impl<'a> Solver<'a> {
                 }
                 Ok(BuiltinResult::Once(inner_goal)) => {
                     let walked = self.subst.walk(&inner_goal);
-                    goal_list.insert(0, walked);
+                    goal_list.push_front(walked);
                     return self.try_solve_collecting(goal_list, template, results);
                 }
                 Ok(BuiltinResult::Call(inner_goal)) => {
                     let walked = self.subst.walk(&inner_goal);
-                    goal_list.insert(0, walked);
+                    goal_list.push_front(walked);
                     return self.try_solve_collecting(goal_list, template, results);
                 }
                 Ok(BuiltinResult::AtomLength(atom_arg, len_arg)) => {
@@ -1375,6 +1439,29 @@ impl<'a> Solver<'a> {
                         }
                         if self.subst.unify(&list_arg, &list) {
                             return self.try_solve_collecting(goal_list, template, results);
+                        }
+                    } else if let Term::Var(_) = walked {
+                        let wlist = self.subst.apply(&list_arg);
+                        if let Some(elems) = collect_list(&wlist, &self.interner) {
+                            let s: String = elems
+                                .iter()
+                                .filter_map(|e| {
+                                    if let Term::Atom(id) = e {
+                                        let ch = self.interner.resolve(*id);
+                                        if ch.len() == 1 {
+                                            Some(ch.to_string())
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            let atom_id = self.interner.intern(&s);
+                            if self.subst.unify(&atom_arg, &Term::Atom(atom_id)) {
+                                return self.try_solve_collecting(goal_list, template, results);
+                            }
                         }
                     }
                     return false;
@@ -1425,8 +1512,8 @@ impl<'a> Solver<'a> {
             let renamed = self.rename_clause(clause);
 
             if self.subst.unify(&walked_goal, &renamed.head) {
-                let mut new_goals = renamed.body;
-                new_goals.extend(goal_list.clone());
+                let mut new_goals: VecDeque<Term> = VecDeque::from(renamed.body);
+                new_goals.extend(goal_list.iter().cloned());
                 if self.try_solve_collecting(new_goals, template, results) {
                     found_any = true;
                 }
@@ -1474,7 +1561,11 @@ impl<'a> Solver<'a> {
 
     /// Handle miscellaneous builtins shared between try_solve_once and try_solve_collecting.
     /// Returns Some(true) on success, Some(false) on failure, None on error (treat as failure).
-    fn try_exec_misc(&mut self, result: BuiltinResult, _goal_list: &mut Vec<Term>) -> Option<bool> {
+    fn try_exec_misc(
+        &mut self,
+        result: BuiltinResult,
+        _goal_list: &mut VecDeque<Term>,
+    ) -> Option<bool> {
         match result {
             BuiltinResult::Write(term) => {
                 let walked = self.subst.walk(&term);
@@ -1491,8 +1582,8 @@ impl<'a> Solver<'a> {
                 Some(true)
             }
             BuiltinResult::Compare(order_arg, t1, t2) => {
-                let w1 = self.subst.walk(&t1);
-                let w2 = self.subst.walk(&t2);
+                let w1 = self.subst.apply(&t1);
+                let w2 = self.subst.apply(&t2);
                 let cmp = term_compare(&w1, &w2, &self.interner);
                 let order_name = match cmp {
                     std::cmp::Ordering::Less => "<",
@@ -1583,13 +1674,15 @@ impl<'a> Solver<'a> {
                     _ => Some(false),
                 }
             }
-            BuiltinResult::Between(low_arg, _high_arg, x_arg) => {
-                // In try_solve_once context, just try first value
+            BuiltinResult::Between(low_arg, high_arg, x_arg) => {
+                // Iterate full range — needed for \+ between(1,5,3) and once(between(..))
                 let wlow = self.subst.walk(&low_arg);
-                let whigh = self.subst.walk(&_high_arg);
+                let whigh = self.subst.walk(&high_arg);
                 if let (Term::Integer(low), Term::Integer(high)) = (&wlow, &whigh) {
-                    if low <= high {
-                        return Some(self.subst.unify(&x_arg, &Term::Integer(*low)));
+                    for val in *low..=*high {
+                        if self.subst.unify(&x_arg, &Term::Integer(val)) {
+                            return Some(true);
+                        }
                     }
                 }
                 Some(false)
@@ -1603,9 +1696,10 @@ impl<'a> Solver<'a> {
                 let wx = self.subst.walk(&x_arg);
                 let ws = self.subst.walk(&s_arg);
                 match (&wx, &ws) {
-                    (Term::Integer(x), _) if *x >= 0 => {
-                        Some(self.subst.unify(&s_arg, &Term::Integer(x + 1)))
-                    }
+                    (Term::Integer(x), _) if *x >= 0 => match x.checked_add(1) {
+                        Some(result) => Some(self.subst.unify(&s_arg, &Term::Integer(result))),
+                        None => Some(false),
+                    },
                     (_, Term::Integer(s)) if *s > 0 => {
                         Some(self.subst.unify(&x_arg, &Term::Integer(s - 1)))
                     }
@@ -1617,15 +1711,18 @@ impl<'a> Solver<'a> {
                 let wy = self.subst.walk(&y_arg);
                 let wz = self.subst.walk(&z_arg);
                 match (&wx, &wy, &wz) {
-                    (Term::Integer(x), Term::Integer(y), _) => {
-                        Some(self.subst.unify(&z_arg, &Term::Integer(x + y)))
-                    }
-                    (Term::Integer(x), _, Term::Integer(z)) => {
-                        Some(self.subst.unify(&y_arg, &Term::Integer(z - x)))
-                    }
-                    (_, Term::Integer(y), Term::Integer(z)) => {
-                        Some(self.subst.unify(&x_arg, &Term::Integer(z - y)))
-                    }
+                    (Term::Integer(x), Term::Integer(y), _) => match x.checked_add(*y) {
+                        Some(result) => Some(self.subst.unify(&z_arg, &Term::Integer(result))),
+                        None => Some(false),
+                    },
+                    (Term::Integer(x), _, Term::Integer(z)) => match z.checked_sub(*x) {
+                        Some(result) => Some(self.subst.unify(&y_arg, &Term::Integer(result))),
+                        None => Some(false),
+                    },
+                    (_, Term::Integer(y), Term::Integer(z)) => match z.checked_sub(*y) {
+                        Some(result) => Some(self.subst.unify(&x_arg, &Term::Integer(result))),
+                        None => Some(false),
+                    },
                     _ => Some(false),
                 }
             }
