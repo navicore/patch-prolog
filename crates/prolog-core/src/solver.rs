@@ -7,6 +7,17 @@ use crate::unify::Substitution;
 use fnv::FnvHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::io::Write as IoWrite;
+
+/// Format a float for number_chars/number_codes, ensuring ".0" suffix for whole numbers.
+fn format_float(f: f64) -> String {
+    let s = format!("{}", f);
+    if s.contains('.') || s.contains('e') || s.contains('E') {
+        s
+    } else {
+        format!("{}.0", s)
+    }
+}
 
 /// A solution: variable name -> resolved term.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,9 +61,9 @@ pub struct Solver<'a> {
     /// Limit on number of solutions to return.
     limit: Option<usize>,
     solutions_found: usize,
-    /// Current recursion depth (number of goal resolution steps).
-    depth: usize,
-    /// Maximum allowed depth before returning an error.
+    /// Current number of goal resolution steps.
+    steps: usize,
+    /// Maximum allowed steps before returning an error.
     max_depth: usize,
     /// Mutable interner for runtime atom creation (atom_concat, atom_chars, etc.).
     interner: crate::term::StringInterner,
@@ -75,7 +86,7 @@ impl<'a> Solver<'a> {
             choice_stack: Vec::new(),
             limit: None,
             solutions_found: 0,
-            depth: 0,
+            steps: 0,
             max_depth: 10_000,
         };
         // Push the initial goal list as a choice point with no alternatives
@@ -153,10 +164,10 @@ impl<'a> Solver<'a> {
                 return SolveResult::Success(self.extract_solution());
             }
 
-            self.depth += 1;
-            if self.depth > self.max_depth {
+            self.steps += 1;
+            if self.steps > self.max_depth {
                 return SolveResult::Error(format!(
-                    "Maximum recursion depth exceeded ({})",
+                    "Maximum step limit exceeded ({})",
                     self.max_depth
                 ));
             }
@@ -404,6 +415,7 @@ impl<'a> Solver<'a> {
                         let resolved = self.subst.apply(&term);
                         let s = term_to_string(&resolved, &self.interner);
                         print!("{}", s);
+                        let _ = std::io::stdout().flush();
                         continue;
                     }
                     Ok(BuiltinResult::Writeln(term)) => {
@@ -497,6 +509,11 @@ impl<'a> Solver<'a> {
                                 if let (Term::Atom(name_id), Term::Integer(arity)) =
                                     (&wname, &warity)
                                 {
+                                    if *arity < 0 {
+                                        return SolveResult::Error(
+                                            "functor/3: arity must be non-negative".to_string(),
+                                        );
+                                    }
                                     if *arity > 1024 {
                                         return SolveResult::Error(
                                             "functor/3: arity too large (max 1024)".to_string(),
@@ -608,6 +625,11 @@ impl<'a> Solver<'a> {
                                         if self.subst.unify(&term_arg, &elems[0]) {
                                             continue;
                                         }
+                                    } else {
+                                        return SolveResult::Error(
+                                            "=../2: functor must be an atom when arity > 0"
+                                                .to_string(),
+                                        );
                                     }
                                     return self.backtrack();
                                 }
@@ -846,7 +868,7 @@ impl<'a> Solver<'a> {
                                 return self.backtrack();
                             }
                             Term::Float(f) => {
-                                let s = format!("{}", f);
+                                let s = format_float(*f);
                                 let nil_id =
                                     self.interner.lookup("[]").expect("[] must be interned");
                                 let mut list = Term::Atom(nil_id);
@@ -876,11 +898,6 @@ impl<'a> Solver<'a> {
                                                 } else {
                                                     None
                                                 }
-                                            }
-                                            // Also accept single-digit integers (since forward direction
-                                            // produces atoms that display identically to integers)
-                                            Term::Integer(n) if *n >= 0 && *n <= 9 => {
-                                                Some(n.to_string())
                                             }
                                             _ => None,
                                         })
@@ -928,7 +945,7 @@ impl<'a> Solver<'a> {
                                 return self.backtrack();
                             }
                             Term::Float(f) => {
-                                let s = format!("{}", f);
+                                let s = format_float(*f);
                                 let nil_id =
                                     self.interner.lookup("[]").expect("[] must be interned");
                                 let mut list = Term::Atom(nil_id);
@@ -1092,6 +1109,11 @@ impl<'a> Solver<'a> {
         loop {
             if goal_list.is_empty() {
                 return true;
+            }
+
+            self.steps += 1;
+            if self.steps > self.max_depth {
+                return false;
             }
 
             let goal = goal_list.pop_front().unwrap();
@@ -1351,6 +1373,11 @@ impl<'a> Solver<'a> {
         if goals.is_empty() {
             results.push(self.subst.apply(template));
             return true;
+        }
+
+        self.steps += 1;
+        if self.steps > self.max_depth {
+            return false;
         }
 
         let mut goal_list = goals;
@@ -1622,6 +1649,7 @@ impl<'a> Solver<'a> {
             BuiltinResult::Write(term) => {
                 let resolved = self.subst.apply(&term);
                 print!("{}", term_to_string(&resolved, &self.interner));
+                let _ = std::io::stdout().flush();
                 Some(true)
             }
             BuiltinResult::Writeln(term) => {
@@ -1843,7 +1871,7 @@ impl<'a> Solver<'a> {
                         Some(self.subst.unify(&chars_arg, &list))
                     }
                     Term::Float(f) => {
-                        let s = format!("{}", f);
+                        let s = format_float(*f);
                         let nil_id = self.interner.lookup("[]").expect("[] must be interned");
                         let mut list = Term::Atom(nil_id);
                         for ch in s.chars().rev() {
@@ -1870,7 +1898,6 @@ impl<'a> Solver<'a> {
                                             None
                                         }
                                     }
-                                    Term::Integer(n) if *n >= 0 && *n <= 9 => Some(n.to_string()),
                                     _ => None,
                                 })
                                 .collect();
@@ -1901,7 +1928,7 @@ impl<'a> Solver<'a> {
                         Some(self.subst.unify(&codes_arg, &list))
                     }
                     Term::Float(f) => {
-                        let s = format!("{}", f);
+                        let s = format_float(*f);
                         let nil_id = self.interner.lookup("[]").expect("[] must be interned");
                         let mut list = Term::Atom(nil_id);
                         for ch in s.chars().rev() {
@@ -2365,7 +2392,7 @@ mod tests {
         let db = CompiledDatabase::new(interner, clauses);
         let mut solver = Solver::new(&db, goals, vars).with_max_depth(100);
         let result = solver.next();
-        assert!(matches!(result, SolveResult::Error(ref e) if e.contains("depth")));
+        assert!(matches!(result, SolveResult::Error(ref e) if e.contains("step limit")));
     }
 
     // Phase 3 tests: once/1, call/1, atom predicates, arithmetic functions

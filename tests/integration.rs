@@ -239,7 +239,7 @@ fn test_solution_limit_respected() {
 fn test_depth_limit_prevents_stack_overflow() {
     let source = "infinite :- infinite.";
     let err = solve_expect_error(source, "infinite");
-    assert!(err.contains("depth"));
+    assert!(err.contains("step limit"));
 }
 
 #[test]
@@ -714,7 +714,7 @@ fn test_number_chars_integer() {
 
 #[test]
 fn test_number_chars_reverse() {
-    let result = first_binding("", "number_chars(X, [4, 5, 6])", "X");
+    let result = first_binding("", "number_chars(X, ['4', '5', '6'])", "X");
     assert_eq!(result, Some("456".to_string()));
 }
 
@@ -1015,4 +1015,70 @@ fn test_between_overflow_at_max() {
     );
     let expected = i64::MAX.to_string();
     assert_eq!(val.as_deref(), Some(expected.as_str()));
+}
+
+// ========================================================================
+// Review Round 5 regression tests
+// ========================================================================
+
+#[test]
+fn test_mod_floored_semantics() {
+    // ISO Prolog mod uses floored division (rem_euclid), not truncated remainder
+    // -7 mod 3 should be 2 (floored), not -1 (truncated)
+    let result = first_binding("", "X is -7 mod 3", "X");
+    assert_eq!(result, Some("2".to_string()));
+
+    let result = first_binding("", "X is 7 mod -3", "X");
+    assert_eq!(result, Some("-2".to_string()));
+}
+
+#[test]
+fn test_float_formatting_in_number_chars() {
+    // Float 1.0 should format as "1.0" not "1"
+    let result = first_binding("", "number_chars(1.0, X)", "X");
+    assert_eq!(result, Some("[1, ., 0]".to_string()));
+}
+
+#[test]
+fn test_float_formatting_in_number_codes() {
+    // Float 2.0 should format as "2.0" not "2"
+    let result = first_binding("", "number_codes(2.0, X)", "X");
+    // Character codes for '2', '.', '0': 50, 46, 48
+    assert_eq!(result, Some("[50, 46, 48]".to_string()));
+}
+
+#[test]
+fn test_univ_type_error_non_atom_functor() {
+    // =../2 should error when constructing with non-atom functor and arity > 0
+    let err = solve_expect_error("", "X =.. [3, a, b]");
+    assert!(err.contains("=../2"));
+}
+
+#[test]
+fn test_functor_negative_arity() {
+    // functor/3 with negative arity should give a clear error
+    let err = solve_expect_error("", "functor(X, foo, -1)");
+    assert!(err.contains("non-negative"));
+}
+
+#[test]
+fn test_step_limit_in_try_solve_once() {
+    // Step limit should be enforced in try_solve_once (via \+)
+    // An infinite loop inside \+ should not hang forever
+    let source = "loop :- loop.";
+    let mut interner = StringInterner::new();
+    let clauses = Parser::parse_program(source, &mut interner).unwrap();
+    let (goals, vars) = Parser::parse_query_with_vars("\\+ loop", &mut interner).unwrap();
+    let db = CompiledDatabase::new(interner, clauses);
+    let mut solver = Solver::new(&db, goals, vars).with_max_depth(100);
+    // Should terminate (not hang) — either success (because \+ of a non-terminating
+    // goal that hits step limit is treated as failure of the inner goal, so \+ succeeds)
+    // or failure or error
+    let result = solver.next();
+    // The important thing is it terminates; \+ returns success because inner goal fails
+    // due to step limit exhaustion
+    assert!(matches!(
+        result,
+        SolveResult::Success(_) | SolveResult::Error(_)
+    ));
 }

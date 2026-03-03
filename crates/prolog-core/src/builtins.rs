@@ -579,7 +579,16 @@ fn arith_div(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
 fn arith_mod(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
     match (a, b) {
         (ArithVal::Int(_), ArithVal::Int(0)) => Err("Modulo by zero".to_string()),
-        (ArithVal::Int(a), ArithVal::Int(b)) => Ok(ArithVal::Int(a % b)),
+        (ArithVal::Int(a), ArithVal::Int(b)) => {
+            // ISO Prolog mod: result has the sign of the divisor
+            // X mod Y = X - floor(X/Y) * Y
+            let r = a.rem_euclid(b.abs());
+            if *b < 0 && r != 0 {
+                Ok(ArithVal::Int(r - b.abs()))
+            } else {
+                Ok(ArithVal::Int(r))
+            }
+        }
         _ => Err("mod requires integer arguments".to_string()),
     }
 }
