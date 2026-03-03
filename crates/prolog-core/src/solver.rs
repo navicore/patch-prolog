@@ -662,7 +662,14 @@ impl<'a> Solver<'a> {
                             let saved_counter = self.var_counter;
                             // Push choice points for low+1..=high
                             if *low < *high {
-                                let new_low = Term::Integer(low + 1);
+                                let new_low = Term::Integer(match low.checked_add(1) {
+                                    Some(v) => v,
+                                    None => {
+                                        return SolveResult::Error(
+                                            "between/3: integer overflow".to_string(),
+                                        )
+                                    }
+                                });
                                 let between_functor = self.interner.intern("between");
                                 let alt_goal = Term::Compound {
                                     functor: between_functor,
@@ -1097,8 +1104,10 @@ impl<'a> Solver<'a> {
                     Ok(BuiltinResult::Cut) => continue,
                     Ok(BuiltinResult::NegationAsFailure(inner)) => {
                         let mark = self.subst.trail_mark();
+                        let saved_counter = self.var_counter;
                         let inner_result = self.try_solve_once(vec![inner]);
                         self.subst.undo_to(mark);
+                        self.var_counter = saved_counter;
                         if inner_result {
                             return false;
                         }
@@ -1248,6 +1257,10 @@ impl<'a> Solver<'a> {
                         let wlow = self.subst.walk(&low_arg);
                         let whigh = self.subst.walk(&high_arg);
                         if let (Term::Integer(low), Term::Integer(high)) = (&wlow, &whigh) {
+                            let range_size = high.saturating_sub(*low).saturating_add(1);
+                            if range_size > self.max_depth as i64 {
+                                return false; // range too large for exhaustive iteration
+                            }
                             for val in *low..=*high {
                                 let mark = self.subst.trail_mark();
                                 let saved_counter = self.var_counter;
@@ -1359,8 +1372,10 @@ impl<'a> Solver<'a> {
                 }
                 Ok(BuiltinResult::NegationAsFailure(inner)) => {
                     let mark = self.subst.trail_mark();
+                    let saved_counter = self.var_counter;
                     let inner_result = self.try_solve_once(vec![inner]);
                     self.subst.undo_to(mark);
+                    self.var_counter = saved_counter;
                     if inner_result {
                         return false;
                     }
@@ -1421,8 +1436,10 @@ impl<'a> Solver<'a> {
                 }
                 Ok(BuiltinResult::Once(inner_goal)) => {
                     let walked = self.subst.walk(&inner_goal);
-                    goal_list.push_front(walked);
-                    return self.try_solve_collecting(goal_list, template, results);
+                    if self.try_solve_once(vec![walked]) {
+                        return self.try_solve_collecting(goal_list, template, results);
+                    }
+                    return false;
                 }
                 Ok(BuiltinResult::Call(inner_goal)) => {
                     let walked = self.subst.walk(&inner_goal);
@@ -1503,6 +1520,10 @@ impl<'a> Solver<'a> {
                     let wlow = self.subst.walk(&low_arg);
                     let whigh = self.subst.walk(&high_arg);
                     if let (Term::Integer(low), Term::Integer(high)) = (&wlow, &whigh) {
+                        let range_size = high.saturating_sub(*low).saturating_add(1);
+                        if range_size > self.max_depth as i64 {
+                            return false; // range too large for exhaustive iteration
+                        }
                         let mut found_any = false;
                         for val in *low..=*high {
                             let mark = self.subst.trail_mark();

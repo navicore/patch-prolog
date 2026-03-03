@@ -86,8 +86,8 @@ Added to `is/2` evaluation:
 
 ### Test counts
 - 132 unit tests in prolog-core
-- 92 integration tests in tests/integration.rs
-- **224 total**
+- 95 integration tests in tests/integration.rs
+- **227 total**
 
 ---
 

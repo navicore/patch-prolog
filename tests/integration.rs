@@ -983,3 +983,36 @@ fn test_findall_functor_list() {
     let val = first_binding(source, "findall(A, functor([1,2,3], _, A), As)", "As");
     assert_eq!(val.as_deref(), Some("[2]"));
 }
+
+// ========================================================================
+// PR Review Round 4 — Regression tests
+// ========================================================================
+
+#[test]
+fn test_findall_once_collects_one() {
+    // Bug: once/1 inside findall was collecting ALL solutions instead of one
+    let source = "color(red). color(green). color(blue).";
+    let val = first_binding(source, "findall(X, once(color(X)), L)", "L");
+    assert_eq!(val.as_deref(), Some("[red]"));
+}
+
+#[test]
+fn test_findall_once_member() {
+    // findall(X, once(member(X, [a,b,c])), L) should give [a] not [a,b,c]
+    let source = include_str!("../knowledge/stdlib.pl");
+    let val = first_binding(source, "findall(X, once(member(X, [a,b,c])), L)", "L");
+    assert_eq!(val.as_deref(), Some("[a]"));
+}
+
+#[test]
+fn test_between_overflow_at_max() {
+    // between/3 with low = i64::MAX should not panic from unchecked low + 1
+    let source = "";
+    let val = first_binding(
+        source,
+        &format!("between({}, {}, X)", i64::MAX, i64::MAX),
+        "X",
+    );
+    let expected = i64::MAX.to_string();
+    assert_eq!(val.as_deref(), Some(expected.as_str()));
+}
