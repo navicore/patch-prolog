@@ -1082,3 +1082,42 @@ fn test_step_limit_in_try_solve_once() {
         SolveResult::Success(_) | SolveResult::Error(_)
     ));
 }
+
+// ========================================================================
+// Review Round 6 regression tests
+// ========================================================================
+
+#[test]
+fn test_succ_zero_fails() {
+    // succ(X, 0) should fail (no non-negative predecessor of 0), not error
+    let solutions = solve_all("", "succ(X, 0)");
+    assert!(solutions.is_empty());
+}
+
+#[test]
+fn test_number_chars_rejects_bad_elements() {
+    // number_chars(X, ['1', bad_atom, '2']) should fail, not silently skip bad_atom
+    let solutions = solve_all("", "number_chars(X, ['1', bad_atom, '2'])");
+    assert!(solutions.is_empty());
+}
+
+#[test]
+fn test_number_codes_rejects_bad_elements() {
+    // number_codes(X, [49, foo, 50]) should fail (foo is not an integer)
+    let solutions = solve_all("", "number_codes(X, [49, foo, 50])");
+    assert!(solutions.is_empty());
+}
+
+#[test]
+fn test_copy_term_aliasing() {
+    // copy_term(f(X, X), Y): two occurrences of X should map to the same fresh variable
+    let result = first_binding("", "copy_term(f(X, X), f(A, B)), A = hello", "B");
+    assert_eq!(result, Some("hello".to_string()));
+}
+
+#[test]
+fn test_between_low_greater_than_high() {
+    // between(5, 3, X) should fail
+    let solutions = solve_all("", "between(5, 3, X)");
+    assert!(solutions.is_empty());
+}

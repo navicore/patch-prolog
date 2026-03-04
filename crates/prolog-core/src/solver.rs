@@ -748,14 +748,19 @@ impl<'a> Solver<'a> {
                                 }
                                 return self.backtrack();
                             }
+                            (_, Term::Integer(s)) if *s == 0 => {
+                                // succ(X, 0): no non-negative predecessor of 0, fail
+                                return self.backtrack();
+                            }
                             (Term::Integer(_), _) => {
                                 return SolveResult::Error(
                                     "succ/2: argument must be non-negative".to_string(),
                                 );
                             }
                             (_, Term::Integer(_)) => {
+                                // s < 0: succ is only defined for natural numbers
                                 return SolveResult::Error(
-                                    "succ/2: successor must be positive".to_string(),
+                                    "succ/2: successor must be non-negative".to_string(),
                                 );
                             }
                             _ => {
@@ -888,9 +893,9 @@ impl<'a> Solver<'a> {
                                 // Try to parse chars back to number
                                 let wchars = self.subst.apply(&chars_arg);
                                 if let Some(elems) = collect_list(&wchars, &self.interner) {
-                                    let s: String = elems
+                                    let s: Option<String> = elems
                                         .iter()
-                                        .filter_map(|e| match e {
+                                        .map(|e| match e {
                                             Term::Atom(id) => {
                                                 let ch = self.interner.resolve(*id);
                                                 if ch.chars().count() == 1 {
@@ -902,13 +907,15 @@ impl<'a> Solver<'a> {
                                             _ => None,
                                         })
                                         .collect();
-                                    if let Ok(n) = s.parse::<i64>() {
-                                        if self.subst.unify(&num_arg, &Term::Integer(n)) {
-                                            continue;
-                                        }
-                                    } else if let Ok(f) = s.parse::<f64>() {
-                                        if self.subst.unify(&num_arg, &Term::Float(f)) {
-                                            continue;
+                                    if let Some(s) = s {
+                                        if let Ok(n) = s.parse::<i64>() {
+                                            if self.subst.unify(&num_arg, &Term::Integer(n)) {
+                                                continue;
+                                            }
+                                        } else if let Ok(f) = s.parse::<f64>() {
+                                            if self.subst.unify(&num_arg, &Term::Float(f)) {
+                                                continue;
+                                            }
                                         }
                                     }
                                     return self.backtrack();
@@ -964,12 +971,13 @@ impl<'a> Solver<'a> {
                                 // Try to parse codes back to number
                                 let wcodes = self.subst.apply(&codes_arg);
                                 if let Some(elems) = collect_list(&wcodes, &self.interner) {
-                                    let s: String = elems
+                                    let s: Option<String> = elems
                                         .iter()
-                                        .filter_map(|e| {
+                                        .map(|e| {
                                             if let Term::Integer(code) = e {
                                                 if *code >= 0 && *code <= 0x10FFFF {
                                                     char::from_u32(*code as u32)
+                                                        .map(|c| c.to_string())
                                                 } else {
                                                     None
                                                 }
@@ -978,13 +986,15 @@ impl<'a> Solver<'a> {
                                             }
                                         })
                                         .collect();
-                                    if let Ok(n) = s.parse::<i64>() {
-                                        if self.subst.unify(&num_arg, &Term::Integer(n)) {
-                                            continue;
-                                        }
-                                    } else if let Ok(f) = s.parse::<f64>() {
-                                        if self.subst.unify(&num_arg, &Term::Float(f)) {
-                                            continue;
+                                    if let Some(s) = s {
+                                        if let Ok(n) = s.parse::<i64>() {
+                                            if self.subst.unify(&num_arg, &Term::Integer(n)) {
+                                                continue;
+                                            }
+                                        } else if let Ok(f) = s.parse::<f64>() {
+                                            if self.subst.unify(&num_arg, &Term::Float(f)) {
+                                                continue;
+                                            }
                                         }
                                     }
                                     return self.backtrack();
@@ -1887,9 +1897,9 @@ impl<'a> Solver<'a> {
                         // Reverse: char list -> number
                         let wchars = self.subst.apply(&chars_arg);
                         if let Some(elems) = collect_list(&wchars, &self.interner) {
-                            let s: String = elems
+                            let s: Option<String> = elems
                                 .iter()
-                                .filter_map(|e| match e {
+                                .map(|e| match e {
                                     Term::Atom(id) => {
                                         let ch = self.interner.resolve(*id);
                                         if ch.chars().count() == 1 {
@@ -1901,10 +1911,12 @@ impl<'a> Solver<'a> {
                                     _ => None,
                                 })
                                 .collect();
-                            if let Ok(n) = s.parse::<i64>() {
-                                return Some(self.subst.unify(&num_arg, &Term::Integer(n)));
-                            } else if let Ok(f) = s.parse::<f64>() {
-                                return Some(self.subst.unify(&num_arg, &Term::Float(f)));
+                            if let Some(s) = s {
+                                if let Ok(n) = s.parse::<i64>() {
+                                    return Some(self.subst.unify(&num_arg, &Term::Integer(n)));
+                                } else if let Ok(f) = s.parse::<f64>() {
+                                    return Some(self.subst.unify(&num_arg, &Term::Float(f)));
+                                }
                             }
                         }
                         Some(false)
@@ -1943,12 +1955,12 @@ impl<'a> Solver<'a> {
                         // Reverse: code list -> number
                         let wcodes = self.subst.apply(&codes_arg);
                         if let Some(elems) = collect_list(&wcodes, &self.interner) {
-                            let s: String = elems
+                            let s: Option<String> = elems
                                 .iter()
-                                .filter_map(|e| {
+                                .map(|e| {
                                     if let Term::Integer(code) = e {
                                         if *code >= 0 && *code <= 0x10FFFF {
-                                            char::from_u32(*code as u32)
+                                            char::from_u32(*code as u32).map(|c| c.to_string())
                                         } else {
                                             None
                                         }
@@ -1957,10 +1969,12 @@ impl<'a> Solver<'a> {
                                     }
                                 })
                                 .collect();
-                            if let Ok(n) = s.parse::<i64>() {
-                                return Some(self.subst.unify(&num_arg, &Term::Integer(n)));
-                            } else if let Ok(f) = s.parse::<f64>() {
-                                return Some(self.subst.unify(&num_arg, &Term::Float(f)));
+                            if let Some(s) = s {
+                                if let Ok(n) = s.parse::<i64>() {
+                                    return Some(self.subst.unify(&num_arg, &Term::Integer(n)));
+                                } else if let Ok(f) = s.parse::<f64>() {
+                                    return Some(self.subst.unify(&num_arg, &Term::Float(f)));
+                                }
                             }
                         }
                         Some(false)

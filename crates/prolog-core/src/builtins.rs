@@ -721,8 +721,23 @@ pub fn term_compare(a: &Term, b: &Term, interner: &StringInterner) -> std::cmp::
                     Ordering::Equal
                 })
         }
-        (Term::List { head: h1, tail: t1 }, Term::List { head: h2, tail: t2 }) => {
-            term_compare(h1, h2, interner).then_with(|| term_compare(t1, t2, interner))
+        (Term::List { .. }, Term::List { .. }) => {
+            // Iterative list comparison to avoid stack overflow on long lists
+            let mut cur_a = a;
+            let mut cur_b = b;
+            loop {
+                match (cur_a, cur_b) {
+                    (Term::List { head: h1, tail: t1 }, Term::List { head: h2, tail: t2 }) => {
+                        let c = term_compare(h1, h2, interner);
+                        if c != Ordering::Equal {
+                            return c;
+                        }
+                        cur_a = t1;
+                        cur_b = t2;
+                    }
+                    _ => return term_compare(cur_a, cur_b, interner),
+                }
+            }
         }
         // List vs Compound: lists are .(H,T) which is arity 2
         (
@@ -806,10 +821,13 @@ pub fn build_list(elements: Vec<Term>, interner: &StringInterner) -> Term {
 
 /// Check if a term is a proper list (ends with []).
 fn is_proper_list(term: &Term, interner: &StringInterner) -> bool {
-    match term {
-        Term::Atom(id) => interner.resolve(*id) == "[]",
-        Term::List { tail, .. } => is_proper_list(tail, interner),
-        _ => false,
+    let mut current = term;
+    loop {
+        match current {
+            Term::Atom(id) => return interner.resolve(*id) == "[]",
+            Term::List { tail, .. } => current = tail,
+            _ => return false,
+        }
     }
 }
 
