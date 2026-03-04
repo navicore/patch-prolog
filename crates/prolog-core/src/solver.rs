@@ -1296,10 +1296,16 @@ impl<'a> Solver<'a> {
                         let wlow = self.subst.walk(&low_arg);
                         let whigh = self.subst.walk(&high_arg);
                         if let (Term::Integer(low), Term::Integer(high)) = (&wlow, &whigh) {
-                            let range_size = high.saturating_sub(*low).saturating_add(1);
-                            if range_size > self.max_depth as i64 {
-                                return false; // range too large for exhaustive iteration
+                            // If X is already bound, just check low <= X <= high (O(1))
+                            let wx = self.subst.walk(&x_arg);
+                            if let Term::Integer(x_val) = &wx {
+                                if *x_val >= *low && *x_val <= *high {
+                                    let remaining: Vec<Term> = goal_list.iter().cloned().collect();
+                                    return self.try_solve_once(remaining);
+                                }
+                                return false;
                             }
+                            // X is unbound: iterate (step counter limits runaway)
                             for val in *low..=*high {
                                 let mark = self.subst.trail_mark();
                                 let saved_counter = self.var_counter;
@@ -1566,10 +1572,16 @@ impl<'a> Solver<'a> {
                     let wlow = self.subst.walk(&low_arg);
                     let whigh = self.subst.walk(&high_arg);
                     if let (Term::Integer(low), Term::Integer(high)) = (&wlow, &whigh) {
-                        let range_size = high.saturating_sub(*low).saturating_add(1);
-                        if range_size > self.max_depth as i64 {
-                            return false; // range too large for exhaustive iteration
+                        // If X is already bound, just check low <= X <= high (O(1))
+                        let wx = self.subst.walk(&x_arg);
+                        if let Term::Integer(x_val) = &wx {
+                            if *x_val >= *low && *x_val <= *high {
+                                let remaining = goal_list.clone();
+                                return self.try_solve_collecting(remaining, template, results);
+                            }
+                            return false;
                         }
+                        // X is unbound: iterate (step counter limits runaway)
                         let mut found_any = false;
                         for val in *low..=*high {
                             let mark = self.subst.trail_mark();
@@ -2020,10 +2032,50 @@ impl<'a> Solver<'a> {
                     .map(|a| self.copy_term_impl(a, var_map))
                     .collect(),
             },
-            Term::List { head, tail } => Term::List {
-                head: Box::new(self.copy_term_impl(head, var_map)),
-                tail: Box::new(self.copy_term_impl(tail, var_map)),
-            },
+            Term::List { .. } => {
+                // Iterative list spine traversal to avoid stack overflow on long lists
+                let mut heads = Vec::new();
+                let mut current = &walked;
+                loop {
+                    match current {
+                        Term::List { head, tail } => {
+                            heads.push(self.copy_term_impl(head, var_map));
+                            let walked_tail = self.subst.walk(tail);
+                            // Need to own the walked tail for the next iteration
+                            match &walked_tail {
+                                Term::List { .. } => {
+                                    // Continue iterating — but we need to handle
+                                    // the owned value. Break out and handle below.
+                                }
+                                _ => {
+                                    // Terminal element: copy it and build list
+                                    let final_tail = self.copy_term_impl(tail, var_map);
+                                    let mut result = final_tail;
+                                    for h in heads.into_iter().rev() {
+                                        result = Term::List {
+                                            head: Box::new(h),
+                                            tail: Box::new(result),
+                                        };
+                                    }
+                                    return result;
+                                }
+                            }
+                            current = tail;
+                        }
+                        _ => {
+                            let final_tail = self.copy_term_impl(current, var_map);
+                            let mut result = final_tail;
+                            for h in heads.into_iter().rev() {
+                                result = Term::List {
+                                    head: Box::new(h),
+                                    tail: Box::new(result),
+                                };
+                            }
+                            return result;
+                        }
+                    }
+                }
+            }
         }
     }
 

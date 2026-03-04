@@ -1146,3 +1146,44 @@ fn test_atom_chars_rejects_non_atom_element() {
     let solutions = solve_all("", "atom_chars(X, [a, 1, b])");
     assert!(solutions.is_empty());
 }
+
+// ========================================================================
+// Review Round 8 regression tests
+// ========================================================================
+
+#[test]
+fn test_between_bound_x_large_range_naf() {
+    // between/3 with bound X under \+ should be O(1), not iterate the full range
+    let solutions = solve_all("", "X = 50, \\+ between(1, 1000000, X)");
+    // X=50 is in range, so between succeeds, \+ fails => no solutions
+    assert!(solutions.is_empty());
+}
+
+#[test]
+fn test_between_bound_x_large_range_findall() {
+    // between/3 with bound X in findall context should be O(1)
+    let l_val = first_binding("", "findall(X, (X = 42, between(1, 1000000, X)), L)", "L");
+    assert_eq!(l_val, Some("[42]".to_string()));
+}
+
+#[test]
+fn test_between_unbound_x_naf() {
+    // between/3 with unbound X under \+ should still work (step limit protects)
+    let solutions = solve_all("", "\\+ between(1, 5, X)");
+    // between(1,5,X) succeeds with X=1, so \+ fails
+    assert!(solutions.is_empty());
+}
+
+#[test]
+fn test_copy_term_list() {
+    // copy_term with a list should produce fresh variables
+    let solutions = solve_all("", "copy_term([A, B, C], [1, 2, 3])");
+    assert_eq!(solutions.len(), 1);
+}
+
+#[test]
+fn test_copy_term_nested_list() {
+    // copy_term preserves list structure
+    let result = first_binding("", "copy_term([a, b, c], X)", "X");
+    assert_eq!(result, Some("[a, b, c]".to_string()));
+}
