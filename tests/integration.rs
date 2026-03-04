@@ -1121,3 +1121,28 @@ fn test_between_low_greater_than_high() {
     let solutions = solve_all("", "between(5, 3, X)");
     assert!(solutions.is_empty());
 }
+
+// ========================================================================
+// Review Round 7 regression tests
+// ========================================================================
+
+#[test]
+fn test_mod_large_negative_divisor() {
+    // Negative divisor should work correctly (ISO: result has sign of divisor)
+    let result = first_binding("", "X is 5 mod -3", "X");
+    assert_eq!(result, Some("-1".to_string()));
+}
+
+#[test]
+fn test_atom_chars_rejects_multi_char_atom() {
+    // atom_chars(X, [a, bc, d]) should fail (bc is not a single character)
+    let solutions = solve_all("", "atom_chars(X, [a, bc, d])");
+    assert!(solutions.is_empty());
+}
+
+#[test]
+fn test_atom_chars_rejects_non_atom_element() {
+    // atom_chars(X, [a, 1, b]) should fail (1 is an integer, not an atom)
+    let solutions = solve_all("", "atom_chars(X, [a, 1, b])");
+    assert!(solutions.is_empty());
+}

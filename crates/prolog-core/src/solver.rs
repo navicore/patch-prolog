@@ -11,6 +11,9 @@ use std::io::Write as IoWrite;
 
 /// Format a float for number_chars/number_codes, ensuring ".0" suffix for whole numbers.
 fn format_float(f: f64) -> String {
+    if f.is_nan() || f.is_infinite() {
+        return format!("{}", f);
+    }
     let s = format!("{}", f);
     if s.contains('.') || s.contains('e') || s.contains('E') {
         s
@@ -379,9 +382,9 @@ impl<'a> Solver<'a> {
                             // Reverse: char list -> atom
                             let wlist = self.subst.apply(&list_arg);
                             if let Some(elems) = collect_list(&wlist, &self.interner) {
-                                let s: String = elems
+                                let s: Option<String> = elems
                                     .iter()
-                                    .filter_map(|e| {
+                                    .map(|e| {
                                         if let Term::Atom(id) = e {
                                             let ch = self.interner.resolve(*id);
                                             if ch.chars().count() == 1 {
@@ -394,9 +397,11 @@ impl<'a> Solver<'a> {
                                         }
                                     })
                                     .collect();
-                                let atom_id = self.interner.intern(&s);
-                                if self.subst.unify(&atom_arg, &Term::Atom(atom_id)) {
-                                    continue;
+                                if let Some(s) = s {
+                                    let atom_id = self.interner.intern(&s);
+                                    if self.subst.unify(&atom_arg, &Term::Atom(atom_id)) {
+                                        continue;
+                                    }
                                 }
                                 return self.backtrack();
                             }
@@ -1260,9 +1265,9 @@ impl<'a> Solver<'a> {
                         } else if let Term::Var(_) = walked {
                             let wlist = self.subst.apply(&list_arg);
                             if let Some(elems) = collect_list(&wlist, &self.interner) {
-                                let s: String = elems
+                                let s: Option<String> = elems
                                     .iter()
-                                    .filter_map(|e| {
+                                    .map(|e| {
                                         if let Term::Atom(id) = e {
                                             let ch = self.interner.resolve(*id);
                                             if ch.chars().count() == 1 {
@@ -1275,9 +1280,11 @@ impl<'a> Solver<'a> {
                                         }
                                     })
                                     .collect();
-                                let atom_id = self.interner.intern(&s);
-                                if self.subst.unify(&atom_arg, &Term::Atom(atom_id)) {
-                                    continue;
+                                if let Some(s) = s {
+                                    let atom_id = self.interner.intern(&s);
+                                    if self.subst.unify(&atom_arg, &Term::Atom(atom_id)) {
+                                        continue;
+                                    }
                                 }
                             }
                         }
@@ -1528,9 +1535,9 @@ impl<'a> Solver<'a> {
                     } else if let Term::Var(_) = walked {
                         let wlist = self.subst.apply(&list_arg);
                         if let Some(elems) = collect_list(&wlist, &self.interner) {
-                            let s: String = elems
+                            let s: Option<String> = elems
                                 .iter()
-                                .filter_map(|e| {
+                                .map(|e| {
                                     if let Term::Atom(id) = e {
                                         let ch = self.interner.resolve(*id);
                                         if ch.chars().count() == 1 {
@@ -1543,9 +1550,11 @@ impl<'a> Solver<'a> {
                                     }
                                 })
                                 .collect();
-                            let atom_id = self.interner.intern(&s);
-                            if self.subst.unify(&atom_arg, &Term::Atom(atom_id)) {
-                                return self.try_solve_collecting(goal_list, template, results);
+                            if let Some(s) = s {
+                                let atom_id = self.interner.intern(&s);
+                                if self.subst.unify(&atom_arg, &Term::Atom(atom_id)) {
+                                    return self.try_solve_collecting(goal_list, template, results);
+                                }
                             }
                         }
                     }

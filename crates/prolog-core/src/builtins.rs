@@ -579,9 +579,13 @@ fn arith_div(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
 fn arith_mod(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
     match (a, b) {
         (ArithVal::Int(_), ArithVal::Int(0)) => Err("Modulo by zero".to_string()),
+        (ArithVal::Int(_), ArithVal::Int(i64::MIN)) => {
+            Err("Arithmetic error: integer overflow in mod".to_string())
+        }
         (ArithVal::Int(a), ArithVal::Int(b)) => {
             // ISO Prolog mod: result has the sign of the divisor
             // X mod Y = X - floor(X/Y) * Y
+            // b.abs() is safe here because we excluded i64::MIN above
             let r = a.rem_euclid(b.abs());
             if *b < 0 && r != 0 {
                 Ok(ArithVal::Int(r - b.abs()))
@@ -1135,6 +1139,14 @@ mod tests {
         let result = exec_builtin(&goals[0], &mut subst, &interner).unwrap();
         assert!(matches!(result, BuiltinResult::Success));
         assert_eq!(subst.walk(&Term::Var(0)), Term::Integer(1));
+    }
+
+    #[test]
+    fn test_mod_i64_min_divisor() {
+        // arith_mod with i64::MIN divisor should error, not panic from .abs()
+        let result = arith_mod(&ArithVal::Int(5), &ArithVal::Int(i64::MIN));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("overflow"));
     }
 
     #[test]
