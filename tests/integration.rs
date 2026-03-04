@@ -710,6 +710,14 @@ fn test_sort_empty() {
 fn test_number_chars_integer() {
     let result = first_binding("", "number_chars(123, X)", "X");
     assert_eq!(result, Some("[1, 2, 3]".to_string()));
+
+    // Verify elements are atoms (not integers) by checking atom/1 on first element
+    let solutions = solve_all("", "number_chars(123, [H|_]), atom(H)");
+    assert_eq!(
+        solutions.len(),
+        1,
+        "number_chars should produce atom elements"
+    );
 }
 
 #[test]
@@ -1096,16 +1104,16 @@ fn test_succ_zero_fails() {
 
 #[test]
 fn test_number_chars_rejects_bad_elements() {
-    // number_chars(X, ['1', bad_atom, '2']) should fail, not silently skip bad_atom
-    let solutions = solve_all("", "number_chars(X, ['1', bad_atom, '2'])");
-    assert!(solutions.is_empty());
+    // number_chars(X, ['1', bad_atom, '2']) should error, not silently skip bad_atom
+    let err = solve_expect_error("", "number_chars(X, ['1', bad_atom, '2'])");
+    assert!(err.contains("single-character"));
 }
 
 #[test]
 fn test_number_codes_rejects_bad_elements() {
-    // number_codes(X, [49, foo, 50]) should fail (foo is not an integer)
-    let solutions = solve_all("", "number_codes(X, [49, foo, 50])");
-    assert!(solutions.is_empty());
+    // number_codes(X, [49, foo, 50]) should error (foo is not an integer)
+    let err = solve_expect_error("", "number_codes(X, [49, foo, 50])");
+    assert!(err.contains("character codes"));
 }
 
 #[test]
@@ -1186,4 +1194,36 @@ fn test_copy_term_nested_list() {
     // copy_term preserves list structure
     let result = first_binding("", "copy_term([a, b, c], X)", "X");
     assert_eq!(result, Some("[a, b, c]".to_string()));
+}
+
+// ========================================================================
+// Review Round 9 regression tests
+// ========================================================================
+
+#[test]
+fn test_no_occurs_check_unify() {
+    // ISO: X = f(X) should succeed (=/2 does not occurs-check)
+    let solutions = solve_all("", "X = f(X)");
+    assert_eq!(solutions.len(), 1);
+}
+
+#[test]
+fn test_number_chars_integer_elements_error() {
+    // number_chars(X, [1, 2, 3]) with integer elements should error (not silently fail)
+    let err = solve_expect_error("", "number_chars(X, [1, 2, 3])");
+    assert!(err.contains("single-character"));
+}
+
+#[test]
+fn test_number_codes_atom_elements_error() {
+    // number_codes(X, [a, b, c]) with atom elements should error
+    let err = solve_expect_error("", "number_codes(X, [a, b, c])");
+    assert!(err.contains("character codes"));
+}
+
+#[test]
+fn test_copy_term_preserves_long_list() {
+    // copy_term with a longer list to exercise iterative spine traversal
+    let result = first_binding("", "copy_term([1,2,3,4,5,6,7,8,9,10], X)", "X");
+    assert_eq!(result, Some("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]".to_string()));
 }

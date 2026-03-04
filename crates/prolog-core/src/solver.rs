@@ -72,6 +72,20 @@ pub struct Solver<'a> {
     interner: crate::term::StringInterner,
 }
 
+/// Find the maximum variable ID in a term.
+fn max_var_in_term(term: &Term) -> Option<VarId> {
+    match term {
+        Term::Var(id) => Some(*id),
+        Term::Atom(_) | Term::Integer(_) | Term::Float(_) => None,
+        Term::Compound { args, .. } => args.iter().filter_map(max_var_in_term).max(),
+        Term::List { head, tail } => {
+            let h = max_var_in_term(head);
+            let t = max_var_in_term(tail);
+            h.max(t)
+        }
+    }
+}
+
 impl<'a> Solver<'a> {
     /// Create a new solver for a query against a compiled database.
     pub fn new(
@@ -79,12 +93,15 @@ impl<'a> Solver<'a> {
         goals: Vec<Term>,
         query_vars: FnvHashMap<String, VarId>,
     ) -> Self {
-        // Start var counter at 1000 to avoid collisions with query-level var IDs
+        // Start var counter above all variable IDs in query (including anonymous _)
+        let max_from_vars = query_vars.values().copied().max().unwrap_or(0);
+        let max_from_goals = goals.iter().filter_map(max_var_in_term).max().unwrap_or(0);
+        let initial_var_counter = max_from_vars.max(max_from_goals) + 1;
         let mut solver = Solver {
             interner: db.interner.clone(),
             db,
             subst: Substitution::new(),
-            var_counter: 1000,
+            var_counter: initial_var_counter,
             query_vars,
             choice_stack: Vec::new(),
             limit: None,
@@ -98,7 +115,7 @@ impl<'a> Solver<'a> {
             goals: VecDeque::from(goals),
             untried: vec![],
             trail_mark: 0,
-            var_counter: 1000,
+            var_counter: initial_var_counter,
             cut_barrier: false,
             disjunction: false,
         });
@@ -912,18 +929,25 @@ impl<'a> Solver<'a> {
                                             _ => None,
                                         })
                                         .collect();
-                                    if let Some(s) = s {
-                                        if let Ok(n) = s.parse::<i64>() {
-                                            if self.subst.unify(&num_arg, &Term::Integer(n)) {
-                                                continue;
+                                    match s {
+                                        Some(s) => {
+                                            if let Ok(n) = s.parse::<i64>() {
+                                                if self.subst.unify(&num_arg, &Term::Integer(n)) {
+                                                    continue;
+                                                }
+                                            } else if let Ok(f) = s.parse::<f64>() {
+                                                if self.subst.unify(&num_arg, &Term::Float(f)) {
+                                                    continue;
+                                                }
                                             }
-                                        } else if let Ok(f) = s.parse::<f64>() {
-                                            if self.subst.unify(&num_arg, &Term::Float(f)) {
-                                                continue;
-                                            }
+                                            return self.backtrack();
+                                        }
+                                        None => {
+                                            return SolveResult::Error(
+                                                "number_chars/2: list elements must be single-character atoms".to_string(),
+                                            );
                                         }
                                     }
-                                    return self.backtrack();
                                 }
                                 return SolveResult::Error(
                                     "number_chars/2: at least one argument must be bound"
@@ -991,18 +1015,25 @@ impl<'a> Solver<'a> {
                                             }
                                         })
                                         .collect();
-                                    if let Some(s) = s {
-                                        if let Ok(n) = s.parse::<i64>() {
-                                            if self.subst.unify(&num_arg, &Term::Integer(n)) {
-                                                continue;
+                                    match s {
+                                        Some(s) => {
+                                            if let Ok(n) = s.parse::<i64>() {
+                                                if self.subst.unify(&num_arg, &Term::Integer(n)) {
+                                                    continue;
+                                                }
+                                            } else if let Ok(f) = s.parse::<f64>() {
+                                                if self.subst.unify(&num_arg, &Term::Float(f)) {
+                                                    continue;
+                                                }
                                             }
-                                        } else if let Ok(f) = s.parse::<f64>() {
-                                            if self.subst.unify(&num_arg, &Term::Float(f)) {
-                                                continue;
-                                            }
+                                            return self.backtrack();
+                                        }
+                                        None => {
+                                            return SolveResult::Error(
+                                                "number_codes/2: list elements must be valid character codes".to_string(),
+                                            );
                                         }
                                     }
-                                    return self.backtrack();
                                 }
                                 return SolveResult::Error(
                                     "number_codes/2: at least one argument must be bound"
@@ -2033,23 +2064,23 @@ impl<'a> Solver<'a> {
                     .collect(),
             },
             Term::List { .. } => {
-                // Iterative list spine traversal to avoid stack overflow on long lists
+                // Iterative list spine traversal to avoid stack overflow on long lists.
+                // We use an owned current value so variable-threaded spines are walked.
                 let mut heads = Vec::new();
-                let mut current = &walked;
+                let mut current_owned = walked;
                 loop {
-                    match current {
+                    match current_owned {
                         Term::List { head, tail } => {
-                            heads.push(self.copy_term_impl(head, var_map));
-                            let walked_tail = self.subst.walk(tail);
-                            // Need to own the walked tail for the next iteration
-                            match &walked_tail {
+                            heads.push(self.copy_term_impl(&head, var_map));
+                            let walked_tail = self.subst.walk(&tail);
+                            match walked_tail {
                                 Term::List { .. } => {
-                                    // Continue iterating — but we need to handle
-                                    // the owned value. Break out and handle below.
+                                    // Continue iterating with the walked tail
+                                    current_owned = walked_tail;
                                 }
                                 _ => {
                                     // Terminal element: copy it and build list
-                                    let final_tail = self.copy_term_impl(tail, var_map);
+                                    let final_tail = self.copy_term_impl(&tail, var_map);
                                     let mut result = final_tail;
                                     for h in heads.into_iter().rev() {
                                         result = Term::List {
@@ -2060,10 +2091,10 @@ impl<'a> Solver<'a> {
                                     return result;
                                 }
                             }
-                            current = tail;
                         }
                         _ => {
-                            let final_tail = self.copy_term_impl(current, var_map);
+                            // Reached a non-list (var, atom, etc.)
+                            let final_tail = self.copy_term_impl(&current_owned, var_map);
                             let mut result = final_tail;
                             for h in heads.into_iter().rev() {
                                 result = Term::List {
