@@ -570,6 +570,7 @@ fn arith_div(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
             .map(ArithVal::Int)
             .ok_or_else(|| "Arithmetic error: integer overflow in division".to_string()),
         (_, ArithVal::Float(b)) if *b == 0.0 => Err("Division by zero".to_string()),
+        (ArithVal::Float(_), ArithVal::Int(0)) => Err("Division by zero".to_string()),
         (ArithVal::Float(a), ArithVal::Float(b)) => check_float(a / b),
         (ArithVal::Int(a), ArithVal::Float(b)) => check_float(*a as f64 / b),
         (ArithVal::Float(a), ArithVal::Int(b)) => check_float(a / *b as f64),

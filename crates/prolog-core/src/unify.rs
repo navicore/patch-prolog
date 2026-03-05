@@ -123,8 +123,8 @@ impl Substitution {
             // Integer equality
             (Term::Integer(a), Term::Integer(b)) => a == b,
 
-            // Float equality
-            (Term::Float(a), Term::Float(b)) => a == b,
+            // Float equality (use to_bits for structural equality — handles NaN)
+            (Term::Float(a), Term::Float(b)) => a.to_bits() == b.to_bits(),
 
             // Compound: same functor and arity, then unify args pairwise
             (

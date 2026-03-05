@@ -70,6 +70,8 @@ pub struct Solver<'a> {
     max_depth: usize,
     /// Mutable interner for runtime atom creation (atom_concat, atom_chars, etc.).
     interner: crate::term::StringInterner,
+    /// Flag: cut was triggered inside try_solve_once, prevents clause alternatives.
+    cut_in_try_solve: bool,
 }
 
 /// Find the maximum variable ID in a term.
@@ -108,6 +110,7 @@ impl<'a> Solver<'a> {
             solutions_found: 0,
             steps: 0,
             max_depth: 10_000,
+            cut_in_try_solve: false,
         };
         // Push the initial goal list as a choice point with no alternatives
         // (this is just to set up the initial state; the real solving starts in next())
@@ -205,12 +208,11 @@ impl<'a> Solver<'a> {
                         return self.backtrack();
                     }
                     Ok(BuiltinResult::Cut) => {
-                        // Remove all choice points up to the nearest cut barrier
-                        while let Some(cp) = self.choice_stack.last() {
+                        // Remove all choice points up to and including the nearest cut barrier
+                        while let Some(cp) = self.choice_stack.pop() {
                             if cp.cut_barrier {
                                 break;
                             }
-                            self.choice_stack.pop();
                         }
                         // Continue with remaining goals
                         continue;
@@ -1169,7 +1171,10 @@ impl<'a> Solver<'a> {
                 match exec_builtin(&walked_goal, &mut self.subst, &self.interner) {
                     Ok(BuiltinResult::Success) => continue,
                     Ok(BuiltinResult::Failure) => return false,
-                    Ok(BuiltinResult::Cut) => continue,
+                    Ok(BuiltinResult::Cut) => {
+                        self.cut_in_try_solve = true;
+                        continue;
+                    }
                     Ok(BuiltinResult::NegationAsFailure(inner)) => {
                         let mark = self.subst.trail_mark();
                         let saved_counter = self.var_counter;
@@ -1379,9 +1384,20 @@ impl<'a> Solver<'a> {
                 if self.subst.unify(&walked_goal, &renamed.head) {
                     let mut new_goals = renamed.body;
                     new_goals.extend(goal_list.clone());
+                    let saved_cut = self.cut_in_try_solve;
+                    self.cut_in_try_solve = false;
                     if self.try_solve_once(new_goals) {
+                        self.cut_in_try_solve = saved_cut;
                         return true;
                     }
+                    if self.cut_in_try_solve {
+                        // Cut was triggered — don't try more clauses
+                        self.cut_in_try_solve = saved_cut;
+                        self.subst.undo_to(mark);
+                        self.var_counter = saved_counter;
+                        return false;
+                    }
+                    self.cut_in_try_solve = saved_cut;
                 }
                 self.subst.undo_to(mark);
                 self.var_counter = saved_counter;

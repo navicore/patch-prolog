@@ -1227,3 +1227,51 @@ fn test_copy_term_preserves_long_list() {
     let result = first_binding("", "copy_term([1,2,3,4,5,6,7,8,9,10], X)", "X");
     assert_eq!(result, Some("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]".to_string()));
 }
+
+#[test]
+fn test_cut_prevents_all_alternatives() {
+    // Verify cut actually prevents ALL alternatives, not just first-solution check
+    let src = "foo(a). foo(b). foo(c).";
+
+    // foo(X), ! should give exactly 1 solution (cut prevents trying b,c)
+    let solutions = solve_all(src, "foo(X), !");
+    assert_eq!(solutions.len(), 1, "cut should prevent foo alternatives");
+    assert_eq!(first_binding(src, "foo(X), !", "X"), Some("a".to_string()));
+
+    // foo(X), !, X = b should fail (X=a from first clause, cut prevents alternatives)
+    let solutions = solve_all(src, "foo(X), !, X = b");
+    assert_eq!(
+        solutions.len(),
+        0,
+        "cut should prevent trying X=b alternative"
+    );
+}
+
+#[test]
+fn test_cut_in_negation() {
+    let src = "foo(a). foo(b). foo(c).";
+
+    // \+((foo(X), !, X = b)) — inner fails (cut prevents X=b), so \+ succeeds
+    let solutions = solve_all(src, "\\+((foo(X), !, X = b))");
+    assert_eq!(
+        solutions.len(),
+        1,
+        "\\+ should succeed when inner fails due to cut"
+    );
+}
+
+#[test]
+fn test_cut_in_once() {
+    let src = "foo(a). foo(b). foo(c).";
+
+    // once((foo(X), !, X = b)) — cut prevents alternatives, X=a fails X=b, overall fails
+    let solutions = solve_all(src, "once((foo(X), !, X = b))");
+    assert_eq!(solutions.len(), 0, "once with cut should fail");
+}
+
+#[test]
+fn test_float_div_by_int_zero() {
+    // 1.0 / 0 should report "Division by zero", not "Infinity"
+    let err = solve_expect_error("", "X is 1.0 / 0");
+    assert!(err.contains("Division by zero"), "got: {}", err);
+}
