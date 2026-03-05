@@ -1275,3 +1275,103 @@ fn test_float_div_by_int_zero() {
     let err = solve_expect_error("", "X is 1.0 / 0");
     assert!(err.contains("Division by zero"), "got: {}", err);
 }
+
+// ---- Round 11 regression tests ----
+
+#[test]
+fn test_between_step_limit_in_findall() {
+    // between/3 inside findall with a huge range should be stopped by step limit
+    let source = "";
+    let mut interner = StringInterner::new();
+    let clauses = Parser::parse_program(source, &mut interner).unwrap();
+    let (goals, vars) =
+        Parser::parse_query_with_vars("findall(X, between(1, 1000000000, X), L)", &mut interner)
+            .unwrap();
+    let db = CompiledDatabase::new(interner, clauses);
+    let mut solver = Solver::new(&db, goals, vars).with_max_depth(100);
+    // Should terminate (not loop 10^9 times); step limit caps iteration
+    let result = solver.next();
+    // The result should be success (findall collects what it can before step limit)
+    // or failure, but importantly it terminates quickly
+    match result {
+        SolveResult::Success(_) | SolveResult::Failure | SolveResult::Error(_) => {} // all acceptable
+    }
+}
+
+#[test]
+fn test_between_step_limit_in_negation() {
+    // between/3 inside \+ with a huge range should be stopped by step limit
+    let source = "";
+    let mut interner = StringInterner::new();
+    let clauses = Parser::parse_program(source, &mut interner).unwrap();
+    // \+ between(1, 1000000000, X) -- X is unbound, first val succeeds, NAF fails
+    // But the step limit should prevent runaway if semantics change
+    let (goals, vars) = Parser::parse_query_with_vars(
+        "\\+ (between(1, 1000000000, X), X > 1000000000)",
+        &mut interner,
+    )
+    .unwrap();
+    let db = CompiledDatabase::new(interner, clauses);
+    let mut solver = Solver::new(&db, goals, vars).with_max_depth(200);
+    let result = solver.next();
+    // Should terminate quickly due to step limit
+    match result {
+        SolveResult::Success(_) | SolveResult::Failure | SolveResult::Error(_) => {}
+    }
+}
+
+#[test]
+fn test_univ_unbound_functor_errors() {
+    // T =.. [F] where F is unbound should error (ISO instantiation_error)
+    let err = solve_expect_error("", "T =.. [F]");
+    assert!(
+        err.contains("instantiation") || err.contains("must be bound"),
+        "got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_univ_number_construct_still_works() {
+    // T =.. [42] should still succeed with T = 42
+    let solutions = solve_all("", "T =.. [42]");
+    assert_eq!(solutions.len(), 1);
+    assert_eq!(solutions[0][0].1, "42");
+}
+
+#[test]
+fn test_number_chars_invalid_syntax_errors() {
+    // number_chars(X, [a,b,c]) should be a syntax error, not silent failure
+    let err = solve_expect_error("", "number_chars(X, [a,b,c])");
+    assert!(
+        err.contains("invalid number syntax") || err.contains("syntax"),
+        "got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_number_codes_invalid_syntax_errors() {
+    // number_codes(X, [97,98,99]) -> "abc" is not a valid number -> syntax error
+    let err = solve_expect_error("", "number_codes(X, [97,98,99])");
+    assert!(
+        err.contains("invalid number syntax") || err.contains("syntax"),
+        "got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_number_chars_valid_still_works() {
+    // number_chars(X, ['1','2','3']) should still parse as 123
+    let solutions = solve_all("", "number_chars(X, ['1','2','3'])");
+    assert_eq!(solutions.len(), 1);
+    assert_eq!(solutions[0][0].1, "123");
+}
+
+#[test]
+fn test_number_chars_unify_failure_backtracks() {
+    // number_chars(42, ['1','2','3']) -> parses to 123, unify with 42 fails -> backtrack (not error)
+    let solutions = solve_all("", "number_chars(42, ['1','2','3'])");
+    assert_eq!(solutions.len(), 0);
+}

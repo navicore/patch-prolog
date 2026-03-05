@@ -645,7 +645,12 @@ impl<'a> Solver<'a> {
                                             }
                                         }
                                     } else if elems.len() == 1 {
-                                        // number =.. [number]
+                                        // number =.. [number] or atom =.. [atom]
+                                        if matches!(&elems[0], Term::Var(_)) {
+                                            return SolveResult::Error(
+                                                "=../2: instantiation error - element must be bound".to_string(),
+                                            );
+                                        }
                                         if self.subst.unify(&term_arg, &elems[0]) {
                                             continue;
                                         }
@@ -937,12 +942,16 @@ impl<'a> Solver<'a> {
                                                 if self.subst.unify(&num_arg, &Term::Integer(n)) {
                                                     continue;
                                                 }
+                                                return self.backtrack();
                                             } else if let Ok(f) = s.parse::<f64>() {
                                                 if self.subst.unify(&num_arg, &Term::Float(f)) {
                                                     continue;
                                                 }
+                                                return self.backtrack();
                                             }
-                                            return self.backtrack();
+                                            return SolveResult::Error(
+                                                "number_chars/2: invalid number syntax".to_string(),
+                                            );
                                         }
                                         None => {
                                             return SolveResult::Error(
@@ -1023,12 +1032,16 @@ impl<'a> Solver<'a> {
                                                 if self.subst.unify(&num_arg, &Term::Integer(n)) {
                                                     continue;
                                                 }
+                                                return self.backtrack();
                                             } else if let Ok(f) = s.parse::<f64>() {
                                                 if self.subst.unify(&num_arg, &Term::Float(f)) {
                                                     continue;
                                                 }
+                                                return self.backtrack();
                                             }
-                                            return self.backtrack();
+                                            return SolveResult::Error(
+                                                "number_codes/2: invalid number syntax".to_string(),
+                                            );
                                         }
                                         None => {
                                             return SolveResult::Error(
@@ -1341,8 +1354,12 @@ impl<'a> Solver<'a> {
                                 }
                                 return false;
                             }
-                            // X is unbound: iterate (step counter limits runaway)
+                            // X is unbound: iterate with per-iteration step counting
                             for val in *low..=*high {
+                                self.steps += 1;
+                                if self.steps > self.max_depth {
+                                    return false;
+                                }
                                 let mark = self.subst.trail_mark();
                                 let saved_counter = self.var_counter;
                                 if self.subst.unify(&x_arg, &Term::Integer(val)) {
@@ -1628,9 +1645,13 @@ impl<'a> Solver<'a> {
                             }
                             return false;
                         }
-                        // X is unbound: iterate (step counter limits runaway)
+                        // X is unbound: iterate with per-iteration step counting
                         let mut found_any = false;
                         for val in *low..=*high {
+                            self.steps += 1;
+                            if self.steps > self.max_depth {
+                                return found_any;
+                            }
                             let mark = self.subst.trail_mark();
                             let saved_counter = self.var_counter;
                             if self.subst.unify(&x_arg, &Term::Integer(val)) {
@@ -1864,6 +1885,10 @@ impl<'a> Solver<'a> {
                                     };
                                     return Some(self.subst.unify(&term_arg, &constructed));
                                 } else if elems.len() == 1 {
+                                    // Instantiation error if element is unbound
+                                    if matches!(&elems[0], Term::Var(_)) {
+                                        return Some(false);
+                                    }
                                     return Some(self.subst.unify(&term_arg, &elems[0]));
                                 }
                             }
