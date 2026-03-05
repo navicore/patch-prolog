@@ -1499,21 +1499,20 @@ impl<'a> Solver<'a> {
         let mark = self.subst.trail_mark();
         let saved_counter = self.var_counter;
         let saved_stack_len = self.choice_stack.len();
-        let saved_steps = self.steps;
 
         let mut collected = Vec::new();
         self.try_solve_collecting(VecDeque::from(vec![goal]), &template, &mut collected);
 
         // Check if collection was truncated by step limit
-        let truncated = self.steps > self.max_depth;
+        let truncated = self.steps > self.max_depth || self.steps_exceeded;
 
-        // Restore state
+        // Restore state (steps accumulate globally — no save/restore)
         self.subst.undo_to(mark);
         self.var_counter = saved_counter;
         self.choice_stack.truncate(saved_stack_len);
-        self.steps = saved_steps;
 
         if truncated {
+            self.steps_exceeded = false;
             return Err(format!(
                 "findall: step limit ({}) exceeded during collection",
                 self.max_depth

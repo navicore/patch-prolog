@@ -1501,3 +1501,31 @@ fn test_between_bound_x_below_range() {
     let solutions = solve_all("", "between(5, 10, 3)");
     assert_eq!(solutions.len(), 0);
 }
+
+#[test]
+fn test_findall_steps_accumulate_globally() {
+    // Nested findalls should share a single step budget, not get independent budgets
+    // With max_depth=200, two findalls of 150 items each should exceed the limit
+    let source = "";
+    let mut interner = StringInterner::new();
+    let clauses = Parser::parse_program(source, &mut interner).unwrap();
+    let (goals, vars) = Parser::parse_query_with_vars(
+        "findall(X, between(1, 150, X), L1), findall(Y, between(1, 150, Y), L2)",
+        &mut interner,
+    )
+    .unwrap();
+    let db = CompiledDatabase::new(interner, clauses);
+    let mut solver = Solver::new(&db, goals, vars).with_max_depth(200);
+    // First findall uses ~150 steps. Second should hit the limit since only ~50 remain.
+    match solver.next() {
+        SolveResult::Error(e) => assert!(
+            e.contains("step limit") || e.contains("exceeded"),
+            "got: {}",
+            e
+        ),
+        SolveResult::Success(_) => {
+            panic!("Expected error — two findalls of 150 should exceed max_depth=200")
+        }
+        SolveResult::Failure => panic!("Expected error, got failure"),
+    }
+}
