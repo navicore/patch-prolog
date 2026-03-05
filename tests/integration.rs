@@ -1375,3 +1375,84 @@ fn test_number_chars_unify_failure_backtracks() {
     let solutions = solve_all("", "number_chars(42, ['1','2','3'])");
     assert_eq!(solutions.len(), 0);
 }
+
+// ---- Round 12 regression tests ----
+
+#[test]
+fn test_cut_in_findall_stops_clause_iteration() {
+    // findall(X, (p(X), !), Xs) should return [1], not [1,2,3]
+    let source = "p(1). p(2). p(3).";
+    let result = first_binding(source, "findall(X, (p(X), !), Xs)", "Xs");
+    assert_eq!(result, Some("[1]".to_string()));
+}
+
+#[test]
+fn test_findall_without_cut_collects_all() {
+    // Without cut, findall should still collect all solutions
+    let source = "p(1). p(2). p(3).";
+    let result = first_binding(source, "findall(X, p(X), Xs)", "Xs");
+    assert_eq!(result, Some("[1, 2, 3]".to_string()));
+}
+
+#[test]
+fn test_findall_step_limit_returns_error() {
+    // findall with huge between should error, not return partial results
+    let source = "";
+    let mut interner = StringInterner::new();
+    let clauses = Parser::parse_program(source, &mut interner).unwrap();
+    let (goals, vars) =
+        Parser::parse_query_with_vars("findall(X, between(1, 100000, X), L)", &mut interner)
+            .unwrap();
+    let db = CompiledDatabase::new(interner, clauses);
+    let mut solver = Solver::new(&db, goals, vars).with_max_depth(100);
+    match solver.next() {
+        SolveResult::Error(e) => assert!(e.contains("step limit"), "got: {}", e),
+        other => panic!("Expected error, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_is_list_with_bound_tail() {
+    // is_list should work when tail variable is bound to []
+    let source = "";
+    let solutions = solve_all(source, "X = [1,2,3], is_list(X)");
+    assert_eq!(solutions.len(), 1);
+}
+
+#[test]
+fn test_is_list_with_constructed_list() {
+    // is_list on a list built via append
+    let source = "my_list([1,2,3]).";
+    let solutions = solve_all(source, "my_list(X), is_list(X)");
+    assert_eq!(solutions.len(), 1);
+}
+
+#[test]
+fn test_number_chars_rejects_nan() {
+    // number_chars(X, ['N','a','N']) should error, not bind X to NaN
+    let err = solve_expect_error("", "number_chars(X, ['N','a','N'])");
+    assert!(
+        err.contains("invalid number syntax") || err.contains("syntax"),
+        "got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_number_chars_rejects_infinity() {
+    // number_chars(X, [i,n,f]) should error, not bind X to Infinity
+    let err = solve_expect_error("", "number_chars(X, [i,n,f])");
+    assert!(
+        err.contains("invalid number syntax") || err.contains("syntax"),
+        "got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_cut_in_try_solve_no_leak_after_once() {
+    // once(!) followed by predicate iteration should not be affected by dirty cut flag
+    let source = "q(a). q(b). q(c).";
+    let solutions = solve_all(source, "once(!), q(X)");
+    assert_eq!(solutions.len(), 3); // Should find all q solutions
+}

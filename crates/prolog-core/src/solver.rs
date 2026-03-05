@@ -230,6 +230,7 @@ impl<'a> Solver<'a> {
                         self.subst.undo_to(mark);
                         self.var_counter = saved_counter;
                         self.choice_stack.truncate(saved_stack_len);
+                        self.cut_in_try_solve = false;
 
                         if inner_result {
                             // Inner goal succeeded, so \+ fails
@@ -272,6 +273,7 @@ impl<'a> Solver<'a> {
                         if self.try_solve_once(vec![cond]) {
                             // Cond succeeded — keep bindings, truncate only choice stack
                             self.choice_stack.truncate(saved_stack_len);
+                            self.cut_in_try_solve = false;
                             goals.push_front(then);
                             continue;
                         } else {
@@ -279,6 +281,7 @@ impl<'a> Solver<'a> {
                             self.subst.undo_to(mark);
                             self.var_counter = saved_counter;
                             self.choice_stack.truncate(saved_stack_len);
+                            self.cut_in_try_solve = false;
 
                             goals.push_front(else_branch);
                             continue;
@@ -293,12 +296,14 @@ impl<'a> Solver<'a> {
                         if self.try_solve_once(vec![cond]) {
                             // Cond succeeded — keep bindings, truncate only choice stack
                             self.choice_stack.truncate(saved_stack_len);
+                            self.cut_in_try_solve = false;
                             goals.push_front(then);
                             continue;
                         } else {
                             self.subst.undo_to(mark);
                             self.var_counter = saved_counter;
                             self.choice_stack.truncate(saved_stack_len);
+                            self.cut_in_try_solve = false;
                             return self.backtrack();
                         }
                     }
@@ -329,9 +334,11 @@ impl<'a> Solver<'a> {
                         if self.try_solve_once(vec![inner_goal]) {
                             // Truncate choice stack to remove inner choice points
                             self.choice_stack.truncate(saved_stack_len);
+                            self.cut_in_try_solve = false;
                             continue;
                         } else {
                             self.choice_stack.truncate(saved_stack_len);
+                            self.cut_in_try_solve = false;
                             return self.backtrack();
                         }
                     }
@@ -944,6 +951,12 @@ impl<'a> Solver<'a> {
                                                 }
                                                 return self.backtrack();
                                             } else if let Ok(f) = s.parse::<f64>() {
+                                                if f.is_nan() || f.is_infinite() {
+                                                    return SolveResult::Error(
+                                                        "number_chars/2: invalid number syntax"
+                                                            .to_string(),
+                                                    );
+                                                }
                                                 if self.subst.unify(&num_arg, &Term::Float(f)) {
                                                     continue;
                                                 }
@@ -1034,6 +1047,12 @@ impl<'a> Solver<'a> {
                                                 }
                                                 return self.backtrack();
                                             } else if let Ok(f) = s.parse::<f64>() {
+                                                if f.is_nan() || f.is_infinite() {
+                                                    return SolveResult::Error(
+                                                        "number_codes/2: invalid number syntax"
+                                                            .to_string(),
+                                                    );
+                                                }
                                                 if self.subst.unify(&num_arg, &Term::Float(f)) {
                                                     continue;
                                                 }
@@ -1428,14 +1447,26 @@ impl<'a> Solver<'a> {
         let mark = self.subst.trail_mark();
         let saved_counter = self.var_counter;
         let saved_stack_len = self.choice_stack.len();
+        let saved_steps = self.steps;
 
         let mut collected = Vec::new();
         self.try_solve_collecting(VecDeque::from(vec![goal]), &template, &mut collected);
+
+        // Check if collection was truncated by step limit
+        let truncated = self.steps > self.max_depth;
 
         // Restore state
         self.subst.undo_to(mark);
         self.var_counter = saved_counter;
         self.choice_stack.truncate(saved_stack_len);
+        self.steps = saved_steps;
+
+        if truncated {
+            return Err(format!(
+                "findall: step limit ({}) exceeded during collection",
+                self.max_depth
+            ));
+        }
 
         // Build the result list from collected terms
         let nil_id = self.interner.lookup("[]").expect("[] must be interned");
@@ -1477,6 +1508,7 @@ impl<'a> Solver<'a> {
                     return self.try_solve_collecting(goal_list, template, results);
                 }
                 Ok(BuiltinResult::Cut) => {
+                    self.cut_in_try_solve = true;
                     return self.try_solve_collecting(goal_list, template, results);
                 }
                 Ok(BuiltinResult::Conjunction(a, b)) => {
@@ -1689,6 +1721,8 @@ impl<'a> Solver<'a> {
             let clause = &self.db.clauses[clause_idx];
             let renamed = self.rename_clause(clause);
 
+            let saved_cut = self.cut_in_try_solve;
+            self.cut_in_try_solve = false;
             if self.subst.unify(&walked_goal, &renamed.head) {
                 let mut new_goals: VecDeque<Term> = VecDeque::from(renamed.body);
                 new_goals.extend(goal_list.iter().cloned());
@@ -1696,6 +1730,14 @@ impl<'a> Solver<'a> {
                     found_any = true;
                 }
             }
+            // If cut fired inside, stop iterating clauses
+            if self.cut_in_try_solve {
+                self.cut_in_try_solve = saved_cut;
+                self.subst.undo_to(mark);
+                self.var_counter = saved_counter;
+                return found_any;
+            }
+            self.cut_in_try_solve = saved_cut;
             self.subst.undo_to(mark);
             self.var_counter = saved_counter;
         }
@@ -2008,7 +2050,9 @@ impl<'a> Solver<'a> {
                                 if let Ok(n) = s.parse::<i64>() {
                                     return Some(self.subst.unify(&num_arg, &Term::Integer(n)));
                                 } else if let Ok(f) = s.parse::<f64>() {
-                                    return Some(self.subst.unify(&num_arg, &Term::Float(f)));
+                                    if !f.is_nan() && !f.is_infinite() {
+                                        return Some(self.subst.unify(&num_arg, &Term::Float(f)));
+                                    }
                                 }
                             }
                         }
@@ -2066,7 +2110,9 @@ impl<'a> Solver<'a> {
                                 if let Ok(n) = s.parse::<i64>() {
                                     return Some(self.subst.unify(&num_arg, &Term::Integer(n)));
                                 } else if let Ok(f) = s.parse::<f64>() {
-                                    return Some(self.subst.unify(&num_arg, &Term::Float(f)));
+                                    if !f.is_nan() && !f.is_infinite() {
+                                        return Some(self.subst.unify(&num_arg, &Term::Float(f)));
+                                    }
                                 }
                             }
                         }

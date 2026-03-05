@@ -272,7 +272,7 @@ pub fn exec_builtin(
                     }
                 }
                 ("is_list", 1) => {
-                    let walked = subst.walk(&args[0]);
+                    let walked = subst.apply(&args[0]);
                     if is_proper_list(&walked, interner) {
                         Ok(BuiltinResult::Success)
                     } else {
