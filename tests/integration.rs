@@ -1456,3 +1456,48 @@ fn test_cut_in_try_solve_no_leak_after_once() {
     let solutions = solve_all(source, "once(!), q(X)");
     assert_eq!(solutions.len(), 3); // Should find all q solutions
 }
+
+// ---- Round 14 regression tests ----
+
+#[test]
+fn test_naf_step_limit_returns_error_not_success() {
+    // \+(loop) should error when step limit fires, not succeed
+    let source = "loop :- loop.";
+    let mut interner = StringInterner::new();
+    let clauses = Parser::parse_program(source, &mut interner).unwrap();
+    let (goals, vars) = Parser::parse_query_with_vars("\\+(loop)", &mut interner).unwrap();
+    let db = CompiledDatabase::new(interner, clauses);
+    let mut solver = Solver::new(&db, goals, vars).with_max_depth(50);
+    match solver.next() {
+        SolveResult::Error(e) => assert!(
+            e.contains("step limit") || e.contains("exceeded"),
+            "got: {}",
+            e
+        ),
+        SolveResult::Success(_) => {
+            panic!("Expected error, got success (NAF incorrectly succeeded)")
+        }
+        SolveResult::Failure => panic!("Expected error, got failure"),
+    }
+}
+
+#[test]
+fn test_between_bound_x_fast_path() {
+    // between(1, 1000000, 5) should succeed in O(1), not O(N)
+    let solutions = solve_all("", "between(1, 1000000, 5)");
+    assert_eq!(solutions.len(), 1);
+}
+
+#[test]
+fn test_between_bound_x_out_of_range() {
+    // between(1, 10, 11) should fail
+    let solutions = solve_all("", "between(1, 10, 11)");
+    assert_eq!(solutions.len(), 0);
+}
+
+#[test]
+fn test_between_bound_x_below_range() {
+    // between(5, 10, 3) should fail
+    let solutions = solve_all("", "between(5, 10, 3)");
+    assert_eq!(solutions.len(), 0);
+}

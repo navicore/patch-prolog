@@ -72,6 +72,8 @@ pub struct Solver<'a> {
     interner: crate::term::StringInterner,
     /// Flag: cut was triggered inside try_solve_once, prevents clause alternatives.
     cut_in_try_solve: bool,
+    /// Flag: step limit was exceeded inside try_solve_once/try_solve_collecting.
+    steps_exceeded: bool,
 }
 
 /// Find the maximum variable ID in a term.
@@ -111,6 +113,7 @@ impl<'a> Solver<'a> {
             steps: 0,
             max_depth: 10_000,
             cut_in_try_solve: false,
+            steps_exceeded: false,
         };
         // Push the initial goal list as a choice point with no alternatives
         // (this is just to set up the initial state; the real solving starts in next())
@@ -232,6 +235,15 @@ impl<'a> Solver<'a> {
                         self.choice_stack.truncate(saved_stack_len);
                         self.cut_in_try_solve = false;
 
+                        // Check if step limit was hit (don't treat timeout as failure)
+                        if self.steps_exceeded {
+                            self.steps_exceeded = false;
+                            return SolveResult::Error(format!(
+                                "Maximum step limit exceeded ({}) inside negation",
+                                self.max_depth
+                            ));
+                        }
+
                         if inner_result {
                             // Inner goal succeeded, so \+ fails
                             return self.backtrack();
@@ -270,10 +282,20 @@ impl<'a> Solver<'a> {
                         let saved_counter = self.var_counter;
                         let saved_stack_len = self.choice_stack.len();
 
-                        if self.try_solve_once(vec![cond]) {
+                        let cond_result = self.try_solve_once(vec![cond]);
+                        self.cut_in_try_solve = false;
+
+                        if self.steps_exceeded {
+                            self.steps_exceeded = false;
+                            return SolveResult::Error(format!(
+                                "Maximum step limit exceeded ({})",
+                                self.max_depth
+                            ));
+                        }
+
+                        if cond_result {
                             // Cond succeeded — keep bindings, truncate only choice stack
                             self.choice_stack.truncate(saved_stack_len);
-                            self.cut_in_try_solve = false;
                             goals.push_front(then);
                             continue;
                         } else {
@@ -281,7 +303,6 @@ impl<'a> Solver<'a> {
                             self.subst.undo_to(mark);
                             self.var_counter = saved_counter;
                             self.choice_stack.truncate(saved_stack_len);
-                            self.cut_in_try_solve = false;
 
                             goals.push_front(else_branch);
                             continue;
@@ -293,17 +314,26 @@ impl<'a> Solver<'a> {
                         let saved_counter = self.var_counter;
                         let saved_stack_len = self.choice_stack.len();
 
-                        if self.try_solve_once(vec![cond]) {
+                        let cond_result = self.try_solve_once(vec![cond]);
+                        self.cut_in_try_solve = false;
+
+                        if self.steps_exceeded {
+                            self.steps_exceeded = false;
+                            return SolveResult::Error(format!(
+                                "Maximum step limit exceeded ({})",
+                                self.max_depth
+                            ));
+                        }
+
+                        if cond_result {
                             // Cond succeeded — keep bindings, truncate only choice stack
                             self.choice_stack.truncate(saved_stack_len);
-                            self.cut_in_try_solve = false;
                             goals.push_front(then);
                             continue;
                         } else {
                             self.subst.undo_to(mark);
                             self.var_counter = saved_counter;
                             self.choice_stack.truncate(saved_stack_len);
-                            self.cut_in_try_solve = false;
                             return self.backtrack();
                         }
                     }
@@ -330,15 +360,23 @@ impl<'a> Solver<'a> {
                         // remove any choice points created by the inner goal.
                         let saved_stack_len = self.choice_stack.len();
 
-                        // try_solve_once keeps bindings on success
-                        if self.try_solve_once(vec![inner_goal]) {
-                            // Truncate choice stack to remove inner choice points
+                        let once_result = self.try_solve_once(vec![inner_goal]);
+                        self.cut_in_try_solve = false;
+
+                        if self.steps_exceeded {
+                            self.steps_exceeded = false;
                             self.choice_stack.truncate(saved_stack_len);
-                            self.cut_in_try_solve = false;
+                            return SolveResult::Error(format!(
+                                "Maximum step limit exceeded ({})",
+                                self.max_depth
+                            ));
+                        }
+
+                        if once_result {
+                            self.choice_stack.truncate(saved_stack_len);
                             continue;
                         } else {
                             self.choice_stack.truncate(saved_stack_len);
-                            self.cut_in_try_solve = false;
                             return self.backtrack();
                         }
                     }
@@ -714,6 +752,14 @@ impl<'a> Solver<'a> {
                         let whigh = self.subst.walk(&high_arg);
                         if let (Term::Integer(low), Term::Integer(high)) = (&wlow, &whigh) {
                             if low > high {
+                                return self.backtrack();
+                            }
+                            // O(1) fast path: if X is already bound, just check range
+                            let wx = self.subst.walk(&x_arg);
+                            if let Term::Integer(x_val) = &wx {
+                                if *x_val >= *low && *x_val <= *high {
+                                    continue;
+                                }
                                 return self.backtrack();
                             }
                             let mark = self.subst.trail_mark();
@@ -1193,6 +1239,7 @@ impl<'a> Solver<'a> {
 
             self.steps += 1;
             if self.steps > self.max_depth {
+                self.steps_exceeded = true;
                 return false;
             }
 
@@ -1213,6 +1260,10 @@ impl<'a> Solver<'a> {
                         let inner_result = self.try_solve_once(vec![inner]);
                         self.subst.undo_to(mark);
                         self.var_counter = saved_counter;
+                        // Step limit inside NAF: treat as failure of the whole context
+                        if self.steps_exceeded {
+                            return false;
+                        }
                         if inner_result {
                             return false;
                         }
@@ -1378,6 +1429,7 @@ impl<'a> Solver<'a> {
                             for val in *low..=*high {
                                 self.steps += 1;
                                 if self.steps > self.max_depth {
+                                    self.steps_exceeded = true;
                                     return false;
                                 }
                                 let mark = self.subst.trail_mark();
@@ -1495,6 +1547,7 @@ impl<'a> Solver<'a> {
 
         self.steps += 1;
         if self.steps > self.max_depth {
+            self.steps_exceeded = true;
             return false;
         }
 
@@ -1522,6 +1575,10 @@ impl<'a> Solver<'a> {
                     let inner_result = self.try_solve_once(vec![inner]);
                     self.subst.undo_to(mark);
                     self.var_counter = saved_counter;
+                    // Step limit inside NAF: treat as failure of the whole context
+                    if self.steps_exceeded {
+                        return false;
+                    }
                     if inner_result {
                         return false;
                     }
@@ -1683,6 +1740,7 @@ impl<'a> Solver<'a> {
                         for val in *low..=*high {
                             self.steps += 1;
                             if self.steps > self.max_depth {
+                                self.steps_exceeded = true;
                                 return found_any;
                             }
                             let mark = self.subst.trail_mark();
