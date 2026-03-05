@@ -791,7 +791,7 @@ pub fn term_compare(a: &Term, b: &Term, interner: &StringInterner) -> std::cmp::
                 }
                 Ordering::Equal
             }),
-        _ => Ordering::Equal,
+        _ => unreachable!("term_compare: unhandled Term variant"),
     }
 }
 
@@ -1148,6 +1148,16 @@ mod tests {
         let result = arith_mod(&ArithVal::Int(5), &ArithVal::Int(i64::MIN));
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("overflow"));
+    }
+
+    #[test]
+    fn test_mod_i64_min_dividend_neg1() {
+        // i64::MIN mod -1 should be 0 (rem_euclid handles this correctly)
+        let result = arith_mod(&ArithVal::Int(i64::MIN), &ArithVal::Int(-1));
+        match result {
+            Ok(ArithVal::Int(0)) => {}
+            other => panic!("Expected Ok(Int(0)), got {:?}", other),
+        }
     }
 
     #[test]

@@ -1374,6 +1374,7 @@ impl<'a> Solver<'a> {
                                 return false;
                             }
                             // X is unbound: iterate with per-iteration step counting
+                            let remaining: Vec<Term> = goal_list.iter().cloned().collect();
                             for val in *low..=*high {
                                 self.steps += 1;
                                 if self.steps > self.max_depth {
@@ -1382,8 +1383,7 @@ impl<'a> Solver<'a> {
                                 let mark = self.subst.trail_mark();
                                 let saved_counter = self.var_counter;
                                 if self.subst.unify(&x_arg, &Term::Integer(val)) {
-                                    let remaining: Vec<Term> = goal_list.iter().cloned().collect();
-                                    if self.try_solve_once(remaining) {
+                                    if self.try_solve_once(remaining.clone()) {
                                         return true;
                                     }
                                 }
@@ -1679,6 +1679,7 @@ impl<'a> Solver<'a> {
                         }
                         // X is unbound: iterate with per-iteration step counting
                         let mut found_any = false;
+                        let remaining = goal_list.clone();
                         for val in *low..=*high {
                             self.steps += 1;
                             if self.steps > self.max_depth {
@@ -1687,8 +1688,7 @@ impl<'a> Solver<'a> {
                             let mark = self.subst.trail_mark();
                             let saved_counter = self.var_counter;
                             if self.subst.unify(&x_arg, &Term::Integer(val)) {
-                                let remaining = goal_list.clone();
-                                if self.try_solve_collecting(remaining, template, results) {
+                                if self.try_solve_collecting(remaining.clone(), template, results) {
                                     found_any = true;
                                 }
                             }
