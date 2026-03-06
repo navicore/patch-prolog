@@ -6,7 +6,7 @@ pub fn is_builtin(goal: &Term, interner: &StringInterner) -> bool {
     match goal {
         Term::Atom(id) => {
             let name = interner.resolve(*id);
-            matches!(name, "true" | "fail" | "false" | "!")
+            matches!(name, "true" | "fail" | "false" | "!" | "nl")
         }
         Term::Compound { functor, args } => {
             let name = interner.resolve(*functor);
@@ -26,6 +26,23 @@ pub fn is_builtin(goal: &Term, interner: &StringInterner) -> bool {
                 ("once", 1) | ("call", 1) => true,
                 // Atom/string predicates
                 ("atom_length", 2) | ("atom_concat", 3) | ("atom_chars", 2) => true,
+                // I/O predicates
+                ("write", 1) | ("writeln", 1) => true,
+                // Term ordering
+                ("compare", 3) => true,
+                ("@<", 2) | ("@>", 2) | ("@=<", 2) | ("@>=", 2) => true,
+                // Term introspection
+                ("functor", 3) | ("arg", 3) | ("=..", 2) => true,
+                // Integer enumeration
+                ("between", 3) => true,
+                // Term copying
+                ("copy_term", 2) => true,
+                // Peano arithmetic
+                ("succ", 2) | ("plus", 3) => true,
+                // List sorting
+                ("msort", 2) | ("sort", 2) => true,
+                // Number/string conversion
+                ("number_chars", 2) | ("number_codes", 2) => true,
                 _ => false,
             }
         }
@@ -64,6 +81,36 @@ pub enum BuiltinResult {
     AtomConcat(Term, Term, Term),
     /// atom_chars/2: atom, char list
     AtomChars(Term, Term),
+    /// write/1: write term to stdout (no newline).
+    Write(Term),
+    /// writeln/1: write term to stdout with newline.
+    Writeln(Term),
+    /// nl/0: write newline to stdout.
+    Nl,
+    /// compare/3: Order, Term1, Term2 — standard term ordering.
+    Compare(Term, Term, Term),
+    /// functor/3: Term, Name, Arity.
+    Functor(Term, Term, Term),
+    /// arg/3: N, Term, Arg.
+    Arg(Term, Term, Term),
+    /// =../2: Term, List (univ).
+    Univ(Term, Term),
+    /// between/3: Low, High, X — integer enumeration.
+    Between(Term, Term, Term),
+    /// copy_term/2: Original, Copy.
+    CopyTerm(Term, Term),
+    /// succ/2: X, S — successor relation.
+    Succ(Term, Term),
+    /// plus/3: X, Y, Z — addition relation.
+    Plus(Term, Term, Term),
+    /// msort/2: List, Sorted.
+    MSort(Term, Term),
+    /// sort/2: List, Sorted.
+    Sort(Term, Term),
+    /// number_chars/2: Number, Chars.
+    NumberChars(Term, Term),
+    /// number_codes/2: Number, Codes.
+    NumberCodes(Term, Term),
 }
 
 /// Execute a built-in predicate.
@@ -79,6 +126,7 @@ pub fn exec_builtin(
                 "true" => Ok(BuiltinResult::Success),
                 "fail" | "false" => Ok(BuiltinResult::Failure),
                 "!" => Ok(BuiltinResult::Cut),
+                "nl" => Ok(BuiltinResult::Nl),
                 _ => Err(format!("Unknown builtin atom: {}", name)),
             }
         }
@@ -224,7 +272,7 @@ pub fn exec_builtin(
                     }
                 }
                 ("is_list", 1) => {
-                    let walked = subst.walk(&args[0]);
+                    let walked = subst.apply(&args[0]);
                     if is_proper_list(&walked, interner) {
                         Ok(BuiltinResult::Success)
                     } else {
@@ -270,6 +318,88 @@ pub fn exec_builtin(
                     args[2].clone(),
                 )),
                 ("atom_chars", 2) => Ok(BuiltinResult::AtomChars(args[0].clone(), args[1].clone())),
+                // I/O
+                ("write", 1) => Ok(BuiltinResult::Write(args[0].clone())),
+                ("writeln", 1) => Ok(BuiltinResult::Writeln(args[0].clone())),
+                // Term ordering
+                ("compare", 3) => Ok(BuiltinResult::Compare(
+                    args[0].clone(),
+                    args[1].clone(),
+                    args[2].clone(),
+                )),
+                ("@<", 2) => {
+                    let cmp =
+                        term_compare(&subst.apply(&args[0]), &subst.apply(&args[1]), interner);
+                    if cmp == std::cmp::Ordering::Less {
+                        Ok(BuiltinResult::Success)
+                    } else {
+                        Ok(BuiltinResult::Failure)
+                    }
+                }
+                ("@>", 2) => {
+                    let cmp =
+                        term_compare(&subst.apply(&args[0]), &subst.apply(&args[1]), interner);
+                    if cmp == std::cmp::Ordering::Greater {
+                        Ok(BuiltinResult::Success)
+                    } else {
+                        Ok(BuiltinResult::Failure)
+                    }
+                }
+                ("@=<", 2) => {
+                    let cmp =
+                        term_compare(&subst.apply(&args[0]), &subst.apply(&args[1]), interner);
+                    if cmp != std::cmp::Ordering::Greater {
+                        Ok(BuiltinResult::Success)
+                    } else {
+                        Ok(BuiltinResult::Failure)
+                    }
+                }
+                ("@>=", 2) => {
+                    let cmp =
+                        term_compare(&subst.apply(&args[0]), &subst.apply(&args[1]), interner);
+                    if cmp != std::cmp::Ordering::Less {
+                        Ok(BuiltinResult::Success)
+                    } else {
+                        Ok(BuiltinResult::Failure)
+                    }
+                }
+                // Term introspection
+                ("functor", 3) => Ok(BuiltinResult::Functor(
+                    args[0].clone(),
+                    args[1].clone(),
+                    args[2].clone(),
+                )),
+                ("arg", 3) => Ok(BuiltinResult::Arg(
+                    args[0].clone(),
+                    args[1].clone(),
+                    args[2].clone(),
+                )),
+                ("=..", 2) => Ok(BuiltinResult::Univ(args[0].clone(), args[1].clone())),
+                // Integer enumeration
+                ("between", 3) => Ok(BuiltinResult::Between(
+                    args[0].clone(),
+                    args[1].clone(),
+                    args[2].clone(),
+                )),
+                // Term copying
+                ("copy_term", 2) => Ok(BuiltinResult::CopyTerm(args[0].clone(), args[1].clone())),
+                // Peano arithmetic
+                ("succ", 2) => Ok(BuiltinResult::Succ(args[0].clone(), args[1].clone())),
+                ("plus", 3) => Ok(BuiltinResult::Plus(
+                    args[0].clone(),
+                    args[1].clone(),
+                    args[2].clone(),
+                )),
+                // List sorting
+                ("msort", 2) => Ok(BuiltinResult::MSort(args[0].clone(), args[1].clone())),
+                ("sort", 2) => Ok(BuiltinResult::Sort(args[0].clone(), args[1].clone())),
+                // Number/string conversion
+                ("number_chars", 2) => {
+                    Ok(BuiltinResult::NumberChars(args[0].clone(), args[1].clone()))
+                }
+                ("number_codes", 2) => {
+                    Ok(BuiltinResult::NumberCodes(args[0].clone(), args[1].clone()))
+                }
                 _ => Err(format!("Unknown builtin: {}/{}", name, args.len())),
             }
         }
@@ -440,6 +570,7 @@ fn arith_div(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
             .map(ArithVal::Int)
             .ok_or_else(|| "Arithmetic error: integer overflow in division".to_string()),
         (_, ArithVal::Float(b)) if *b == 0.0 => Err("Division by zero".to_string()),
+        (ArithVal::Float(_), ArithVal::Int(0)) => Err("Division by zero".to_string()),
         (ArithVal::Float(a), ArithVal::Float(b)) => check_float(a / b),
         (ArithVal::Int(a), ArithVal::Float(b)) => check_float(*a as f64 / b),
         (ArithVal::Float(a), ArithVal::Int(b)) => check_float(a / *b as f64),
@@ -449,7 +580,20 @@ fn arith_div(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
 fn arith_mod(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
     match (a, b) {
         (ArithVal::Int(_), ArithVal::Int(0)) => Err("Modulo by zero".to_string()),
-        (ArithVal::Int(a), ArithVal::Int(b)) => Ok(ArithVal::Int(a % b)),
+        (ArithVal::Int(_), ArithVal::Int(i64::MIN)) => {
+            Err("Arithmetic error: integer overflow in mod".to_string())
+        }
+        (ArithVal::Int(a), ArithVal::Int(b)) => {
+            // ISO Prolog mod: result has the sign of the divisor
+            // X mod Y = X - floor(X/Y) * Y
+            // b.abs() is safe here because we excluded i64::MIN above
+            let r = a.rem_euclid(b.abs());
+            if *b < 0 && r != 0 {
+                Ok(ArithVal::Int(r - b.abs()))
+            } else {
+                Ok(ArithVal::Int(r))
+            }
+        }
         _ => Err("mod requires integer arguments".to_string()),
     }
 }
@@ -497,18 +641,204 @@ fn arith_min(a: &ArithVal, b: &ArithVal) -> ArithVal {
     }
 }
 
+/// Standard order of terms (ISO Prolog):
+/// Variables < Numbers < Atoms < Compound terms
+/// Within numbers: by value. Within atoms: alphabetical.
+/// Within compounds: by arity, then functor name, then arguments left-to-right.
+pub fn term_compare(a: &Term, b: &Term, interner: &StringInterner) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    fn type_rank(t: &Term) -> u8 {
+        match t {
+            Term::Var(_) => 0,
+            Term::Float(_) => 1,
+            Term::Integer(_) => 1,
+            Term::Atom(_) => 2,
+            Term::List { .. } => 3,
+            Term::Compound { .. } => 3,
+        }
+    }
+
+    let ra = type_rank(a);
+    let rb = type_rank(b);
+    if ra != rb {
+        return ra.cmp(&rb);
+    }
+
+    match (a, b) {
+        (Term::Var(a), Term::Var(b)) => a.cmp(b),
+        (Term::Integer(a), Term::Integer(b)) => a.cmp(b),
+        (Term::Float(a), Term::Float(b)) => {
+            // NaN sorts after all other floats (deterministic total order)
+            a.partial_cmp(b)
+                .unwrap_or_else(|| match (a.is_nan(), b.is_nan()) {
+                    (true, true) => Ordering::Equal,
+                    (true, false) => Ordering::Greater,
+                    (false, true) => Ordering::Less,
+                    (false, false) => unreachable!(),
+                })
+        }
+        (Term::Integer(a), Term::Float(b)) => {
+            // NaN sorts after everything; ISO: float < integer when same value
+            if b.is_nan() {
+                return Ordering::Less;
+            }
+            let cmp = (*a as f64).partial_cmp(b).unwrap_or(Ordering::Less);
+            if cmp == Ordering::Equal {
+                Ordering::Greater // integer > float for same value (ISO 8.4.2.1)
+            } else {
+                cmp
+            }
+        }
+        (Term::Float(a), Term::Integer(b)) => {
+            // NaN sorts after everything; ISO: float < integer when same value
+            if a.is_nan() {
+                return Ordering::Greater;
+            }
+            let cmp = a.partial_cmp(&(*b as f64)).unwrap_or(Ordering::Greater);
+            if cmp == Ordering::Equal {
+                Ordering::Less // float < integer for same value (ISO 8.4.2.1)
+            } else {
+                cmp
+            }
+        }
+        (Term::Atom(a), Term::Atom(b)) => interner.resolve(*a).cmp(interner.resolve(*b)),
+        (
+            Term::Compound {
+                functor: f1,
+                args: a1,
+            },
+            Term::Compound {
+                functor: f2,
+                args: a2,
+            },
+        ) => {
+            // Compare by arity first, then functor name, then args
+            a1.len()
+                .cmp(&a2.len())
+                .then_with(|| interner.resolve(*f1).cmp(interner.resolve(*f2)))
+                .then_with(|| {
+                    for (x, y) in a1.iter().zip(a2.iter()) {
+                        let c = term_compare(x, y, interner);
+                        if c != Ordering::Equal {
+                            return c;
+                        }
+                    }
+                    Ordering::Equal
+                })
+        }
+        (Term::List { .. }, Term::List { .. }) => {
+            // Iterative list comparison to avoid stack overflow on long lists
+            let mut cur_a = a;
+            let mut cur_b = b;
+            loop {
+                match (cur_a, cur_b) {
+                    (Term::List { head: h1, tail: t1 }, Term::List { head: h2, tail: t2 }) => {
+                        let c = term_compare(h1, h2, interner);
+                        if c != Ordering::Equal {
+                            return c;
+                        }
+                        cur_a = t1;
+                        cur_b = t2;
+                    }
+                    _ => return term_compare(cur_a, cur_b, interner),
+                }
+            }
+        }
+        // List vs Compound: lists are .(H,T) which is arity 2
+        (
+            Term::List { head: h, tail: t },
+            Term::Compound {
+                functor: f2,
+                args: a2,
+            },
+        ) => {
+            // List is ./2; compare arity, then functor ".", then args
+            2usize
+                .cmp(&a2.len())
+                .then_with(|| ".".cmp(interner.resolve(*f2)))
+                .then_with(|| {
+                    if a2.len() >= 1 {
+                        let c = term_compare(h, &a2[0], interner);
+                        if c != Ordering::Equal {
+                            return c;
+                        }
+                    }
+                    if a2.len() >= 2 {
+                        return term_compare(t, &a2[1], interner);
+                    }
+                    Ordering::Equal
+                })
+        }
+        (
+            Term::Compound {
+                functor: f1,
+                args: a1,
+            },
+            Term::List { head: h, tail: t },
+        ) => a1
+            .len()
+            .cmp(&2usize)
+            .then_with(|| interner.resolve(*f1).cmp("."))
+            .then_with(|| {
+                if a1.len() >= 1 {
+                    let c = term_compare(&a1[0], h, interner);
+                    if c != Ordering::Equal {
+                        return c;
+                    }
+                }
+                if a1.len() >= 2 {
+                    return term_compare(&a1[1], t, interner);
+                }
+                Ordering::Equal
+            }),
+        _ => unreachable!("term_compare: unhandled Term variant"),
+    }
+}
+
+/// Collect list elements from a term. Returns None if not a proper list.
+pub fn collect_list(term: &Term, interner: &StringInterner) -> Option<Vec<Term>> {
+    let mut elements = Vec::new();
+    let mut current = term;
+    loop {
+        match current {
+            Term::Atom(id) if interner.resolve(*id) == "[]" => return Some(elements),
+            Term::List { head, tail } => {
+                elements.push(head.as_ref().clone());
+                current = tail;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Build a list term from elements.
+pub fn build_list(elements: Vec<Term>, interner: &StringInterner) -> Term {
+    let nil_id = interner.lookup("[]").expect("[] must be interned");
+    let mut list = Term::Atom(nil_id);
+    for elem in elements.into_iter().rev() {
+        list = Term::List {
+            head: Box::new(elem),
+            tail: Box::new(list),
+        };
+    }
+    list
+}
+
 /// Check if a term is a proper list (ends with []).
 fn is_proper_list(term: &Term, interner: &StringInterner) -> bool {
-    match term {
-        Term::Atom(id) => interner.resolve(*id) == "[]",
-        Term::List { tail, .. } => is_proper_list(tail, interner),
-        _ => false,
+    let mut current = term;
+    loop {
+        match current {
+            Term::Atom(id) => return interner.resolve(*id) == "[]",
+            Term::List { tail, .. } => current = tail,
+            _ => return false,
+        }
     }
 }
 
 /// Helper: check if a goal atom name matches a known builtin name.
 pub fn builtin_atom_names() -> &'static [&'static str] {
-    &["true", "fail", "false", "!"]
+    &["true", "fail", "false", "!", "nl"]
 }
 
 pub fn builtin_functor_names() -> &'static [(&'static str, usize)] {
@@ -540,6 +870,24 @@ pub fn builtin_functor_names() -> &'static [(&'static str, usize)] {
         ("atom_length", 2),
         ("atom_concat", 3),
         ("atom_chars", 2),
+        ("write", 1),
+        ("writeln", 1),
+        ("compare", 3),
+        ("@<", 2),
+        ("@>", 2),
+        ("@=<", 2),
+        ("@>=", 2),
+        ("functor", 3),
+        ("arg", 3),
+        ("=..", 2),
+        ("between", 3),
+        ("copy_term", 2),
+        ("succ", 2),
+        ("plus", 3),
+        ("msort", 2),
+        ("sort", 2),
+        ("number_chars", 2),
+        ("number_codes", 2),
     ]
 }
 
@@ -792,6 +1140,24 @@ mod tests {
         let result = exec_builtin(&goals[0], &mut subst, &interner).unwrap();
         assert!(matches!(result, BuiltinResult::Success));
         assert_eq!(subst.walk(&Term::Var(0)), Term::Integer(1));
+    }
+
+    #[test]
+    fn test_mod_i64_min_divisor() {
+        // arith_mod with i64::MIN divisor should error, not panic from .abs()
+        let result = arith_mod(&ArithVal::Int(5), &ArithVal::Int(i64::MIN));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("overflow"));
+    }
+
+    #[test]
+    fn test_mod_i64_min_dividend_neg1() {
+        // i64::MIN mod -1 should be 0 (rem_euclid handles this correctly)
+        let result = arith_mod(&ArithVal::Int(i64::MIN), &ArithVal::Int(-1));
+        match result {
+            Ok(ArithVal::Int(0)) => {}
+            other => panic!("Expected Ok(Int(0)), got {:?}", other),
+        }
     }
 
     #[test]

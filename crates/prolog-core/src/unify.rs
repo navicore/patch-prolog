@@ -65,19 +65,37 @@ impl Substitution {
     }
 
     /// Deep walk: recursively substitute all variables in a term.
+    /// Handles circular terms (from unification without occurs check) by
+    /// stopping expansion when a variable cycle is detected.
     pub fn apply(&self, term: &Term) -> Term {
+        let mut seen = Vec::new();
+        self.apply_impl(term, &mut seen)
+    }
+
+    fn apply_impl(&self, term: &Term, seen: &mut Vec<VarId>) -> Term {
         match term {
-            Term::Var(id) => match self.lookup(*id) {
-                Some(bound) => self.apply(bound),
-                None => term.clone(),
-            },
+            Term::Var(id) => {
+                if seen.contains(id) {
+                    // Cycle detected — return variable as-is to break infinite recursion
+                    return term.clone();
+                }
+                match self.lookup(*id) {
+                    Some(bound) => {
+                        seen.push(*id);
+                        let result = self.apply_impl(bound, seen);
+                        seen.pop();
+                        result
+                    }
+                    None => term.clone(),
+                }
+            }
             Term::Compound { functor, args } => Term::Compound {
                 functor: *functor,
-                args: args.iter().map(|a| self.apply(a)).collect(),
+                args: args.iter().map(|a| self.apply_impl(a, seen)).collect(),
             },
             Term::List { head, tail } => Term::List {
-                head: Box::new(self.apply(head)),
-                tail: Box::new(self.apply(tail)),
+                head: Box::new(self.apply_impl(head, seen)),
+                tail: Box::new(self.apply_impl(tail, seen)),
             },
             _ => term.clone(),
         }
@@ -93,11 +111,8 @@ impl Substitution {
             // Both same variable
             (Term::Var(a), Term::Var(b)) if a == b => true,
 
-            // Bind variable to the other term
+            // Bind variable to the other term (ISO: no occurs check for =/2)
             (Term::Var(id), other) | (other, Term::Var(id)) => {
-                if self.occurs_in(*id, other) {
-                    return false;
-                }
                 self.bind(*id, other.clone());
                 true
             }
@@ -108,8 +123,8 @@ impl Substitution {
             // Integer equality
             (Term::Integer(a), Term::Integer(b)) => a == b,
 
-            // Float equality
-            (Term::Float(a), Term::Float(b)) => a == b,
+            // Float equality (use to_bits for structural equality — handles NaN)
+            (Term::Float(a), Term::Float(b)) => a.to_bits() == b.to_bits(),
 
             // Compound: same functor and arity, then unify args pairwise
             (
@@ -144,6 +159,8 @@ impl Substitution {
     }
 
     /// Occurs check: does the variable appear in the term?
+    /// Retained for potential unify_with_occurs_check/2 builtin.
+    #[allow(dead_code)]
     fn occurs_in(&self, var: VarId, term: &Term) -> bool {
         match term {
             Term::Var(id) => {
@@ -247,15 +264,15 @@ mod tests {
     }
 
     #[test]
-    fn test_occurs_check() {
+    fn test_no_occurs_check() {
         let mut sub = Substitution::new();
-        // X = f(X) should fail occurs check
+        // X = f(X) should succeed (ISO: =/2 does not occurs-check)
         let t1 = Term::Var(0);
         let t2 = Term::Compound {
             functor: 0,
             args: vec![Term::Var(0)],
         };
-        assert!(!sub.unify(&t1, &t2));
+        assert!(sub.unify(&t1, &t2));
     }
 
     #[test]
