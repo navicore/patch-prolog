@@ -1,0 +1,270 @@
+name: Release with Auto Version
+
+on:
+  release:
+    types: [created]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Auto-version and Publish
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.PAT }}
+          ref: main
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+
+      - name: Update version in workspace Cargo.toml
+        run: |
+          CURRENT_VERSION=$(grep -A5 '\[workspace.package\]' Cargo.toml | grep '^version' | cut -d'"' -f2)
+
+          if [ "$CURRENT_VERSION" != "${{ steps.version.outputs.version }}" ]; then
+            # Update version in [workspace.package] section only
+            awk -v new_version="${{ steps.version.outputs.version }}" '
+              /^\[workspace\.package\]/ { in_section=1 }
+              /^\[/ && !/^\[workspace\.package\]/ { in_section=0 }
+              in_section && /^version = / {
+                print "version = \"" new_version "\""
+                in_section=0
+                next
+              }
+              { print }
+            ' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
+
+            # Update patch-prolog-core dependency version pins
+            awk -v new_version="${{ steps.version.outputs.version }}" '
+              /patch-prolog-core = \{ path = / {
+                sub(/version = "=[^"]*"/, "version = \"=" new_version "\"")
+              }
+              { print }
+            ' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
+
+            cargo generate-lockfile
+
+            git config --local user.email "github-actions[bot]@users.noreply.github.com"
+            git config --local user.name "github-actions[bot]"
+
+            git add Cargo.toml Cargo.lock
+            git commit -m "chore: bump version to ${{ steps.version.outputs.version }}"
+            git push origin HEAD:main
+
+            echo "Version updated and pushed"
+          else
+            echo "Version already matches tag, skipping update"
+          fi
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Verify all crates have matching versions
+        run: |
+          WORKSPACE_VERSION=$(grep -A5 '\[workspace.package\]' Cargo.toml | grep '^version' | cut -d'"' -f2)
+          echo "Workspace version: $WORKSPACE_VERSION"
+
+          # Check patch-prolog-core uses workspace version
+          CORE_VERSION=$(grep -A10 '^\[package\]' crates/patch-prolog-core/Cargo.toml | grep '^version' | head -1)
+          if ! echo "$CORE_VERSION" | grep -q "version.workspace = true"; then
+            echo "ERROR: crates/patch-prolog-core/Cargo.toml does not use workspace version!"
+            exit 1
+          fi
+          echo "✓ patch-prolog-core uses workspace version"
+
+          # Verify dependency pin matches workspace version
+          CORE_DEP=$(grep 'patch-prolog-core.*path.*patch-prolog-core' Cargo.toml | head -1 | grep -o 'version = "[^"]*"' | cut -d'"' -f2)
+          if [ "$CORE_DEP" != "=$WORKSPACE_VERSION" ]; then
+            echo "ERROR: patch-prolog-core dependency version doesn't match!"
+            echo "Expected: =$WORKSPACE_VERSION"
+            echo "Found: $CORE_DEP"
+            exit 1
+          fi
+          echo "✓ patch-prolog-core dependency pinned to exact version: $CORE_DEP"
+
+          echo "✓ All version checks passed!"
+
+      - name: Publish patch-prolog-core to crates.io
+        run: cargo publish -p patch-prolog-core --token ${{ secrets.CRATES_IO_TOKEN }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+      - name: Wait for crates.io to index patch-prolog-core
+        run: sleep 60
+
+      - name: Publish patch-prolog to crates.io
+        run: cargo publish -p patch-prolog --token ${{ secrets.CRATES_IO_TOKEN }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+  build-linux:
+    name: Build Linux (musl static)
+    runs-on: ubuntu-latest
+    needs: publish
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Install Rust with musl target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl-tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build patch-prolog (static)
+        run: |
+          cargo build --release --target x86_64-unknown-linux-musl
+          strip target/x86_64-unknown-linux-musl/release/patch-prolog
+
+      - name: Verify static linking
+        run: |
+          if readelf -d target/x86_64-unknown-linux-musl/release/patch-prolog 2>/dev/null | grep -q "NEEDED"; then
+            echo "ERROR: binary has dynamic dependencies!"
+            readelf -d target/x86_64-unknown-linux-musl/release/patch-prolog | grep NEEDED
+            exit 1
+          fi
+          echo "✓ patch-prolog is statically linked"
+
+      - name: Rename binary
+        run: mv target/x86_64-unknown-linux-musl/release/patch-prolog target/x86_64-unknown-linux-musl/release/patch-prolog-linux-x86_64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: patch-prolog-linux-x86_64
+          path: target/x86_64-unknown-linux-musl/release/patch-prolog-linux-x86_64
+
+  build-macos-arm64:
+    name: Build macOS (ARM64)
+    runs-on: macos-latest
+    needs: publish
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: macos-arm64-cargo-release
+
+      - name: Build patch-prolog
+        run: cargo build --release
+
+      - name: Rename binary
+        run: mv target/release/patch-prolog target/release/patch-prolog-macos-arm64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: patch-prolog-macos-arm64
+          path: target/release/patch-prolog-macos-arm64
+
+  build-macos-x86_64:
+    name: Build macOS (x86_64)
+    runs-on: macos-15-large
+    needs: publish
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: macos-x86_64-cargo-release
+
+      - name: Build patch-prolog
+        run: cargo build --release
+
+      - name: Rename binary
+        run: mv target/release/patch-prolog target/release/patch-prolog-macos-x86_64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: patch-prolog-macos-x86_64
+          path: target/release/patch-prolog-macos-x86_64
+
+  create-release:
+    name: Upload Release Binaries
+    needs: [build-linux, build-macos-arm64, build-macos-x86_64]
+    if: always() && needs.build-linux.result == 'success' && needs.build-macos-arm64.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f
+
+      - name: Upload binaries to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/**/*
+          append_body: true
+          body: |
+
+            ## Binary Downloads
+
+            Pre-built binaries are available for:
+            - **Linux x86_64** (statically linked, works on any Linux)
+            - **macOS ARM64** (Apple Silicon)
+            - **macOS x86_64** (Intel, if available)
+
+            ### Installation
+
+            ```bash
+            # Via crates.io
+            cargo install patch-prolog
+
+            # Or download a binary and make it executable
+            chmod +x patch-prolog-*
+            ```
+
+            ### macOS Quarantine
+
+            macOS quarantines unsigned binaries. After downloading, remove the quarantine:
+
+            ```bash
+            xattr -d com.apple.quarantine ./patch-prolog-macos-*
+            ```
+
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

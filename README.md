@@ -101,6 +101,6 @@ cargo run -- --query "true" --format text   # Quick smoke test
 Rust workspace with two crates:
 
 - **`patch-prolog`** — CLI binary (`src/main.rs`, `build.rs`)
-- **`prolog-core`** — Engine library (`crates/prolog-core/`) — tokenizer, parser, unifier, solver, built-ins
+- **`patch-prolog-core`** — Engine library (`crates/patch-prolog-core/`) — tokenizer, parser, unifier, solver, built-ins
 
 The engine compiles Prolog at build time via `build.rs`, serializes with bincode, and embeds the compiled database in the binary. At runtime, queries are parsed and resolved against the embedded knowledge base. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.

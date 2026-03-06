@@ -98,7 +98,7 @@ pub fn lookup_clauses(index: &PredicateIndex, goal: &Term, clauses: &[Clause]) -
         Some(key) => {
             match entry.arg_index.get(&key) {
                 Some(indices) => indices.clone(),
-                None => entry.all_clause_indices.clone(), // fallback
+                None => vec![], // ground arg with no matching clause — no candidates
             }
         }
         None => entry.all_clause_indices.clone(),
@@ -230,20 +230,19 @@ mod tests {
     }
 
     #[test]
-    fn test_no_match_returns_all_clauses() {
+    fn test_no_match_returns_empty() {
         let clauses = vec![
             make_fact(0, vec![Term::Atom(1)]),
             make_fact(0, vec![Term::Atom(2)]),
         ];
         let index = build_index(&clauses);
 
-        // Query with an atom that doesn't match any first arg
+        // Query with an atom that doesn't match any first arg — no candidates
         let goal = Term::Compound {
             functor: 0,
             args: vec![Term::Atom(99)],
         };
         let result = lookup_clauses(&index, &goal, &clauses);
-        // Falls back to all_clauses since no match in arg_index
-        assert_eq!(result, vec![0, 1]);
+        assert_eq!(result, vec![]);
     }
 }

@@ -31,15 +31,15 @@ fn main() {
     }
 
     // Parse and compile the knowledge base
-    let mut interner = prolog_core::StringInterner::new();
+    let mut interner = patch_prolog_core::StringInterner::new();
     let clauses = if all_source.trim().is_empty() {
         Vec::new()
     } else {
-        prolog_core::parser::Parser::parse_program(&all_source, &mut interner)
+        patch_prolog_core::parser::Parser::parse_program(&all_source, &mut interner)
             .unwrap_or_else(|e| panic!("Failed to parse knowledge base: {}", e))
     };
 
-    let db = prolog_core::CompiledDatabase::new(interner, clauses);
+    let db = patch_prolog_core::CompiledDatabase::new(interner, clauses);
     let bytes = db
         .to_bytes()
         .expect("Failed to serialize compiled database");

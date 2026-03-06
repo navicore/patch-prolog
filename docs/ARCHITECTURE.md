@@ -13,7 +13,7 @@ patch-prolog/              # Binary crate (CLI)
   tests/
     integration.rs         # End-to-end integration tests
 crates/
-  prolog-core/             # Library crate (engine)
+  patch-prolog-core/             # Library crate (engine)
     src/
       term.rs              # Term, Clause, StringInterner, AtomId, VarId
       tokenizer.rs         # Lexer: Prolog source -> tokens

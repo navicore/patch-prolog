@@ -1,0 +1,12 @@
+[package]
+name = "patch-prolog-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Core Prolog engine for patch-prolog"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
+fnv = "1"
