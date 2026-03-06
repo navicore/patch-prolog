@@ -557,6 +557,12 @@ impl<'a> Tokenizer<'a> {
             let val: f64 = s
                 .parse()
                 .map_err(|e| format!("Invalid float '{}': {}", s, e))?;
+            if val.is_infinite() {
+                return Err(format!(
+                    "Float literal '{}' overflows f64 at line {} col {}",
+                    s, line, col
+                ));
+            }
             Ok(Token {
                 kind: TokenKind::Float(val),
                 line,

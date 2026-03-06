@@ -303,9 +303,9 @@ impl<'a> Parser<'a> {
                 Ok(Term::Atom(id))
             }
             Some(TokenKind::Not) => {
-                // \+ Goal
+                // \+ Goal — ISO precedence 900fy, parses argument at 700
                 self.advance();
-                let goal = self.parse_primary()?;
+                let goal = self.parse_term()?;
                 let functor = self.interner.intern("\\+");
                 Ok(Term::Compound {
                     functor,

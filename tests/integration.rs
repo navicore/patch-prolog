@@ -1428,6 +1428,43 @@ fn test_is_list_with_constructed_list() {
 }
 
 #[test]
+fn test_naf_parses_with_operator() {
+    // \+ has ISO precedence 900fy — should parse \+ X = Y as \+(X = Y)
+    let source = "";
+    let solutions = solve_all(source, "X = hello, \\+ X = goodbye");
+    assert_eq!(solutions.len(), 1);
+    assert_eq!(solutions[0][0].1, "hello");
+}
+
+#[test]
+fn test_naf_precedence_with_is() {
+    // \+ X is 2+3 should parse as \+(X is 2+3), not (\+ X) is 2+3
+    let source = "";
+    let solutions = solve_all(source, "\\+ 1 =:= 2");
+    assert_eq!(solutions.len(), 1);
+}
+
+#[test]
+fn test_float_overflow_literal_rejected() {
+    // A float literal that overflows f64 should be a parse error
+    let mut interner = StringInterner::new();
+    let huge = format!("X is {}0.0", "9".repeat(310));
+    let result = Parser::parse_query_with_vars(&huge, &mut interner);
+    assert!(
+        result.is_err(),
+        "Expected parse error for overflowing float literal"
+    );
+}
+
+#[test]
+fn test_index_ground_miss_returns_empty() {
+    // Querying with a ground first arg that doesn't match any clause should fail immediately
+    let source = "color(red). color(blue).";
+    let solutions = solve_all(source, "color(purple)");
+    assert_eq!(solutions.len(), 0);
+}
+
+#[test]
 fn test_number_chars_rejects_nan() {
     // number_chars(X, ['N','a','N']) should error, not bind X to NaN
     let err = solve_expect_error("", "number_chars(X, ['N','a','N'])");
