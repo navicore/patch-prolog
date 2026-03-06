@@ -85,9 +85,9 @@ Added to `is/2` evaluation:
   - [x] List predicates tested end-to-end in integration tests
 
 ### Test counts
-- 133 unit tests in prolog-core
-- 122 integration tests in tests/integration.rs
-- **255 total**
+- 134 unit tests in prolog-core
+- 143 integration tests in tests/integration.rs
+- **277 total**
 
 ---
 
