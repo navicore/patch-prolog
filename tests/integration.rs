@@ -1,10 +1,10 @@
 //! Integration tests for patch-prolog.
 //! Tests the full pipeline: parse rules + query, solve, verify solutions.
 
-use prolog_core::database::CompiledDatabase;
-use prolog_core::parser::Parser;
-use prolog_core::solver::{term_to_string, SolveResult, Solver};
-use prolog_core::term::StringInterner;
+use patch_prolog_core::database::CompiledDatabase;
+use patch_prolog_core::parser::Parser;
+use patch_prolog_core::solver::{term_to_string, SolveResult, Solver};
+use patch_prolog_core::term::StringInterner;
 
 /// Helper: parse source, parse query, solve, return solutions as strings.
 fn solve_all(source: &str, query_str: &str) -> Vec<Vec<(String, String)>> {

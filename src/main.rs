@@ -1,8 +1,8 @@
 use clap::Parser as ClapParser;
-use prolog_core::database::CompiledDatabase;
-use prolog_core::parser::Parser;
-use prolog_core::solver::{term_to_string, Solution, Solver};
-use prolog_core::Term;
+use patch_prolog_core::database::CompiledDatabase;
+use patch_prolog_core::parser::Parser;
+use patch_prolog_core::solver::{term_to_string, Solution, Solver};
+use patch_prolog_core::Term;
 use std::process;
 
 static COMPILED_DB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/compiled_db.bin"));
@@ -53,7 +53,7 @@ fn main() {
     };
 
     // Rebuild index since the interner may have grown with query atoms
-    db.predicate_index = prolog_core::index::build_index(&db.clauses);
+    db.predicate_index = patch_prolog_core::index::build_index(&db.clauses);
 
     // Solve
     let mut solver = Solver::new(&db, goals, vars);
@@ -135,7 +135,7 @@ fn output_error(format: &str, message: &str) {
     }
 }
 
-fn term_to_json(term: &Term, interner: &prolog_core::StringInterner) -> serde_json::Value {
+fn term_to_json(term: &Term, interner: &patch_prolog_core::StringInterner) -> serde_json::Value {
     match term {
         Term::Atom(id) => serde_json::Value::String(interner.resolve(*id).to_string()),
         Term::Integer(n) => serde_json::json!(n),

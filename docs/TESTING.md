@@ -4,7 +4,7 @@
 
 ```bash
 cargo test --all          # Everything (unit + integration + doc-tests)
-cargo test -p prolog-core # Unit tests only (prolog-core crate)
+cargo test -p patch-prolog-core # Unit tests only (patch-prolog-core crate)
 cargo test                # Integration tests only (root crate)
 ```
 
@@ -12,7 +12,7 @@ cargo test                # Integration tests only (root crate)
 
 ### Unit Tests (134 tests)
 
-Located in `#[cfg(test)]` modules within each source file in `crates/prolog-core/src/`:
+Located in `#[cfg(test)]` modules within each source file in `crates/patch-prolog-core/src/`:
 
 | File | Tests | Coverage |
 |------|-------|----------|
@@ -56,7 +56,7 @@ solve_expect_error(source, query) -> String                   // Expect error me
 
 ## Test Counts
 
-- 134 unit tests in prolog-core
+- 134 unit tests in patch-prolog-core
 - 143 integration tests in tests/integration.rs
 - **277 total**
 
