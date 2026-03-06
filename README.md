@@ -1,21 +1,65 @@
 # patch-prolog
 
-A Rust-based Prolog engine for linting generative AI output. Rules are written in standard Prolog (`.pl` files), compiled into the binary at build time, and queried at runtime with zero file I/O.
+A Prolog compiler for linting generative AI output. You write rules in standard Prolog, compile them into a self-contained Rust binary, and query that binary at runtime — no interpreter, no file loading, no runtime dependencies.
 
-## Quick Start
+## How It Works
+
+1. Write Prolog rules (`.pl` files) in the `knowledge/` directory
+2. `cargo build` compiles them into the binary via `build.rs`
+3. Run the binary with a query — it resolves against the embedded knowledge base
+
+The rules are baked in. The binary is the program.
+
+## Example: Lint an AI-Generated Schema
+
+The `examples/linting.pl` file defines rules for checking AI-generated API schemas:
+
+```prolog
+% Flag sensitive fields that should not be exposed
+violation(Field, sensitive_field) :-
+    field(user, Field, _),
+    sensitive(Field).
+
+sensitive(ssn).
+sensitive(password).
+```
+
+To compile and run it:
 
 ```bash
-# Build
+# Copy rules into the knowledge base
+cp examples/linting.pl knowledge/
+
+# Compile — rules are baked into the binary
 cargo build --release
 
-# Run a query against the compiled knowledge base
-patch-prolog --query "violation(X)"
+# Query for violations
+./target/release/patch-prolog --query "violation(Field, Reason)"
+# → {"solutions":[{"Field":"ssn","Reason":"sensitive_field"},{"Field":"password","Reason":"sensitive_field"}],"count":2,"exhausted":true}
 
-# Limit results
-patch-prolog --query "member(X, [a,b,c])" --limit 2
+# Exit code 1 = violations found
+echo $?
+# → 1
+```
 
-# Text output instead of JSON
-patch-prolog --query "parent(tom, X)" --format text
+```bash
+# Text output
+./target/release/patch-prolog --query "violation(Field, Reason)" --format text
+# Field = ssn
+# Reason = sensitive_field
+# Field = password
+# Reason = sensitive_field
+```
+
+## Example: Family Relationships
+
+```bash
+cp examples/family.pl knowledge/
+cargo build --release
+
+./target/release/patch-prolog --query "grandparent(tom, X)" --format text
+# X = bob
+# X = carol
 ```
 
 ## Exit Codes
@@ -27,16 +71,11 @@ patch-prolog --query "parent(tom, X)" --format text
 | `2`  | Parse error |
 | `3`  | Runtime error |
 
-## Adding Rules
+## Writing Rules
 
-Place `.pl` files in the `knowledge/` directory. They are compiled into the binary at build time — no runtime file loading.
+Place `.pl` files in `knowledge/`. They are compiled into the binary on `cargo build` — the binary has no runtime file dependencies.
 
-```prolog
-% knowledge/my_rules.pl
-violation(X) :- component(X, Type), \+ approved(Type).
-```
-
-The standard library (`knowledge/stdlib.pl`) provides: `member/2`, `append/3`, `length/2`, `last/2`, `reverse/2`, `nth0/3`, `nth1/3`.
+The standard library (`knowledge/stdlib.pl`) is always included and provides: `member/2`, `append/3`, `length/2`, `last/2`, `reverse/2`, `nth0/3`, `nth1/3`.
 
 ## Built-in Predicates
 
