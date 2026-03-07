@@ -1566,3 +1566,81 @@ fn test_findall_steps_accumulate_globally() {
         SolveResult::Failure => panic!("Expected error, got failure"),
     }
 }
+
+// ---- PR #5 regression tests ----
+
+#[test]
+fn test_semicolon_comma_precedence_in_body() {
+    // ISO: a, b ; c should parse as (a, b) ; c
+    // If a fails, c should be tried
+    let source = "test(X) :- X = a, fail ; X = b.";
+    let solutions = solve_all(source, "test(X)");
+    assert_eq!(solutions.len(), 1);
+    assert_eq!(solutions[0][0].1, "b");
+}
+
+#[test]
+fn test_semicolon_comma_precedence_multiple() {
+    // a, b ; c, d should parse as (a, b) ; (c, d)
+    let source = "test(X, Y) :- X = a, Y = 1 ; X = b, Y = 2.";
+    let solutions = solve_all(source, "test(X, Y)");
+    assert_eq!(solutions.len(), 2);
+}
+
+#[test]
+fn test_integer_division_operator() {
+    let source = "";
+    let solutions = solve_all(source, "X is 7 // 2");
+    assert_eq!(solutions.len(), 1);
+    assert_eq!(solutions[0][0].1, "3");
+}
+
+#[test]
+fn test_integer_division_negative() {
+    let source = "";
+    let solutions = solve_all(source, "X is -7 // 2");
+    assert_eq!(solutions.len(), 1);
+    assert_eq!(solutions[0][0].1, "-3");
+}
+
+#[test]
+fn test_rem_operator() {
+    let source = "";
+    let solutions = solve_all(source, "X is 7 rem 3");
+    assert_eq!(solutions.len(), 1);
+    assert_eq!(solutions[0][0].1, "1");
+}
+
+#[test]
+fn test_rem_negative_dividend() {
+    // rem: sign follows dividend (unlike mod which follows divisor)
+    let source = "";
+    let solutions = solve_all(source, "X is -7 rem 2");
+    assert_eq!(solutions.len(), 1);
+    assert_eq!(solutions[0][0].1, "-1");
+}
+
+#[test]
+fn test_mod_vs_rem_difference() {
+    // -7 mod 2 = 1 (sign of divisor), -7 rem 2 = -1 (sign of dividend)
+    let source = "";
+    let solutions = solve_all(source, "X is -7 mod 2, Y is -7 rem 2");
+    assert_eq!(solutions.len(), 1);
+    assert_eq!(solutions[0][0].1, "1");
+    assert_eq!(solutions[0][1].1, "-1");
+}
+
+#[test]
+fn test_unify_with_occurs_check_success() {
+    let source = "";
+    let solutions = solve_all(source, "unify_with_occurs_check(X, a)");
+    assert_eq!(solutions.len(), 1);
+    assert_eq!(solutions[0][0].1, "a");
+}
+
+#[test]
+fn test_unify_with_occurs_check_circular_fails() {
+    let source = "";
+    let solutions = solve_all(source, "unify_with_occurs_check(X, f(X))");
+    assert_eq!(solutions.len(), 0);
+}
