@@ -3,7 +3,7 @@ members = ["crates/patch-prolog-core"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 authors = ["Ed Sweeney <ed@onextent.com>"]
 license = "MIT"
@@ -17,11 +17,11 @@ license.workspace = true
 description = "A Prolog compiler for linting generative AI output"
 
 [dependencies]
-patch-prolog-core = { path = "crates/patch-prolog-core", version = "=0.1.1" }
+patch-prolog-core = { path = "crates/patch-prolog-core", version = "=0.2.0" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
 bincode = "1"
 
 [build-dependencies]
-patch-prolog-core = { path = "crates/patch-prolog-core", version = "=0.1.1" }
+patch-prolog-core = { path = "crates/patch-prolog-core", version = "=0.2.0" }
 bincode = "1"
