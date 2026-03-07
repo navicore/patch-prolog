@@ -1,8 +1,11 @@
+mod compiler;
+
 use clap::Parser as ClapParser;
 use patch_prolog_core::database::CompiledDatabase;
 use patch_prolog_core::parser::Parser;
 use patch_prolog_core::solver::{term_to_string, Solution, Solver};
 use patch_prolog_core::Term;
+use std::path::PathBuf;
 use std::process;
 
 static COMPILED_DB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/compiled_db.bin"));
@@ -10,12 +13,15 @@ static COMPILED_DB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/compiled_d
 #[derive(ClapParser)]
 #[command(
     name = "patch-prolog",
-    about = "Prolog engine for linting generative AI output"
+    about = "Prolog compiler for linting generative AI output"
 )]
 struct Cli {
-    /// Prolog query to execute
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    /// Prolog query to execute (when used without a subcommand)
     #[arg(short, long)]
-    query: String,
+    query: Option<String>,
 
     /// Maximum number of solutions to return
     #[arg(short, long)]
@@ -26,57 +32,99 @@ struct Cli {
     format: String,
 }
 
+#[derive(clap::Subcommand)]
+enum Commands {
+    /// Compile .pl files into a standalone native binary
+    Compile {
+        /// Input .pl files
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+
+        /// Output binary path
+        #[arg(short, long, default_value = "a.out")]
+        output: PathBuf,
+
+        /// Build in debug mode (faster compile, slower runtime)
+        #[arg(long)]
+        debug: bool,
+    },
+}
+
 /// Exit codes:
-/// 0 = no solutions (compliant)
+/// 0 = no solutions (compliant) / compile succeeded
 /// 1 = solutions found (violations)
 /// 2 = parse error
-/// 3 = runtime error
+/// 3 = runtime error / compile error
 fn main() {
     let cli = Cli::parse();
 
+    match cli.command {
+        Some(Commands::Compile {
+            files,
+            output,
+            debug,
+        }) => {
+            if let Err(e) = compiler::compile(&files, &output, !debug) {
+                eprintln!("Error: {}", e);
+                process::exit(3);
+            }
+        }
+        None => {
+            let query = match cli.query {
+                Some(q) => q,
+                None => {
+                    eprintln!("Error: --query is required (or use 'compile' subcommand)");
+                    eprintln!("Usage: patch-prolog --query \"goal(X)\"");
+                    eprintln!("       patch-prolog compile rules.pl -o my-binary");
+                    process::exit(2);
+                }
+            };
+            run_query(&query, cli.limit, &cli.format);
+        }
+    }
+}
+
+fn run_query(query: &str, limit: Option<usize>, format: &str) {
     // Deserialize the compiled database
     let mut db = match CompiledDatabase::from_bytes(COMPILED_DB) {
         Ok(db) => db,
         Err(e) => {
-            output_error(&cli.format, &format!("Failed to load database: {}", e));
+            output_error(format, &format!("Failed to load database: {}", e));
             process::exit(3);
         }
     };
 
     // Parse the query using the database's interner
-    let (goals, vars) = match Parser::parse_query_with_vars(&cli.query, &mut db.interner) {
+    let (goals, vars) = match Parser::parse_query_with_vars(query, &mut db.interner) {
         Ok(result) => result,
         Err(e) => {
-            output_error(&cli.format, &format!("Parse error: {}", e));
+            output_error(format, &format!("Parse error: {}", e));
             process::exit(2);
         }
     };
 
-    // Rebuild index since the interner may have grown with query atoms
-    db.predicate_index = patch_prolog_core::index::build_index(&db.clauses);
-
     // Solve
     let mut solver = Solver::new(&db, goals, vars);
-    if let Some(limit) = cli.limit {
+    if let Some(limit) = limit {
         solver = solver.with_limit(limit);
     }
 
     let solutions = match solver.all_solutions() {
         Ok(s) => s,
         Err(e) => {
-            output_error(&cli.format, &format!("Runtime error: {}", e));
+            output_error(format, &format!("Runtime error: {}", e));
             process::exit(3);
         }
     };
 
     let count = solutions.len();
-    let exhausted = cli.limit.map_or(true, |l| count < l);
+    let exhausted = limit.map_or(true, |l| count < l);
 
-    match cli.format.as_str() {
+    match format {
         "json" => output_json(&solutions, count, exhausted, &db),
         "text" => output_text(&solutions, &db),
         _ => {
-            output_error("text", &format!("Unknown format: {}", cli.format));
+            output_error("text", &format!("Unknown format: {}", format));
             process::exit(2);
         }
     }
