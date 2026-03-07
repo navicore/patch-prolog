@@ -1,4 +1,5 @@
 use crate::term::{Term, VarId};
+use fnv::FnvHashSet;
 
 /// Vec-based substitution with trail for efficient backtracking.
 /// Bindings are stored in a Vec indexed by VarId (O(1) lookup/bind).
@@ -68,11 +69,11 @@ impl Substitution {
     /// Handles circular terms (from unification without occurs check) by
     /// stopping expansion when a variable cycle is detected.
     pub fn apply(&self, term: &Term) -> Term {
-        let mut seen = Vec::new();
+        let mut seen = FnvHashSet::default();
         self.apply_impl(term, &mut seen)
     }
 
-    fn apply_impl(&self, term: &Term, seen: &mut Vec<VarId>) -> Term {
+    fn apply_impl(&self, term: &Term, seen: &mut FnvHashSet<VarId>) -> Term {
         match term {
             Term::Var(id) => {
                 if seen.contains(id) {
@@ -81,9 +82,9 @@ impl Substitution {
                 }
                 match self.lookup(*id) {
                     Some(bound) => {
-                        seen.push(*id);
+                        seen.insert(*id);
                         let result = self.apply_impl(bound, seen);
-                        seen.pop();
+                        seen.remove(id);
                         result
                     }
                     None => term.clone(),
@@ -158,9 +159,51 @@ impl Substitution {
         }
     }
 
-    /// Occurs check: does the variable appear in the term?
-    /// Retained for potential unify_with_occurs_check/2 builtin.
-    #[allow(dead_code)]
+    /// Unify with occurs check (ISO 8.2.2).
+    /// Fails if binding a variable would create a circular term.
+    pub fn unify_with_occurs_check(&mut self, t1: &Term, t2: &Term) -> bool {
+        let t1 = self.walk(t1);
+        let t2 = self.walk(t2);
+
+        match (&t1, &t2) {
+            (Term::Var(a), Term::Var(b)) if a == b => true,
+            (Term::Var(id), other) | (other, Term::Var(id)) => {
+                if self.occurs_in(*id, other) {
+                    return false;
+                }
+                self.bind(*id, other.clone());
+                true
+            }
+            (Term::Atom(a), Term::Atom(b)) => a == b,
+            (Term::Integer(a), Term::Integer(b)) => a == b,
+            (Term::Float(a), Term::Float(b)) => a.to_bits() == b.to_bits(),
+            (
+                Term::Compound {
+                    functor: f1,
+                    args: a1,
+                },
+                Term::Compound {
+                    functor: f2,
+                    args: a2,
+                },
+            ) => {
+                if f1 != f2 || a1.len() != a2.len() {
+                    return false;
+                }
+                for (arg1, arg2) in a1.iter().zip(a2.iter()) {
+                    if !self.unify_with_occurs_check(arg1, arg2) {
+                        return false;
+                    }
+                }
+                true
+            }
+            (Term::List { head: h1, tail: t1 }, Term::List { head: h2, tail: t2 }) => {
+                self.unify_with_occurs_check(h1, h2) && self.unify_with_occurs_check(t1, t2)
+            }
+            _ => false,
+        }
+    }
+
     fn occurs_in(&self, var: VarId, term: &Term) -> bool {
         match term {
             Term::Var(id) => {

@@ -25,7 +25,9 @@ pub enum TokenKind {
     Minus,     // -
     Star,      // *
     Slash,     // /
+    IntDiv,    // //
     Mod,       // mod
+    Rem,       // rem
     Not,       // \+
     Cut,       // !
     Arrow,     // ->
@@ -435,11 +437,20 @@ impl<'a> Tokenizer<'a> {
             }
             b'/' => {
                 self.advance();
-                Ok(Token {
-                    kind: TokenKind::Slash,
-                    line,
-                    col,
-                })
+                if self.peek() == Some(b'/') {
+                    self.advance();
+                    Ok(Token {
+                        kind: TokenKind::IntDiv,
+                        line,
+                        col,
+                    })
+                } else {
+                    Ok(Token {
+                        kind: TokenKind::Slash,
+                        line,
+                        col,
+                    })
+                }
             }
 
             b'-' => {
@@ -501,6 +512,7 @@ impl<'a> Tokenizer<'a> {
         let kind = match s.as_str() {
             "is" => TokenKind::Is,
             "mod" => TokenKind::Mod,
+            "rem" => TokenKind::Rem,
             _ => TokenKind::Atom(s),
         };
         Ok(Token { kind, line, col })

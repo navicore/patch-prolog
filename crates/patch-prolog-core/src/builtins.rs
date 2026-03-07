@@ -11,7 +11,7 @@ pub fn is_builtin(goal: &Term, interner: &StringInterner) -> bool {
         Term::Compound { functor, args } => {
             let name = interner.resolve(*functor);
             match (name, args.len()) {
-                ("=", 2) | ("\\=", 2) | ("is", 2) => true,
+                ("=", 2) | ("\\=", 2) | ("unify_with_occurs_check", 2) | ("is", 2) => true,
                 ("<", 2) | (">", 2) | ("=<", 2) | (">=", 2) => true,
                 ("=:=", 2) | ("=\\=", 2) => true,
                 ("\\+", 1) => true,
@@ -135,6 +135,13 @@ pub fn exec_builtin(
             match (name, args.len()) {
                 ("=", 2) => {
                     if subst.unify(&args[0], &args[1]) {
+                        Ok(BuiltinResult::Success)
+                    } else {
+                        Ok(BuiltinResult::Failure)
+                    }
+                }
+                ("unify_with_occurs_check", 2) => {
+                    if subst.unify_with_occurs_check(&args[0], &args[1]) {
                         Ok(BuiltinResult::Success)
                     } else {
                         Ok(BuiltinResult::Failure)
@@ -477,10 +484,20 @@ fn eval_arith(
                     let r = eval_arith(&args[1], subst, interner)?;
                     arith_div(&l, &r)
                 }
+                ("//", 2) => {
+                    let l = eval_arith(&args[0], subst, interner)?;
+                    let r = eval_arith(&args[1], subst, interner)?;
+                    arith_int_div(&l, &r)
+                }
                 ("mod", 2) => {
                     let l = eval_arith(&args[0], subst, interner)?;
                     let r = eval_arith(&args[1], subst, interner)?;
                     arith_mod(&l, &r)
+                }
+                ("rem", 2) => {
+                    let l = eval_arith(&args[0], subst, interner)?;
+                    let r = eval_arith(&args[1], subst, interner)?;
+                    arith_rem(&l, &r)
                 }
                 ("-", 1) => {
                     let v = eval_arith(&args[0], subst, interner)?;
@@ -595,6 +612,30 @@ fn arith_mod(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
             }
         }
         _ => Err("mod requires integer arguments".to_string()),
+    }
+}
+
+/// ISO `//` — truncating integer division (integers only)
+fn arith_int_div(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
+    match (a, b) {
+        (ArithVal::Int(_), ArithVal::Int(0)) => Err("Division by zero".to_string()),
+        (ArithVal::Int(a), ArithVal::Int(b)) => a
+            .checked_div(*b)
+            .map(ArithVal::Int)
+            .ok_or_else(|| "Arithmetic error: integer overflow in division".to_string()),
+        _ => Err("// requires integer arguments".to_string()),
+    }
+}
+
+/// ISO `rem` — truncating remainder (sign follows dividend)
+fn arith_rem(a: &ArithVal, b: &ArithVal) -> Result<ArithVal, String> {
+    match (a, b) {
+        (ArithVal::Int(_), ArithVal::Int(0)) => Err("Remainder by zero".to_string()),
+        (ArithVal::Int(a), ArithVal::Int(b)) => a
+            .checked_rem(*b)
+            .map(ArithVal::Int)
+            .ok_or_else(|| "Arithmetic error: integer overflow in rem".to_string()),
+        _ => Err("rem requires integer arguments".to_string()),
     }
 }
 
@@ -917,6 +958,8 @@ mod tests {
         i.intern("*");
         i.intern("/");
         i.intern("mod");
+        i.intern("//");
+        i.intern("rem");
         i
     }
 

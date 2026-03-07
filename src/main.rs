@@ -1,6 +1,7 @@
 mod compiler;
 
 use clap::Parser as ClapParser;
+use compiler::CompileError;
 use std::path::PathBuf;
 use std::process;
 
@@ -31,12 +32,10 @@ fn main() {
     let cli = Cli::parse();
 
     if let Err(e) = compiler::compile(&cli.files, &cli.output, !cli.debug) {
-        if e.starts_with("Parse error") {
-            eprintln!("Error: {}", e);
-            process::exit(2);
-        } else {
-            eprintln!("Error: {}", e);
-            process::exit(3);
+        eprintln!("Error: {}", e);
+        match e {
+            CompileError::Parse(_) => process::exit(2),
+            CompileError::Build(_) => process::exit(3),
         }
     }
 }

@@ -122,17 +122,15 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_goal_list(&mut self) -> Result<Vec<Term>, String> {
-        let mut goals = vec![self.parse_goal_disjunction()?];
-        while self.current_kind() == Some(&TokenKind::Comma) {
-            self.advance();
-            goals.push(self.parse_goal_disjunction()?);
-        }
-        Ok(goals)
+        // Parse the entire body as a conjunction/disjunction tree.
+        // The solver flattens ','(a, b) via BuiltinResult::Conjunction.
+        let body = self.parse_goal_disjunction()?;
+        Ok(vec![body])
     }
 
-    /// Parse disjunction (;) at goal level — lower precedence than comma.
+    /// Parse disjunction (;) — ISO precedence 1100, looser than comma (1000).
     fn parse_goal_disjunction(&mut self) -> Result<Term, String> {
-        let left = self.parse_term()?;
+        let left = self.parse_goal_conjunction()?;
         if self.current_kind() == Some(&TokenKind::Semicolon) {
             self.advance();
             let right = self.parse_goal_disjunction()?;
@@ -143,6 +141,30 @@ impl<'a> Parser<'a> {
             })
         } else {
             Ok(left)
+        }
+    }
+
+    /// Parse conjunction (,) — ISO precedence 1000, tighter than semicolon.
+    fn parse_goal_conjunction(&mut self) -> Result<Term, String> {
+        let first = self.parse_term()?;
+        if self.current_kind() == Some(&TokenKind::Comma) {
+            let mut goals = vec![first];
+            while self.current_kind() == Some(&TokenKind::Comma) {
+                self.advance();
+                goals.push(self.parse_term()?);
+            }
+            // Build right-associative conjunction: a, b, c → ','(a, ','(b, c))
+            let comma = self.interner.intern(",");
+            let mut result = goals.pop().unwrap();
+            while let Some(g) = goals.pop() {
+                result = Term::Compound {
+                    functor: comma,
+                    args: vec![g, result],
+                };
+            }
+            Ok(result)
+        } else {
+            Ok(first)
         }
     }
 
@@ -203,14 +225,16 @@ impl<'a> Parser<'a> {
         Ok(left)
     }
 
-    /// Precedence 400: left-associative (*, /, mod)
+    /// Precedence 400: left-associative (*, /, //, mod, rem)
     fn parse_expr_400(&mut self) -> Result<Term, String> {
         let mut left = self.parse_primary()?;
         loop {
             let op = match self.current_kind() {
                 Some(TokenKind::Star) => "*",
                 Some(TokenKind::Slash) => "/",
+                Some(TokenKind::IntDiv) => "//",
                 Some(TokenKind::Mod) => "mod",
+                Some(TokenKind::Rem) => "rem",
                 _ => break,
             };
             let op = op.to_string();
@@ -746,10 +770,18 @@ mod tests {
     #[test]
     fn test_cut() {
         let (clauses, interner) = parse_clauses("max(X, Y, X) :- X >= Y, !.");
-        assert_eq!(clauses[0].body.len(), 2);
-        match &clauses[0].body[1] {
-            Term::Atom(id) => assert_eq!(interner.resolve(*id), "!"),
-            _ => panic!("Expected cut atom"),
+        // Body is a single conjunction: ','(X >= Y, !)
+        assert_eq!(clauses[0].body.len(), 1);
+        match &clauses[0].body[0] {
+            Term::Compound { functor, args } => {
+                assert_eq!(interner.resolve(*functor), ",");
+                assert_eq!(args.len(), 2);
+                match &args[1] {
+                    Term::Atom(id) => assert_eq!(interner.resolve(*id), "!"),
+                    _ => panic!("Expected cut atom"),
+                }
+            }
+            _ => panic!("Expected conjunction"),
         }
     }
 

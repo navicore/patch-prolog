@@ -4,14 +4,30 @@ use std::process::Command;
 
 const STDLIB_PL: &str = include_str!("../knowledge/stdlib.pl");
 
+#[derive(Debug)]
+pub enum CompileError {
+    Parse(String),
+    Build(String),
+}
+
+impl std::fmt::Display for CompileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CompileError::Parse(msg) => write!(f, "Parse error: {}", msg),
+            CompileError::Build(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
 /// Compile `.pl` files into a standalone native binary.
-pub fn compile(input_files: &[PathBuf], output: &Path, release: bool) -> Result<(), String> {
+pub fn compile(input_files: &[PathBuf], output: &Path, release: bool) -> Result<(), CompileError> {
     // 1. Read and concatenate all .pl source (stdlib first)
     let mut all_source = String::from(STDLIB_PL);
     all_source.push('\n');
     for file in input_files {
-        let content = fs::read_to_string(file)
-            .map_err(|e| format!("Failed to read {}: {}", file.display(), e))?;
+        let content = fs::read_to_string(file).map_err(|e| {
+            CompileError::Build(format!("Failed to read {}: {}", file.display(), e))
+        })?;
         all_source.push_str(&content);
         all_source.push('\n');
     }
@@ -19,7 +35,7 @@ pub fn compile(input_files: &[PathBuf], output: &Path, release: bool) -> Result<
     // 2. Parse and validate — catch errors early, before invoking cargo
     let mut interner = patch_prolog_core::StringInterner::new();
     let clauses = patch_prolog_core::parser::Parser::parse_program(&all_source, &mut interner)
-        .map_err(|e| format!("Parse error: {}", e))?;
+        .map_err(CompileError::Parse)?;
 
     eprintln!(
         "Parsed {} clauses from {} file(s)",
@@ -31,7 +47,7 @@ pub fn compile(input_files: &[PathBuf], output: &Path, release: bool) -> Result<
     let db = patch_prolog_core::CompiledDatabase::new(interner, clauses);
     let bytes = db
         .to_bytes()
-        .map_err(|e| format!("Serialization error: {}", e))?;
+        .map_err(|e| CompileError::Build(format!("Serialization error: {}", e)))?;
 
     // 4. Create temp project
     let temp_dir =
@@ -49,16 +65,17 @@ fn scaffold_and_build(
     db_bytes: &[u8],
     output: &Path,
     release: bool,
-) -> Result<(), String> {
+) -> Result<(), CompileError> {
     if temp_dir.exists() {
-        fs::remove_dir_all(temp_dir).map_err(|e| format!("Failed to clean temp dir: {}", e))?;
+        fs::remove_dir_all(temp_dir)
+            .map_err(|e| CompileError::Build(format!("Failed to clean temp dir: {}", e)))?;
     }
     fs::create_dir_all(temp_dir.join("src"))
-        .map_err(|e| format!("Failed to create temp project: {}", e))?;
+        .map_err(|e| CompileError::Build(format!("Failed to create temp project: {}", e)))?;
 
     // Write compiled_db.bin
     fs::write(temp_dir.join("compiled_db.bin"), db_bytes)
-        .map_err(|e| format!("Failed to write compiled database: {}", e))?;
+        .map_err(|e| CompileError::Build(format!("Failed to write compiled database: {}", e)))?;
 
     // Write Cargo.toml — pin to same patch-prolog-core version we were built with.
     // Safe because both crates use version.workspace = true, so CARGO_PKG_VERSION
@@ -78,7 +95,7 @@ bincode = "1"
 "#
     );
     fs::write(temp_dir.join("Cargo.toml"), cargo_toml)
-        .map_err(|e| format!("Failed to write Cargo.toml: {}", e))?;
+        .map_err(|e| CompileError::Build(format!("Failed to write Cargo.toml: {}", e)))?;
 
     // Write build.rs — just copies the pre-serialized database to OUT_DIR
     let build_rs = r#"fn main() {
@@ -87,11 +104,11 @@ bincode = "1"
 }
 "#;
     fs::write(temp_dir.join("build.rs"), build_rs)
-        .map_err(|e| format!("Failed to write build.rs: {}", e))?;
+        .map_err(|e| CompileError::Build(format!("Failed to write build.rs: {}", e)))?;
 
     // Write main.rs — query-only CLI (no compile subcommand)
     fs::write(temp_dir.join("src/main.rs"), GENERATED_MAIN_RS)
-        .map_err(|e| format!("Failed to write main.rs: {}", e))?;
+        .map_err(|e| CompileError::Build(format!("Failed to write main.rs: {}", e)))?;
 
     // 5. Build
     eprintln!("Building binary...");
@@ -103,10 +120,10 @@ bincode = "1"
 
     let status = cmd
         .status()
-        .map_err(|e| format!("Failed to run cargo: {}", e))?;
+        .map_err(|e| CompileError::Build(format!("Failed to run cargo: {}", e)))?;
 
     if !status.success() {
-        return Err("cargo build failed".to_string());
+        return Err(CompileError::Build("cargo build failed".to_string()));
     }
 
     // 6. Copy binary to output path
@@ -117,8 +134,13 @@ bincode = "1"
         "compiled-prolog"
     };
     let built_binary = temp_dir.join("target").join(profile).join(binary_name);
-    fs::copy(&built_binary, output)
-        .map_err(|e| format!("Failed to copy binary to {}: {}", output.display(), e))?;
+    fs::copy(&built_binary, output).map_err(|e| {
+        CompileError::Build(format!(
+            "Failed to copy binary to {}: {}",
+            output.display(),
+            e
+        ))
+    })?;
 
     eprintln!("Compiled binary: {}", output.display());
     Ok(())
