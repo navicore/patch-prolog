@@ -36,17 +36,33 @@ pub fn compile(input_files: &[PathBuf], output: &Path, release: bool) -> Result<
     // 4. Create temp project
     let temp_dir =
         std::env::temp_dir().join(format!("patch-prolog-compile-{}", std::process::id()));
+    let result = scaffold_and_build(&temp_dir, &bytes, output, release);
+
+    // Always clean up temp dir, even on error
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    result
+}
+
+fn scaffold_and_build(
+    temp_dir: &Path,
+    db_bytes: &[u8],
+    output: &Path,
+    release: bool,
+) -> Result<(), String> {
     if temp_dir.exists() {
-        fs::remove_dir_all(&temp_dir).map_err(|e| format!("Failed to clean temp dir: {}", e))?;
+        fs::remove_dir_all(temp_dir).map_err(|e| format!("Failed to clean temp dir: {}", e))?;
     }
     fs::create_dir_all(temp_dir.join("src"))
         .map_err(|e| format!("Failed to create temp project: {}", e))?;
 
     // Write compiled_db.bin
-    fs::write(temp_dir.join("compiled_db.bin"), &bytes)
+    fs::write(temp_dir.join("compiled_db.bin"), db_bytes)
         .map_err(|e| format!("Failed to write compiled database: {}", e))?;
 
-    // Write Cargo.toml — pin to same patch-prolog-core version we were built with
+    // Write Cargo.toml — pin to same patch-prolog-core version we were built with.
+    // Safe because both crates use version.workspace = true, so CARGO_PKG_VERSION
+    // always matches the patch-prolog-core version.
     let core_version = env!("CARGO_PKG_VERSION");
     let cargo_toml = format!(
         r#"[package]
@@ -80,7 +96,7 @@ bincode = "1"
     // 5. Build
     eprintln!("Building binary...");
     let mut cmd = Command::new("cargo");
-    cmd.arg("build").current_dir(&temp_dir);
+    cmd.arg("build").current_dir(temp_dir);
     if release {
         cmd.arg("--release");
     }
@@ -90,21 +106,19 @@ bincode = "1"
         .map_err(|e| format!("Failed to run cargo: {}", e))?;
 
     if !status.success() {
-        let _ = fs::remove_dir_all(&temp_dir);
         return Err("cargo build failed".to_string());
     }
 
     // 6. Copy binary to output path
     let profile = if release { "release" } else { "debug" };
-    let built_binary = temp_dir
-        .join("target")
-        .join(profile)
-        .join("compiled-prolog");
+    let binary_name = if cfg!(windows) {
+        "compiled-prolog.exe"
+    } else {
+        "compiled-prolog"
+    };
+    let built_binary = temp_dir.join("target").join(profile).join(binary_name);
     fs::copy(&built_binary, output)
         .map_err(|e| format!("Failed to copy binary to {}: {}", output.display(), e))?;
-
-    // 7. Cleanup
-    let _ = fs::remove_dir_all(&temp_dir);
 
     eprintln!("Compiled binary: {}", output.display());
     Ok(())
@@ -158,8 +172,6 @@ fn main() {
             process::exit(2);
         }
     };
-
-    db.predicate_index = patch_prolog_core::index::build_index(&db.clauses);
 
     let mut solver = Solver::new(&db, goals, vars);
     if let Some(limit) = cli.limit {

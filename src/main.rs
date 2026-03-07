@@ -103,9 +103,6 @@ fn run_query(query: &str, limit: Option<usize>, format: &str) {
         }
     };
 
-    // Rebuild index since the interner may have grown with query atoms
-    db.predicate_index = patch_prolog_core::index::build_index(&db.clauses);
-
     // Solve
     let mut solver = Solver::new(&db, goals, vars);
     if let Some(limit) = limit {
