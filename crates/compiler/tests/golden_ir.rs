@@ -68,11 +68,39 @@ fn last_body_goal_restores_caller_continuation() {
 }
 
 #[test]
-fn unsupported_builtins_compile_to_runtime_error_stub() {
-    // Late binding (v1 contract): the program compiles; reaching the
-    // goal raises a clear runtime error. Unrelated queries keep working.
-    let ir = plgc::compile_to_ir("p(X) :- findall(Y, q(Y), X).\nq(a).").unwrap();
-    assert!(ir.contains("call i32 @plg_rt_unsupported_builtin"), "{ir}");
+fn m4_control_builtins_emit_runtime_calls() {
+    let ir = plgc::compile_to_ir(
+        "p(X) :- findall(Y, q(Y), X).\n\
+         s(X) :- catch(q(X), _, fail).\n\
+         t :- throw(boom).\n\
+         c(X) :- call(q, X).\n\
+         m(G) :- G.\n\
+         b(X) :- between(1, 3, X).\n\
+         q(a).",
+    )
+    .unwrap();
+    assert!(ir.contains("call i32 @plg_rt_b_findall_3"), "{ir}");
+    assert!(ir.contains("call i32 @plg_rt_b_catch_3"), "{ir}");
+    assert!(ir.contains("call i32 @plg_rt_b_throw_1"), "{ir}");
+    assert!(ir.contains("call i32 @plg_rt_metacall"), "{ir}");
+    // between/3 dispatches like a predicate (uniform signature).
+    assert!(
+        ir.contains("musttail call i32 @plg_rt_pred_between_3"),
+        "{ir}"
+    );
+}
+
+#[test]
+fn m4_det_builtins_emit_inline_calls() {
+    let ir = plgc::compile_to_ir(
+        "p(X, L) :- atom(X), atom_chars(X, L).\n\
+         w(X) :- write(X), nl.",
+    )
+    .unwrap();
+    assert!(ir.contains("call i32 @plg_rt_b_atom_1"), "{ir}");
+    assert!(ir.contains("call i32 @plg_rt_b_atom_chars_2"), "{ir}");
+    assert!(ir.contains("call i32 @plg_rt_b_write_1"), "{ir}");
+    assert!(ir.contains("call i32 @plg_rt_b_nl_0"), "{ir}");
 }
 
 #[test]
@@ -119,7 +147,15 @@ fn fail_compiles_to_immediate_failure() {
 }
 
 #[test]
-fn integer_literal_range_is_enforced() {
-    let err = plgc::compile_to_ir(&format!("big({}).", i64::MAX)).unwrap_err();
-    assert!(err.contains("61-bit"), "{err}");
+fn big_integer_literals_box_at_runtime() {
+    // M4: beyond-immediate integers compile to a runtime BIG box
+    // (full i64 range, v1 parity).
+    let ir = plgc::compile_to_ir(&format!("big({}).", i64::MAX)).unwrap();
+    assert!(
+        ir.contains(&format!(
+            "call i64 @plg_rt_put_big(ptr %m, i64 {})",
+            i64::MAX
+        )),
+        "{ir}"
+    );
 }

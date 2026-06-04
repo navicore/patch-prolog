@@ -63,18 +63,33 @@ fn fmt_float(f: f64) -> String {
 }
 
 pub fn term_to_json(m: &Machine, w: Word) -> String {
+    term_to_json_v(m, w, &mut Vec::new())
+}
+
+/// `visiting` holds the heap indices of STR/LST cells currently being
+/// expanded: re-encountering one means the term is cyclic (legal
+/// without occurs check), and the cycle is cut by rendering a variable
+/// — exactly v1's cycle-safe `apply()` behavior (`X = f(X)` renders as
+/// `f(_N)`).
+fn term_to_json_v(m: &Machine, w: Word, visiting: &mut Vec<usize>) -> String {
     let w = m.deref(w);
     match tag_of(w) {
         TAG_ATOM => format!("\"{}\"", json_escape(m.atoms.resolve(atom_id(w)))),
         TAG_INT => int_value(w).to_string(),
+        TAG_BIG => (m.heap[payload(w) as usize] as i64).to_string(),
         TAG_FLT => fmt_float(f64::from_bits(m.heap[payload(w) as usize])),
         TAG_REF => format!("\"_{}\"", payload(w)),
         TAG_STR => {
             let idx = payload(w) as usize;
+            if visiting.contains(&idx) {
+                return format!("\"_{idx}\""); // cycle cut (v1 behavior)
+            }
+            visiting.push(idx);
             let (f, n) = unpack_functor(m.heap[idx]);
             let args: Vec<String> = (0..n as usize)
-                .map(|i| term_to_json(m, m.heap[idx + 1 + i]))
+                .map(|i| term_to_json_v(m, m.heap[idx + 1 + i], visiting))
                 .collect();
+            visiting.pop();
             // serde_json sorted keys: "args" < "functor"
             format!(
                 "{{\"args\":[{}],\"functor\":\"{}\"}}",
@@ -83,17 +98,27 @@ pub fn term_to_json(m: &Machine, w: Word) -> String {
             )
         }
         TAG_LST => {
-            let (elements, tail) = collect_list(m, w);
-            let items: Vec<String> = elements.iter().map(|e| term_to_json(m, *e)).collect();
-            match tail {
+            let idx = payload(w) as usize;
+            if visiting.contains(&idx) {
+                return format!("\"_{idx}\"");
+            }
+            visiting.push(idx);
+            let (elements, tail) = collect_list_v(m, w, visiting);
+            let items: Vec<String> = elements
+                .iter()
+                .map(|e| term_to_json_v(m, *e, visiting))
+                .collect();
+            let out = match tail {
                 None => format!("[{}]", items.join(",")),
                 // serde_json sorted keys: "list" < "tail"
                 Some(t) => format!(
                     "{{\"list\":[{}],\"tail\":{}}}",
                     items.join(","),
-                    term_to_json(m, t)
+                    term_to_json_v(m, t, visiting)
                 ),
-            }
+            };
+            visiting.pop();
+            out
         }
         _ => unreachable!("bad tag"),
     }
@@ -105,50 +130,148 @@ const INFIX: &[&str] = &[
 ];
 
 pub fn term_to_string(m: &Machine, w: Word) -> String {
+    term_to_string_v(m, w, &mut Vec::new())
+}
+
+fn term_to_string_v(m: &Machine, w: Word, visiting: &mut Vec<usize>) -> String {
     let w = m.deref(w);
     match tag_of(w) {
         TAG_ATOM => m.atoms.resolve(atom_id(w)).to_string(),
         TAG_INT => int_value(w).to_string(),
+        TAG_BIG => (m.heap[payload(w) as usize] as i64).to_string(),
         TAG_FLT => format!("{}", f64::from_bits(m.heap[payload(w) as usize])),
         TAG_REF => format!("_{}", payload(w)),
         TAG_STR => {
             let idx = payload(w) as usize;
-            let (f, n) = unpack_functor(m.heap[idx]);
-            let name = m.atoms.resolve(f);
-            if n == 2 && INFIX.contains(&name) {
-                return format!(
-                    "{} {} {}",
-                    term_to_string(m, m.heap[idx + 1]),
-                    name,
-                    term_to_string(m, m.heap[idx + 2])
-                );
+            if visiting.contains(&idx) {
+                return format!("_{idx}"); // cycle cut (v1 behavior)
             }
-            let args: Vec<String> = (0..n as usize)
-                .map(|i| term_to_string(m, m.heap[idx + 1 + i]))
-                .collect();
-            format!("{}({})", name, args.join(", "))
+            visiting.push(idx);
+            let (f, n) = unpack_functor(m.heap[idx]);
+            let name = m.atoms.resolve(f).to_string();
+            let out = if n == 2 && INFIX.contains(&name.as_str()) {
+                format!(
+                    "{} {} {}",
+                    term_to_string_v(m, m.heap[idx + 1], visiting),
+                    name,
+                    term_to_string_v(m, m.heap[idx + 2], visiting)
+                )
+            } else {
+                let args: Vec<String> = (0..n as usize)
+                    .map(|i| term_to_string_v(m, m.heap[idx + 1 + i], visiting))
+                    .collect();
+                format!("{}({})", name, args.join(", "))
+            };
+            visiting.pop();
+            out
         }
         TAG_LST => {
-            let (elements, tail) = collect_list(m, w);
-            let items: Vec<String> = elements.iter().map(|e| term_to_string(m, *e)).collect();
-            match tail {
-                None => format!("[{}]", items.join(", ")),
-                Some(t) => format!("[{}|{}]", items.join(", "), term_to_string(m, t)),
+            let idx = payload(w) as usize;
+            if visiting.contains(&idx) {
+                return format!("_{idx}");
             }
+            visiting.push(idx);
+            let (elements, tail) = collect_list_v(m, w, visiting);
+            let items: Vec<String> = elements
+                .iter()
+                .map(|e| term_to_string_v(m, *e, visiting))
+                .collect();
+            let out = match tail {
+                None => format!("[{}]", items.join(", ")),
+                Some(t) => format!(
+                    "[{}|{}]",
+                    items.join(", "),
+                    term_to_string_v(m, t, visiting)
+                ),
+            };
+            visiting.pop();
+            out
         }
         _ => unreachable!("bad tag"),
     }
 }
 
-/// Walk a LST chain. Returns the element words and `None` if the list is
-/// proper (nil-terminated) or `Some(tail)` for a partial list.
-fn collect_list(m: &Machine, w: Word) -> (Vec<Word>, Option<Word>) {
+/// v1's `format_term` rendering: plain functional notation (no infix),
+/// atoms unquoted, vars `_<idx>`, lists `[a, b|T]`. This is the byte
+/// contract for error messages ("Runtime error: error(...)").
+pub fn format_term(m: &Machine, w: Word, out: &mut String) {
+    format_term_v(m, w, out, &mut Vec::new())
+}
+
+fn format_term_v(m: &Machine, w: Word, out: &mut String, visiting: &mut Vec<usize>) {
+    let w = m.deref(w);
+    match tag_of(w) {
+        TAG_ATOM => out.push_str(m.atoms.resolve(atom_id(w))),
+        TAG_INT => out.push_str(&int_value(w).to_string()),
+        TAG_BIG => out.push_str(&(m.heap[payload(w) as usize] as i64).to_string()),
+        TAG_FLT => out.push_str(&f64::from_bits(m.heap[payload(w) as usize]).to_string()),
+        TAG_REF => {
+            out.push('_');
+            out.push_str(&payload(w).to_string());
+        }
+        TAG_STR => {
+            let idx = payload(w) as usize;
+            if visiting.contains(&idx) {
+                out.push('_');
+                out.push_str(&idx.to_string());
+                return;
+            }
+            visiting.push(idx);
+            let (f, n) = unpack_functor(m.heap[idx]);
+            out.push_str(m.atoms.resolve(f));
+            out.push('(');
+            for i in 0..n as usize {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                format_term_v(m, m.heap[idx + 1 + i], out, visiting);
+            }
+            out.push(')');
+            visiting.pop();
+        }
+        TAG_LST => {
+            let idx = payload(w) as usize;
+            if visiting.contains(&idx) {
+                out.push('_');
+                out.push_str(&idx.to_string());
+                return;
+            }
+            visiting.push(idx);
+            out.push('[');
+            let (elements, tail) = collect_list_v(m, w, visiting);
+            for (i, e) in elements.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                format_term_v(m, *e, out, visiting);
+            }
+            if let Some(t) = tail {
+                out.push('|');
+                format_term_v(m, t, out, visiting);
+            }
+            out.push(']');
+            visiting.pop();
+        }
+        _ => unreachable!("bad tag"),
+    }
+}
+
+/// Walk a LST chain. Returns the element words and `None` if the list
+/// is proper (nil-terminated) or `Some(tail)` for a partial list. A
+/// spine cell already being rendered (cyclic list) terminates the walk
+/// as an improper tail so the cycle cut renders as a variable.
+fn collect_list_v(m: &Machine, w: Word, visiting: &[usize]) -> (Vec<Word>, Option<Word>) {
     let mut elements = Vec::new();
     let mut cur = m.deref(w);
+    let mut seen: Vec<usize> = Vec::new();
     loop {
         match tag_of(cur) {
             TAG_LST => {
                 let idx = payload(cur) as usize;
+                if seen.contains(&idx) || (visiting.contains(&idx) && !elements.is_empty()) {
+                    return (elements, Some(cur));
+                }
+                seen.push(idx);
                 elements.push(m.heap[idx]);
                 cur = m.deref(m.heap[idx + 1]);
             }

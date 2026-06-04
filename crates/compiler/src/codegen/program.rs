@@ -30,7 +30,6 @@ declare i64 @plg_rt_k_env(ptr)
 declare void @plg_rt_push_cp(ptr, i64, i64)
 declare i32 @plg_rt_pred_fail(ptr, i64)
 declare i32 @plg_rt_existence_error(ptr, i32, i32)
-declare i32 @plg_rt_unsupported_builtin(ptr, i32, i32)
 declare i64 @plg_rt_cp_top(ptr)
 declare void @plg_rt_cut(ptr, i64)
 declare i64 @plg_rt_deref(ptr, i64)
@@ -40,6 +39,12 @@ declare i32 @plg_rt_b_arith_cmp(ptr, i32, i64, i64)
 declare i32 @plg_rt_b_neq(ptr, i64, i64)
 declare i32 @plg_rt_b_term_cmp(ptr, i32, i64, i64)
 declare i32 @plg_rt_b_compare(ptr, i64, i64, i64)
+declare i64 @plg_rt_put_big(ptr, i64)
+declare i32 @plg_rt_metacall(ptr, i64)
+declare i32 @plg_rt_b_throw_1(ptr, i64)
+declare i32 @plg_rt_b_catch_3(ptr, i64, i64, i64)
+declare i32 @plg_rt_b_findall_3(ptr, i64, i64, i64)
+declare i32 @plg_rt_pred_between_3(ptr, i64)
 ";
 
 /// Host target triple (plgc compiles for the machine it runs on).
@@ -97,6 +102,12 @@ pub fn codegen_program(
     }
     cg.out.push('\n');
     cg.out.push_str(RUNTIME_DECLS);
+    // Deterministic-builtin declarations, generated from the table so
+    // the IR and the lowering can never disagree.
+    for (_, arity, sym) in super::lower::DET_BUILTINS {
+        let args: String = std::iter::repeat_n(", i64", *arity as usize).collect();
+        writeln!(cg.out, "declare i32 @{sym}(ptr{args})").unwrap();
+    }
     cg.out.push('\n');
 
     cg.emit_atom_table();

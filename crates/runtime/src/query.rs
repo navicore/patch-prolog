@@ -97,6 +97,13 @@ impl QueryParser {
                 self.parse_atom_or_compound(m, name)
             }
             Some(c) if c.is_ascii_digit() => self.parse_number(m, false),
+            // Standalone operator atoms (`(-)`, `[+, *]`, `call(=, X, Y)`)
+            // and canonical compound forms (`=(X, 7)`): a symbol run
+            // followed by `(` is a compound, by a term-end is an atom.
+            Some(c) if is_symbol_atom_char(c) && self.symbol_run_is_standalone() => {
+                let name = self.read_symbol_run();
+                self.parse_atom_or_compound(m, name)
+            }
             Some('-')
                 if self
                     .chars
@@ -110,11 +117,30 @@ impl QueryParser {
                 // Prefix minus over a non-literal: -(Term).
                 self.pos += 1;
                 let t = self.parse_primary(m)?;
-                let id = m.atoms.intern("-");
-                let idx = m.heap.len();
-                m.heap.push(cell::pack_functor(id, 1));
-                m.heap.push(t);
-                Ok(cell::make(cell::TAG_STR, idx as u64))
+                self.make_prefix(m, "-", t)
+            }
+            Some('+') => {
+                // Prefix plus: folds into a positive numeric literal
+                // (v1 issue #19), otherwise builds '+'/1.
+                self.pos += 1;
+                self.skip_ws();
+                if self.peek().is_some_and(|c| c.is_ascii_digit()) {
+                    self.parse_number(m, false)
+                } else {
+                    let t = self.parse_primary(m)?;
+                    self.make_prefix(m, "+", t)
+                }
+            }
+            Some('\\') => {
+                // Prefix `\` (and `\+` reached here only as an atom —
+                // the level-900 parser handles real negation).
+                let name = self.read_symbol_run();
+                if self.peek() == Some('(') {
+                    self.parse_atom_or_compound(m, name)
+                } else {
+                    let t = self.parse_primary(m)?;
+                    self.make_prefix(m, &name, t)
+                }
             }
             Some('!') => {
                 self.pos += 1;
@@ -239,7 +265,10 @@ impl QueryParser {
             .map_err(|_| format!("invalid integer `{digits}`"))?;
         let n = if neg { -n } else { n };
         if !(cell::INT_MIN..=cell::INT_MAX).contains(&n) {
-            return Err(format!("integer `{n}` out of supported range"));
+            // Box beyond-immediate integers (full i64 range, v1 parity).
+            let idx = m.heap.len();
+            m.heap.push(n as u64);
+            return Ok(cell::make(cell::TAG_BIG, idx as u64));
         }
         Ok(cell::make_int(n))
     }
@@ -275,6 +304,49 @@ impl QueryParser {
         }
     }
 
+    fn read_symbol_run(&mut self) -> String {
+        let start = self.pos;
+        while self.peek().is_some_and(is_symbol_atom_char) {
+            self.pos += 1;
+        }
+        self.chars[start..self.pos].iter().collect()
+    }
+
+    /// Does the symbol run starting at the cursor stand alone as an
+    /// atom (followed by a term-end) or start a canonical compound
+    /// (immediately followed by `(`)?
+    fn symbol_run_is_standalone(&self) -> bool {
+        let mut p = self.pos;
+        while self.chars.get(p).copied().is_some_and(is_symbol_atom_char) {
+            p += 1;
+        }
+        if self.chars.get(p) == Some(&'(') {
+            return true; // canonical compound: =(X, 7)
+        }
+        let mut q = p;
+        while self.chars.get(q).is_some_and(|c| c.is_whitespace()) {
+            q += 1;
+        }
+        match self.chars.get(q) {
+            None => {
+                // End of input — but a trailing '.' inside the run is
+                // the goal terminator, not part of the atom; only the
+                // run itself ending the input counts.
+                true
+            }
+            Some(')' | ',' | ']' | '|') => true,
+            _ => false,
+        }
+    }
+
+    fn make_prefix(&self, m: &mut Machine, name: &str, t: Word) -> Result<Word, String> {
+        let id = m.atoms.intern(name);
+        let idx = m.heap.len();
+        m.heap.push(cell::pack_functor(id, 1));
+        m.heap.push(t);
+        Ok(cell::make(cell::TAG_STR, idx as u64))
+    }
+
     /// `_` is always fresh and never recorded; named variables are
     /// shared within the query and recorded for solution output.
     fn var_word(&mut self, m: &mut Machine, name: &str) -> Word {
@@ -290,6 +362,14 @@ impl QueryParser {
             .push((name.to_string(), cell::payload(w) as usize));
         w
     }
+}
+
+/// Characters that form symbolic atoms (Prolog "symbol char" class).
+fn is_symbol_atom_char(c: char) -> bool {
+    matches!(
+        c,
+        '+' | '-' | '*' | '/' | '\\' | '<' | '>' | '=' | ':' | '@' | '^' | '.' | '?' | '&' | '~'
+    )
 }
 
 #[cfg(test)]

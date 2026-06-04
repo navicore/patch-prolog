@@ -24,22 +24,86 @@ pub enum Outcome {
 pub fn solve(m: &mut Machine, goal: Word) -> Outcome {
     m.k_fn = capture_k;
     m.k_env = 0;
-    let mut r = call_goal(m, goal);
+    m.qbarrier = 0;
+    let r = call_goal(m, goal);
+    drive(m, 0, r);
+    if m.error.is_some() {
+        Outcome::Error
+    } else {
+        Outcome::Done
+    }
+}
+
+/// The backtracking driver: pops choice points down to `floor`,
+/// rewinding and retrying, and unwinds errors to the nearest catch
+/// frame. Shared by the top level and findall/3's bounded sub-search.
+/// Returns 1 if a continuation stopped enumeration; otherwise 0 (CP
+/// stack drained to floor, or an uncaught error left in `m.error` for
+/// the next layer out).
+pub fn drive(m: &mut Machine, floor: usize, mut r: i32) -> i32 {
     loop {
         if m.error.is_some() {
-            return Outcome::Error;
-        }
-        if r == 1 {
-            return Outcome::Done; // stopped (limit reached)
-        }
-        match m.cps.pop() {
-            None => return Outcome::Done, // exhausted
-            Some(cp) => {
-                m.rewind_to(cp.trail_mark, cp.heap_mark);
-                r = unsafe { (cp.retry)(m as *mut Machine, cp.env) };
+            if m.error.as_ref().is_some_and(|e| e.uncatchable) {
+                return 0;
+            }
+            match unwind_to_catch(m, floor) {
+                Some(r2) => {
+                    r = r2;
+                    continue;
+                }
+                None => return 0, // no catch here; error stays set
             }
         }
+        if r == 1 {
+            return 1; // stop (solution limit / committed)
+        }
+        if m.cps.len() <= floor {
+            return 0; // exhausted this window
+        }
+        let cp = m.cps.pop().unwrap();
+        m.rewind_to(cp.trail_mark, cp.heap_mark);
+        r = unsafe { (cp.retry)(m as *mut Machine, cp.env) };
     }
+}
+
+/// Unwind the CP stack looking for a catch frame whose catcher unifies
+/// with the ball (v1 dispatch_or_return semantics). On a match, clears
+/// the error, restores the catch-time continuation, and runs the
+/// recovery goal, returning its result. `None` if no frame matches
+/// above `floor` (the error remains set).
+fn unwind_to_catch(m: &mut Machine, floor: usize) -> Option<i32> {
+    use crate::machine::CpKind;
+    while m.cps.len() > floor {
+        let cp = m.cps.pop().unwrap();
+        m.rewind_to(cp.trail_mark, cp.heap_mark);
+        if cp.kind != CpKind::Catch {
+            continue;
+        }
+        // Catch frame env: [catcher, recovery, k_fn, k_env, qbarrier] —
+        // allocated before the frame's marks, so it survived the rewind.
+        let f = cp.env as usize;
+        let catcher = m.heap[f];
+        let recovery = m.heap[f + 1];
+        let err = m.error.take().unwrap();
+        let ball_w = crate::copyterm::restore_from_buf(m, &err.ball);
+        let tmark = m.trail.len();
+        if crate::unify::unify(m, catcher, ball_w) {
+            let kf: crate::machine::ContFn = unsafe { std::mem::transmute(m.heap[f + 2] as usize) };
+            m.k_fn = kf;
+            m.k_env = m.heap[f + 3];
+            m.qbarrier = m.heap[f + 4] as usize;
+            return Some(call_goal(m, recovery));
+        }
+        // Catcher doesn't match: undo the attempt, keep unwinding with
+        // the error re-armed. (The restored ball leaks a few heap cells
+        // until the next rewind — harmless.)
+        while m.trail.len() > tmark {
+            let idx = m.trail.pop().unwrap() as usize;
+            m.heap[idx] = make_ref(idx);
+        }
+        m.error = Some(err);
+    }
+    None
 }
 
 /// Success continuation for top-level queries: capture the bindings,
@@ -78,18 +142,11 @@ pub fn call_goal(m: &mut Machine, goal: Word) -> i32 {
             dispatch(m, f, n, idx + 1)
         }
         TAG_REF => {
-            m.error = Some(crate::machine::RtError {
-                message: "error(instantiation_error, Goal is an unbound variable)".to_string(),
-                uncatchable: false,
-            });
+            crate::errors::instantiation(m, "Goal is an unbound variable");
             0
         }
         _ => {
-            let culprit = render::term_to_string(m, goal);
-            m.error = Some(crate::machine::RtError {
-                message: format!("error(type_error(callable, {culprit}), Goal is not callable)"),
-                uncatchable: false,
-            });
+            crate::errors::type_error(m, "callable", goal, "Goal is not callable");
             0
         }
     }
@@ -98,13 +155,7 @@ pub fn call_goal(m: &mut Machine, goal: Word) -> i32 {
 fn dispatch(m: &mut Machine, functor: u32, arity: u32, args_idx: usize) -> i32 {
     let Some(f) = m.registry_lookup(functor, arity) else {
         let name = m.atoms.resolve(functor).to_string();
-        // v1 message shape: error(existence_error(procedure, /(name, N)), Undefined procedure: name/N)
-        m.error = Some(crate::machine::RtError {
-            message: format!(
-                "error(existence_error(procedure, /({name}, {arity})), Undefined procedure: {name}/{arity})"
-            ),
-            uncatchable: false,
-        });
+        crate::errors::existence_procedure(m, &name, arity);
         return 0;
     };
     debug_assert!(arity as usize <= MAX_ARGS);

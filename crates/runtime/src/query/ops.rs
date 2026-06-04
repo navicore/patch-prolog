@@ -53,10 +53,19 @@ impl QueryParser {
         }
     }
 
-    /// 900 fy: `\+ Goal`.
+    /// 900 fy: `\+ Goal`. `(\+)` followed by a term-end is the ATOM.
     fn parse_naf(&mut self, m: &mut Machine) -> Result<Word, String> {
         self.skip_ws();
+        let save = self.pos;
         if self.match_symbol("\\+") {
+            let mut probe = self.pos;
+            while self.chars.get(probe).is_some_and(|c| c.is_whitespace()) {
+                probe += 1;
+            }
+            if matches!(self.chars.get(probe), None | Some(')' | ',' | ']' | '|')) {
+                self.pos = save; // it's the standalone atom; primary handles it
+                return self.parse_700(m);
+            }
             let g = self.parse_naf(m)?; // fy: operand at same level
             let id = m.atoms.intern("\\+");
             let idx = m.heap.len();
@@ -111,7 +120,8 @@ impl QueryParser {
         }
     }
 
-    /// 200: `**` xfx (no chaining), `^` xfy (right-assoc).
+    /// 200: `**` xfx (no chaining), `^` and `:` xfy (right-assoc) —
+    /// mirrors the frontend's parse_200 (`:` per v1 issue #29).
     fn parse_200(&mut self, m: &mut Machine) -> Result<Word, String> {
         let left = self.parse_primary(m)?;
         self.skip_ws();
@@ -122,6 +132,10 @@ impl QueryParser {
         if self.match_symbol("^") {
             let right = self.parse_200(m)?;
             return Ok(self.make_binop(m, "^", left, right));
+        }
+        if self.match_symbol(":") {
+            let right = self.parse_200(m)?;
+            return Ok(self.make_binop(m, ":", left, right));
         }
         Ok(left)
     }

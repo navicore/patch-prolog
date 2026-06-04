@@ -75,7 +75,9 @@ test-integration: build
 
 # Differential tests: same (program, goal) corpus through the old
 # patch-prolog interpreter (oracle) and the new compiled binaries.
-# Requires ../patch-prolog to be buildable. Retire after M4 parity.
+# Requires ../patch-prolog/target/release/prlg; SKIPS silently in CI
+# (the runner image has no oracle). Deliberate divergences are pinned
+# as direct tests instead — see docs/ISO_COMPLIANCE.md.
 diff-test: build
     @echo "Running differential tests vs ../patch-prolog oracle..."
     cargo test --locked --release -p plg-compiler --test differential -- --nocapture

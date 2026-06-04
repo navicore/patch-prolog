@@ -20,12 +20,13 @@ pub fn atom_word(id: u32) -> u64 {
     ((id as u64) << 3) | TAG_ATOM
 }
 
+pub const IMM_INT_MAX: i64 = (1 << 60) - 1;
+pub const IMM_INT_MIN: i64 = -(1 << 60);
+
 pub fn int_word(n: i64) -> Result<u64, String> {
-    const INT_MAX: i64 = (1 << 60) - 1;
-    const INT_MIN: i64 = -(1 << 60);
-    if !(INT_MIN..=INT_MAX).contains(&n) {
+    if !(IMM_INT_MIN..=IMM_INT_MAX).contains(&n) {
         return Err(format!(
-            "integer literal {n} is outside the supported 61-bit immediate range"
+            "integer literal {n} is outside the immediate range (boxed at runtime)"
         ));
     }
     Ok(((n as u64) << 3) | TAG_INT)
@@ -42,7 +43,15 @@ impl CodeGen<'_> {
     ) -> Result<String, String> {
         match term {
             Term::Atom(id) => Ok(atom_word(*id).to_string()),
-            Term::Integer(n) => Ok(int_word(*n)?.to_string()),
+            Term::Integer(n) if (IMM_INT_MIN..=IMM_INT_MAX).contains(n) => {
+                Ok(int_word(*n)?.to_string())
+            }
+            Term::Integer(n) => {
+                // Beyond the i61 immediate: box at runtime (BIG cell).
+                let t = self.fresh();
+                writeln!(body, "  {t} = call i64 @plg_rt_put_big(ptr %m, i64 {n})").unwrap();
+                Ok(t)
+            }
             Term::Float(f) => {
                 let t = self.fresh();
                 writeln!(
@@ -125,7 +134,7 @@ mod tests {
         assert_eq!(int_word(5).unwrap(), (5 << 3) | 2);
         // Negative payloads survive the shift round-trip.
         assert_eq!((int_word(-1).unwrap() as i64) >> 3, -1);
-        assert!(int_word(i64::MAX).is_err());
+        assert!(int_word(i64::MAX).is_err(), "immediates only; big ints box");
     }
 
     #[test]

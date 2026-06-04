@@ -6,7 +6,7 @@
 use crate::builtins::arith::{self, ArithValue};
 use crate::builtins::order::compare_terms;
 use crate::cell::{self, INT_MAX, INT_MIN, Word};
-use crate::machine::{Machine, RtError};
+use crate::machine::Machine;
 use std::cmp::Ordering;
 
 #[inline]
@@ -26,13 +26,10 @@ fn value_to_word(m: &mut Machine, v: ArithValue) -> Option<Word> {
             if (INT_MIN..=INT_MAX).contains(&n) {
                 Some(cell::make_int(n))
             } else {
-                m.error = Some(RtError {
-                    message:
-                        "error(evaluation_error(int_overflow), integer result out of supported immediate range)"
-                            .to_string(),
-                    uncatchable: false,
-                });
-                None
+                // M4: full i64 range via a boxed BIG cell (v1 parity).
+                let idx = m.heap.len();
+                m.heap.push(n as u64);
+                Some(cell::make(cell::TAG_BIG, idx as u64))
             }
         }
         ArithValue::Float(f) => {
@@ -138,8 +135,8 @@ pub extern "C" fn plg_rt_b_compare(m: *mut Machine, order: u64, a: u64, b: u64) 
 /// the absence of exception frames in the current runtime.
 #[unsafe(no_mangle)]
 pub extern "C" fn plg_rt_cut(m: *mut Machine, height: u64) {
-    let m = mref(m);
-    m.cps.truncate(height as usize);
+    // Stops at catch frames (v1 rule: catch/3 is opaque to cut).
+    mref(m).cut_to(height as usize);
 }
 
 /// Current choice-point stack height (the cut barrier to capture on entry).
@@ -222,18 +219,19 @@ mod tests {
     }
 
     #[test]
-    fn b_is_immediate_range_deviation() {
-        // A result that fits i64 but exceeds i61 errors in M3 (boxing is M4).
+    fn b_is_boxes_big_integers() {
+        // M4: results beyond the i61 immediate box to a BIG cell — the
+        // full i64 range works, matching v1.
         let mut m = machine();
         let v = m.new_var();
         let big = INT_MAX; // 2^60 - 1, the largest immediate
         let e = bin_str(&mut m, "+", make_int(big), make_int(big));
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_is(mp, v, e), 0);
-        assert_eq!(
-            m.error.as_ref().unwrap().message,
-            "error(evaluation_error(int_overflow), integer result out of supported immediate range)"
-        );
+        assert_eq!(plg_rt_b_is(mp, v, e), 1);
+        assert!(m.error.is_none());
+        let d = m.deref(v);
+        assert_eq!(tag_of(d), TAG_BIG);
+        assert_eq!(m.heap[payload(d) as usize] as i64, 2 * big);
     }
 
     #[test]

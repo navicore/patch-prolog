@@ -13,8 +13,7 @@
 //! never narrows — it always works in i64.
 
 use crate::cell::*;
-use crate::machine::{Machine, RtError};
-use crate::render::term_to_string;
+use crate::machine::Machine;
 
 /// An evaluated arithmetic value: integer or float (mirrors v1 ArithVal).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -23,29 +22,16 @@ pub enum ArithValue {
     Float(f64),
 }
 
-// ---- error constructors (v1 message text, byte-identical) ----------------
-
-fn set_err(m: &mut Machine, message: String) {
-    m.error = Some(RtError {
-        message,
-        uncatchable: false,
-    });
-}
+// ---- error raising (structured balls; rendered text is v1-identical) ------
 
 fn overflow(m: &mut Machine, operation: &str) {
-    set_err(
-        m,
-        format!(
-            "error(evaluation_error(int_overflow), Arithmetic error: integer overflow in {operation})"
-        ),
-    );
+    let ctx = format!("Arithmetic error: integer overflow in {operation}");
+    crate::errors::evaluation(m, "int_overflow", &ctx);
 }
 
 fn zero_divisor(m: &mut Machine, label: &str) {
-    set_err(
-        m,
-        format!("error(evaluation_error(zero_divisor), Division by zero ({label}))"),
-    );
+    let ctx = format!("Division by zero ({label})");
+    crate::errors::evaluation(m, "zero_divisor", &ctx);
 }
 
 /// v1's `int_args_required`: the culprit term is the placeholder atom id 0,
@@ -53,35 +39,23 @@ fn zero_divisor(m: &mut Machine, label: &str) {
 /// string verbatim (the culprit is meaningless — a v1 quirk we mirror so
 /// output stays byte-identical). See report.
 fn int_args_required(m: &mut Machine, op: &str) {
-    set_err(
-        m,
-        format!("error(type_error(integer, member), {op} requires integer arguments)"),
-    );
+    let culprit = make_atom(m.atoms.intern("member"));
+    let ctx = format!("{op} requires integer arguments");
+    crate::errors::type_error(m, "integer", culprit, &ctx);
 }
 
 fn shift_undefined(m: &mut Machine, op: &str) {
-    set_err(
-        m,
-        format!(
-            "error(evaluation_error(undefined), Shift {op} requires a non-negative count in [0, 64))"
-        ),
-    );
+    let ctx = format!("Shift {op} requires a non-negative count in [0, 64)");
+    crate::errors::evaluation(m, "undefined", &ctx);
 }
 
 /// NaN/Infinity rejection after a float operation (v1 `check_float`).
 fn check_float(m: &mut Machine, f: f64) -> Result<ArithValue, ()> {
     if f.is_nan() {
-        set_err(
-            m,
-            "error(evaluation_error(undefined), Arithmetic error: NaN result)".to_string(),
-        );
+        crate::errors::evaluation(m, "undefined", "Arithmetic error: NaN result");
         Err(())
     } else if f.is_infinite() {
-        set_err(
-            m,
-            "error(evaluation_error(float_overflow), Arithmetic error: Infinity result)"
-                .to_string(),
-        );
+        crate::errors::evaluation(m, "float_overflow", "Arithmetic error: Infinity result");
         Err(())
     } else {
         Ok(ArithValue::Float(f))
@@ -132,27 +106,19 @@ pub fn eval(m: &mut Machine, expr: Word) -> Result<ArithValue, ()> {
     let w = m.deref(expr);
     match tag_of(w) {
         TAG_INT => Ok(ArithValue::Int(int_value(w))),
+        TAG_BIG => Ok(ArithValue::Int(m.heap[payload(w) as usize] as i64)),
         TAG_FLT => Ok(ArithValue::Float(f64::from_bits(
             m.heap[payload(w) as usize],
         ))),
         TAG_REF => {
-            set_err(
-                m,
-                format!(
-                    "error(instantiation_error, Arithmetic error: unbound variable _{})",
-                    payload(w)
-                ),
-            );
+            let ctx = format!("Arithmetic error: unbound variable _{}", payload(w));
+            crate::errors::instantiation(m, &ctx);
             Err(())
         }
         TAG_ATOM | TAG_LST => {
             // v1: non-evaluable atom or list literal → type_error(evaluable,
             // <term>) with context "Cannot evaluate as arithmetic".
-            let culprit = term_to_string(m, w);
-            set_err(
-                m,
-                format!("error(type_error(evaluable, {culprit}), Cannot evaluate as arithmetic)"),
-            );
+            crate::errors::type_error(m, "evaluable", w, "Cannot evaluate as arithmetic");
             Err(())
         }
         TAG_STR => eval_struct(m, w),
@@ -249,12 +215,15 @@ fn eval_struct(m: &mut Machine, w: Word) -> Result<ArithValue, ()> {
         }
         _ => {
             // Unknown operator → type_error(evaluable, name/arity).
-            set_err(
-                m,
-                format!(
-                    "error(type_error(evaluable, /({name}, {arity})), Unknown arithmetic operator: {name}/{arity})"
-                ),
-            );
+            let slash = m.atoms.intern("/");
+            let name_atom = make_atom(m.atoms.intern(&name));
+            let pi = m.heap.len();
+            m.heap.push(pack_functor(slash, 2));
+            m.heap.push(name_atom);
+            m.heap.push(make_int(arity as i64));
+            let culprit = make(TAG_STR, pi as u64);
+            let ctx = format!("Unknown arithmetic operator: {name}/{arity}");
+            crate::errors::type_error(m, "evaluable", culprit, &ctx);
             Err(())
         }
     }

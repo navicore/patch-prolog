@@ -27,16 +27,27 @@ pub struct RegistryEntry {
     pub f: ContFn,
 }
 
+/// Catch frames participate in error unwinding (drive() in solve.rs)
+/// and stop cut truncation (v1 rule: catch is opaque to cut).
+#[derive(Clone, Copy, PartialEq)]
+pub enum CpKind {
+    Normal,
+    Catch,
+}
+
 pub struct ChoicePoint {
     pub trail_mark: usize,
     pub heap_mark: usize,
     pub retry: ContFn,
     pub env: u64,
+    pub kind: CpKind,
 }
 
-/// A runtime error carried out of the solve loop (rendered with v1's
-/// message format by the entry layer; exit code 3).
+/// A runtime error in flight. The ball is a relocatable copy (it must
+/// survive heap rewinding on the way to a catch frame); the message is
+/// its v1-format rendering for top-level output (exit code 3).
 pub struct RtError {
+    pub ball: crate::copyterm::TermBuf,
     pub message: String,
     pub uncatchable: bool,
 }
@@ -58,6 +69,14 @@ pub struct Machine {
     pub registry: Vec<RegistryEntry>,
     /// Query variables in source order: (name, heap index of the cell).
     pub query_vars: Vec<(String, usize)>,
+    /// findall/3 collector stack (a stack because findall can nest):
+    /// each level accumulates relocatable copies of template instances.
+    pub findall_stack: Vec<Vec<crate::copyterm::TermBuf>>,
+    /// Cut barrier for `!` in RUNTIME-WALKED goals (queries, metacalls).
+    /// Call-like constructs set it for their inner goal; every walker
+    /// continuation frame snapshots and restores it (the runtime mirror
+    /// of the compiled cut_slot). Compiled `!` never reads this.
+    pub qbarrier: usize,
     /// Solutions captured by the print continuation, already rendered.
     pub solutions: Vec<crate::render::RenderedSolution>,
     pub solution_limit: Option<usize>,
@@ -85,6 +104,8 @@ impl Machine {
             atoms,
             registry,
             query_vars: Vec::new(),
+            findall_stack: Vec::new(),
+            qbarrier: 0,
             solutions: Vec::new(),
             solution_limit: None,
         })
@@ -137,7 +158,30 @@ impl Machine {
             heap_mark: self.heap.len(),
             retry,
             env,
+            kind: CpKind::Normal,
         });
+    }
+
+    pub fn push_catch_cp(&mut self, retry: ContFn, env: u64) {
+        self.cps.push(ChoicePoint {
+            trail_mark: self.trail.len(),
+            heap_mark: self.heap.len(),
+            retry,
+            env,
+            kind: CpKind::Catch,
+        });
+    }
+
+    /// Cut: truncate the CP stack to `height`, but stop at a catch
+    /// frame (v1 rule: catch/3 is opaque to cut — `!` inside catch's
+    /// goal cannot prune the catch frame or anything below it).
+    pub fn cut_to(&mut self, height: usize) {
+        while self.cps.len() > height {
+            if self.cps.last().is_some_and(|cp| cp.kind == CpKind::Catch) {
+                break;
+            }
+            self.cps.pop();
+        }
     }
 
     /// Rewind bindings and heap to a popped choice point's marks.
@@ -151,17 +195,12 @@ impl Machine {
 
     /// Bump the step counter; on exceeding the limit set the uncatchable
     /// resource error (v1: step limit cannot be trapped by catch/3).
+    /// v1 wording, byte-for-byte (solver.rs step_limit_thrown).
     pub fn step(&mut self) -> bool {
         self.steps += 1;
         if self.steps > self.step_limit {
-            // v1 wording, byte-for-byte (solver.rs step_limit_thrown).
-            self.error = Some(RtError {
-                message: format!(
-                    "error(resource_error(steps), Maximum step limit exceeded ({}))",
-                    self.step_limit
-                ),
-                uncatchable: true,
-            });
+            let context = format!("Maximum step limit exceeded ({})", self.step_limit);
+            crate::errors::resource(self, "steps", &context, true);
             return false;
         }
         true
