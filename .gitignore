@@ -2,6 +2,8 @@
 /target/
 **/*.rs.bk
 *.pdb
+family
+linting
 
 # LLVM IR output
 *.ll
