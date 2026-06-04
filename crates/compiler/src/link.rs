@@ -27,7 +27,15 @@ pub fn check_clang_version() -> Result<u32, String> {
                 .arg("--version")
                 .output()
                 .map_err(|e| {
-                    format!("Failed to run clang: {e}. Please install clang {MIN_CLANG_VERSION} or later.")
+                    format!(
+                        "Failed to run clang: {e}.\n\
+                         plgc needs clang {MIN_CLANG_VERSION}+ to link compiled binaries \
+                         (the binaries themselves need nothing).\n\
+                         Install it with:\n\
+                         \x20 debian/ubuntu:  sudo apt install clang\n\
+                         \x20 fedora:         sudo dnf install clang\n\
+                         \x20 macOS:          xcode-select --install"
+                    )
                 })?;
 
             if !output.status.success() {

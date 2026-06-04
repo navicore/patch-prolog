@@ -114,6 +114,17 @@ base system libraries loaded.
 
 ## Future (explicitly out of scope)
 
+- **Fact-table compilation**: compile ground-fact predicates to static
+  data tables in `.rodata` (generic indexed lookup) instead of one
+  clause function each — same semantics, same single immutable binary,
+  near-instant rebuilds at 100k+ facts. Serves the production
+  architecture (immutable binary as the ONLY prod artifact; fact churn
+  = deploy cadence) — see docs/design/TOOLCHAIN_DEPENDENCY.md
+  "Production threat model". Likely the first post-parity feature.
+- Bundled backend ("the Zig route") only if compiles must happen ON
+  hardened machines — same ADR. (Runtime `--facts` loading was
+  considered and REJECTED for the prod shape: it reopens the
+  mutable-file surface the immutable-binary architecture closes.)
 - REPL and LSP (v1 had both; they return now that the compiler is at
   parity)
 - WAM-style instruction-level codegen; inline head-unification and
