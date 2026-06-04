@@ -1,0 +1,15 @@
+[package]
+name = "plg-runtime"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Runtime library for patch-prolog2 compiled binaries"
+
+[lib]
+crate-type = ["staticlib", "rlib"] # staticlib for LLVM linking, rlib for testing
+
+# IMPORTANT: every dependency added here ships inside every compiled
+# Prolog binary. No clap, no serde — JSON output is hand-rolled.
+[dependencies]
+plg-shared = { path = "../shared" }

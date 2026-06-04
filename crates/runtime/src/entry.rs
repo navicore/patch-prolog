@@ -1,0 +1,231 @@
+//! Process entry: `plg_rt_init` + `plg_rt_main`, called from the thin
+//! generated `main`. Owns argv parsing (hand-rolled — no clap inside
+//! compiled binaries), output, and the v1 exit-code contract:
+//!
+//!   0 = no solutions, 1 = solutions found,
+//!   2 = query parse error, 3 = runtime error
+
+use crate::machine::{Machine, RegistryEntry};
+use crate::{query, render, solve};
+use plg_shared::StringInterner;
+use std::ffi::CStr;
+use std::os::raw::c_char;
+
+/// Build the Machine from the tables codegen baked into the binary.
+/// Re-interning the emitted atom names in id order reproduces the
+/// compiler's exact id space (the interner pre-seeds the same
+/// well-known atoms the compiler's did).
+///
+/// # Safety
+/// Called once from generated `main` with codegen-emitted tables.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn plg_rt_init(
+    atom_strs: *const *const c_char,
+    atom_count: u32,
+    registry: *const RegistryEntry,
+    registry_len: u32,
+) -> *mut Machine {
+    let mut atoms = StringInterner::new();
+    for i in 0..atom_count as usize {
+        let s = unsafe { CStr::from_ptr(*atom_strs.add(i)) };
+        let expected = i as u32;
+        let id = atoms.intern(&s.to_string_lossy());
+        debug_assert_eq!(id, expected, "atom table out of sync with interner");
+    }
+    let registry: Vec<RegistryEntry> =
+        unsafe { std::slice::from_raw_parts(registry, registry_len as usize) }.to_vec();
+    debug_assert!(
+        registry.is_sorted_by_key(|e| (e.functor, e.arity)),
+        "registry must be sorted for binary search"
+    );
+    Box::into_raw(Machine::new(atoms, registry))
+}
+
+struct Args {
+    query: String,
+    limit: Option<usize>,
+    format: String,
+}
+
+fn parse_args(argv: Vec<String>) -> Result<Args, String> {
+    let mut query = None;
+    let mut limit = None;
+    let mut format = "json".to_string(); // v1 default
+    let mut it = argv.into_iter().peekable();
+    while let Some(arg) = it.next() {
+        let (flag, inline_value) = match arg.split_once('=') {
+            Some((f, v)) => (f.to_string(), Some(v.to_string())),
+            None => (arg, None),
+        };
+        let value = |it: &mut std::iter::Peekable<std::vec::IntoIter<String>>| {
+            inline_value
+                .clone()
+                .or_else(|| it.next())
+                .ok_or(format!("missing value for {flag}"))
+        };
+        match flag.as_str() {
+            "-q" | "--query" => query = Some(value(&mut it)?),
+            "-l" | "--limit" => {
+                limit = Some(
+                    value(&mut it)?
+                        .parse::<usize>()
+                        .map_err(|_| "invalid --limit value".to_string())?,
+                )
+            }
+            "-f" | "--format" => format = value(&mut it)?,
+            "-h" | "--help" => {
+                return Err("usage: --query <goal> [--limit N] [--format json|text]".to_string());
+            }
+            other => return Err(format!("unexpected argument: {other}")),
+        }
+    }
+    let query = query.ok_or("missing required argument: --query <goal>".to_string())?;
+    Ok(Args {
+        query,
+        limit,
+        format,
+    })
+}
+
+/// v1's output_error: JSON errors go to stdout, text errors to stderr.
+fn output_error(format: &str, message: &str) {
+    if format == "json" {
+        println!("{{\"error\":\"{}\"}}", render::json_escape(message));
+    } else {
+        eprintln!("Error: {message}");
+    }
+}
+
+fn output_json(m: &Machine, exhausted: bool) {
+    let solutions: Vec<String> = m
+        .solutions
+        .iter()
+        .map(|sol| {
+            let fields: Vec<String> = sol
+                .bindings
+                .iter()
+                .map(|(name, json, _)| format!("\"{}\":{}", render::json_escape(name), json))
+                .collect();
+            format!("{{{}}}", fields.join(","))
+        })
+        .collect();
+    // serde_json sorted keys: count < exhausted < solutions
+    println!(
+        "{{\"count\":{},\"exhausted\":{},\"solutions\":[{}]}}",
+        m.solutions.len(),
+        exhausted,
+        solutions.join(",")
+    );
+}
+
+fn output_text(m: &Machine) {
+    if m.solutions.is_empty() {
+        println!("false.");
+        return;
+    }
+    for sol in &m.solutions {
+        if sol.bindings.is_empty() {
+            println!("true.");
+        } else {
+            for (name, _, text) in &sol.bindings {
+                println!("{name} = {text}");
+            }
+        }
+    }
+}
+
+/// Run the query named in argv against the compiled program. Returns
+/// the process exit code.
+///
+/// # Safety
+/// Called once from generated `main` with the process argc/argv.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn plg_rt_main(
+    m: *mut Machine,
+    argc: i32,
+    argv: *const *const c_char,
+) -> i32 {
+    let m = unsafe { &mut *m };
+    let raw_args: Vec<String> = (1..argc as usize)
+        .map(|i| {
+            unsafe { CStr::from_ptr(*argv.add(i)) }
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+
+    let args = match parse_args(raw_args) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
+    if args.format != "json" && args.format != "text" {
+        output_error("text", &format!("Unknown format: {}", args.format));
+        return 2;
+    }
+    m.solution_limit = args.limit;
+    // Documented extension over v1 (which hardcoded 10_000): the step
+    // ceiling is tunable via environment so big-but-legitimate queries
+    // can raise it without changing the CLI contract.
+    if let Ok(s) = std::env::var("PLG_MAX_STEPS")
+        && let Ok(n) = s.parse::<u64>()
+    {
+        m.step_limit = n;
+    }
+
+    let goal = match query::parse_query(m, &args.query) {
+        Ok(g) => g,
+        Err(e) => {
+            output_error(&args.format, &format!("Parse error: {e}"));
+            return 2;
+        }
+    };
+
+    match solve::solve(m, goal) {
+        solve::Outcome::Error => {
+            let msg = m.error.take().map(|e| e.message).unwrap_or_default();
+            output_error(&args.format, &format!("Runtime error: {msg}"));
+            3
+        }
+        solve::Outcome::Done => {
+            let count = m.solutions.len();
+            let exhausted = args.limit.is_none_or(|l| count < l);
+            match args.format.as_str() {
+                "json" => output_json(m, exhausted),
+                _ => output_text(m),
+            }
+            if count > 0 { 1 } else { 0 }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(v: &[&str]) -> Result<Args, String> {
+        parse_args(v.iter().map(|s| s.to_string()).collect())
+    }
+
+    #[test]
+    fn parses_flags_with_space_and_equals() {
+        let a = args(&["--query", "p(X)", "--limit", "3", "--format", "text"]).unwrap();
+        assert_eq!(a.query, "p(X)");
+        assert_eq!(a.limit, Some(3));
+        assert_eq!(a.format, "text");
+
+        let a = args(&["--query=p(X)", "-l", "1"]).unwrap();
+        assert_eq!(a.query, "p(X)");
+        assert_eq!(a.limit, Some(1));
+        assert_eq!(a.format, "json", "default format is json (v1)");
+    }
+
+    #[test]
+    fn missing_query_is_an_error() {
+        assert!(args(&["--format", "json"]).is_err());
+        assert!(args(&["--query"]).is_err());
+        assert!(args(&["--bogus", "x"]).is_err());
+    }
+}

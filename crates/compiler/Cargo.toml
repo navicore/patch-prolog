@@ -1,0 +1,32 @@
+[package]
+name = "plg-compiler"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Standalone Prolog compiler (plgc) — compiles .pl to native binaries via LLVM"
+
+[[bin]]
+name = "plgc"
+path = "src/main.rs"
+
+[lib]
+name = "plgc"
+path = "src/lib.rs"
+
+[dependencies]
+plg-shared = { path = "../shared" }
+plg-frontend = { path = "../frontend" }
+clap.workspace = true
+clap_complete.workspace = true
+tempfile.workspace = true
+
+[build-dependencies]
+# Version must EXACTLY match workspace version — enforced by build.rs.
+# Declared as a build-dependency so cargo builds libplg_runtime.a
+# BEFORE this crate's build.rs looks for it.
+plg-runtime = { path = "../runtime", version = "=0.1.0" }
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "plg-shared"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Shared term representation and atom interning for patch-prolog2"
+
+# IMPORTANT: this crate is linked into plg-runtime, which ships inside
+# every compiled Prolog binary. Keep dependencies at ZERO to protect
+# compiled-binary size.
+[dependencies]

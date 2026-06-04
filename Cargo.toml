@@ -1,0 +1,25 @@
+[workspace]
+members = ["crates/shared", "crates/frontend", "crates/runtime", "crates/compiler"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Ed Sweeney <ed@onextent.com>"]
+license = "MIT"
+
+[workspace.dependencies]
+# CLI (compiler only — never linked into plg-runtime, to protect compiled-binary size)
+clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.5"
+
+# Build-script TOML parsing (version-sync enforcement)
+toml = "1.0"
+
+# Testing
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

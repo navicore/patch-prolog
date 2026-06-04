@@ -1,0 +1,226 @@
+//! The Machine: the single runtime context every compiled predicate
+//! receives (`%M` in generated IR). Owns the term heap, trail,
+//! choice-point stack, argument registers, the current success
+//! continuation, step accounting, and the runtime atom table.
+
+use crate::cell::{self, Word};
+use plg_shared::StringInterner;
+
+/// Uniform signature shared by every compiled predicate, continuation,
+/// and retry function — and by runtime-provided continuations. The
+/// uniform C-ABI prototype is what makes `musttail` transfers valid.
+/// Returns 0 = fail/exhausted (driver backtracks), 1 = stop (limit hit
+/// or final success).
+pub type ContFn = unsafe extern "C" fn(*mut Machine, u64) -> i32;
+
+/// Maximum predicate arity passed via argument registers (v1 had no
+/// practical limit; raise alongside a frame-passing scheme if ever hit).
+pub const MAX_ARGS: usize = 16;
+
+/// Registry row emitted by codegen as `{ i32, i32, ptr }`, sorted by
+/// (functor, arity) for binary search.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RegistryEntry {
+    pub functor: u32,
+    pub arity: u32,
+    pub f: ContFn,
+}
+
+pub struct ChoicePoint {
+    pub trail_mark: usize,
+    pub heap_mark: usize,
+    pub retry: ContFn,
+    pub env: u64,
+}
+
+/// A runtime error carried out of the solve loop (rendered with v1's
+/// message format by the entry layer; exit code 3).
+pub struct RtError {
+    pub message: String,
+    pub uncatchable: bool,
+}
+
+pub struct Machine {
+    pub heap: Vec<Word>,
+    pub trail: Vec<u64>, // heap indices of bound REF cells
+    pub cps: Vec<ChoicePoint>,
+    pub areg: [Word; MAX_ARGS],
+    /// Build registers for `plg_rt_put_struct` (separate from areg so
+    /// argument setup and term construction never clobber each other).
+    pub breg: [Word; MAX_ARGS],
+    pub k_fn: ContFn,
+    pub k_env: u64,
+    pub steps: u64,
+    pub step_limit: u64,
+    pub error: Option<RtError>,
+    pub atoms: StringInterner,
+    pub registry: Vec<RegistryEntry>,
+    /// Query variables in source order: (name, heap index of the cell).
+    pub query_vars: Vec<(String, usize)>,
+    /// Solutions captured by the print continuation, already rendered.
+    pub solutions: Vec<crate::render::RenderedSolution>,
+    pub solution_limit: Option<usize>,
+}
+
+unsafe extern "C" fn no_continuation(_m: *mut Machine, _env: u64) -> i32 {
+    // Reaching the continuation with none installed is a codegen bug.
+    debug_assert!(false, "no continuation installed");
+    0
+}
+
+impl Machine {
+    pub fn new(atoms: StringInterner, registry: Vec<RegistryEntry>) -> Box<Machine> {
+        Box::new(Machine {
+            heap: Vec::with_capacity(4096),
+            trail: Vec::with_capacity(256),
+            cps: Vec::with_capacity(64),
+            areg: [0; MAX_ARGS],
+            breg: [0; MAX_ARGS],
+            k_fn: no_continuation,
+            k_env: 0,
+            steps: 0,
+            step_limit: 10_000, // v1 default
+            error: None,
+            atoms,
+            registry,
+            query_vars: Vec::new(),
+            solutions: Vec::new(),
+            solution_limit: None,
+        })
+    }
+
+    /// Allocate a fresh unbound variable cell; returns its REF word.
+    pub fn new_var(&mut self) -> Word {
+        let idx = self.heap.len();
+        self.heap.push(cell::make_ref(idx)); // unbound = self-reference
+        cell::make_ref(idx)
+    }
+
+    /// Allocate `n` raw cells (a frame); returns the base index.
+    /// Frames hold continuation state — they are not terms and must
+    /// never be unified.
+    pub fn frame_alloc(&mut self, n: usize) -> usize {
+        let idx = self.heap.len();
+        self.heap.resize(idx + n, 0);
+        idx
+    }
+
+    /// Bind an unbound REF cell to a value, recording it on the trail.
+    pub fn bind(&mut self, ref_idx: usize, value: Word) {
+        debug_assert_eq!(
+            self.heap[ref_idx],
+            cell::make_ref(ref_idx),
+            "bind target must be unbound"
+        );
+        self.heap[ref_idx] = value;
+        self.trail.push(ref_idx as u64);
+    }
+
+    /// Follow REF chains to the representative word. Bound chains are
+    /// acyclic (we only ever bind unbound cells), so this terminates.
+    pub fn deref(&self, mut w: Word) -> Word {
+        while cell::tag_of(w) == cell::TAG_REF {
+            let idx = cell::payload(w) as usize;
+            let c = self.heap[idx];
+            if c == w {
+                return w; // unbound
+            }
+            w = c;
+        }
+        w
+    }
+
+    pub fn push_cp(&mut self, retry: ContFn, env: u64) {
+        self.cps.push(ChoicePoint {
+            trail_mark: self.trail.len(),
+            heap_mark: self.heap.len(),
+            retry,
+            env,
+        });
+    }
+
+    /// Rewind bindings and heap to a popped choice point's marks.
+    pub fn rewind_to(&mut self, trail_mark: usize, heap_mark: usize) {
+        while self.trail.len() > trail_mark {
+            let idx = self.trail.pop().unwrap() as usize;
+            self.heap[idx] = cell::make_ref(idx);
+        }
+        self.heap.truncate(heap_mark);
+    }
+
+    /// Bump the step counter; on exceeding the limit set the uncatchable
+    /// resource error (v1: step limit cannot be trapped by catch/3).
+    pub fn step(&mut self) -> bool {
+        self.steps += 1;
+        if self.steps > self.step_limit {
+            // v1 wording, byte-for-byte (solver.rs step_limit_thrown).
+            self.error = Some(RtError {
+                message: format!(
+                    "error(resource_error(steps), Maximum step limit exceeded ({}))",
+                    self.step_limit
+                ),
+                uncatchable: true,
+            });
+            return false;
+        }
+        true
+    }
+
+    pub fn registry_lookup(&self, functor: u32, arity: u32) -> Option<ContFn> {
+        self.registry
+            .binary_search_by_key(&(functor, arity), |e| (e.functor, e.arity))
+            .ok()
+            .map(|i| self.registry[i].f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cell::*;
+
+    fn machine() -> Box<Machine> {
+        Machine::new(StringInterner::new(), Vec::new())
+    }
+
+    #[test]
+    fn new_var_is_unbound_self_ref() {
+        let mut m = machine();
+        let v = m.new_var();
+        assert_eq!(tag_of(v), TAG_REF);
+        assert_eq!(m.deref(v), v);
+    }
+
+    #[test]
+    fn bind_and_rewind() {
+        let mut m = machine();
+        let v = m.new_var();
+        let tmark = m.trail.len();
+        let hmark = m.heap.len();
+        m.bind(payload(v) as usize, make_atom(7));
+        assert_eq!(m.deref(v), make_atom(7));
+        m.rewind_to(tmark, hmark);
+        assert_eq!(m.deref(v), v, "binding undone");
+    }
+
+    #[test]
+    fn deref_follows_chains() {
+        let mut m = machine();
+        let a = m.new_var();
+        let b = m.new_var();
+        m.bind(payload(a) as usize, b);
+        m.bind(payload(b) as usize, make_int(-5));
+        assert_eq!(int_value(m.deref(a)), -5);
+    }
+
+    #[test]
+    fn step_limit_sets_uncatchable_error() {
+        let mut m = machine();
+        m.step_limit = 2;
+        assert!(m.step());
+        assert!(m.step());
+        assert!(!m.step());
+        assert!(m.error.as_ref().unwrap().uncatchable);
+    }
+}

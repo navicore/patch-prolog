@@ -1,0 +1,31 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# LLVM IR output
+*.ll
+*.bc
+*.o
+
+# Compiled test binaries (build to target/ or tmp/ only)
+/test_*
+/test-*
+!tests/
+
+# Runtime artifact (always rebuilt; embedded into plgc)
+libplg_runtime.a
+
+# IDE
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Temporary artifacts
+/tmp/
