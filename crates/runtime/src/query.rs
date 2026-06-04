@@ -1,15 +1,17 @@
 //! Minimal goal-only parser for runtime `--query` strings.
 //!
 //! Deliberately NOT the full plg-frontend parser (binary size): a query
-//! is one goal term, optionally a `,`-conjunction. Supports atoms
-//! (plain and quoted), variables, integers, compounds, and lists.
-//! Operator goals (`X = Y`, arithmetic) arrive with the builtins that
-//! implement them (M3+) — the operator TABLE will then be shared from
-//! plg-shared so the two parsers cannot diverge.
+//! is one goal term. Supports atoms (plain and quoted), variables,
+//! integers, compounds, lists, and the standard operator set via the
+//! precedence climber in `query::ops` — the levels mirror
+//! plg-frontend/src/parser (the reference implementation); the
+//! differential test corpus guards against drift.
 //!
 //! Terms are built directly on the machine heap; query variables are
 //! recorded in `m.query_vars` (first-occurrence order, `_` excluded —
 //! the renderer sorts by name, matching v1).
+
+mod ops;
 
 use crate::cell::{self, Word};
 use crate::machine::Machine;
@@ -21,7 +23,7 @@ pub fn parse_query(m: &mut Machine, src: &str) -> Result<Word, String> {
         pos: 0,
         vars: HashMap::new(),
     };
-    let goal = p.parse_conjunction(m)?;
+    let goal = p.parse_level(m, 1200)?;
     p.skip_ws();
     // Tolerate a trailing '.' like the v1 query parser.
     if p.peek() == Some('.') {
@@ -34,18 +36,18 @@ pub fn parse_query(m: &mut Machine, src: &str) -> Result<Word, String> {
     Ok(goal)
 }
 
-struct QueryParser {
-    chars: Vec<char>,
-    pos: usize,
+pub(crate) struct QueryParser {
+    pub(crate) chars: Vec<char>,
+    pub(crate) pos: usize,
     vars: HashMap<String, Word>,
 }
 
 impl QueryParser {
-    fn peek(&self) -> Option<char> {
+    pub(crate) fn peek(&self) -> Option<char> {
         self.chars.get(self.pos).copied()
     }
 
-    fn skip_ws(&mut self) {
+    pub(crate) fn skip_ws(&mut self) {
         while let Some(c) = self.peek() {
             if c.is_whitespace() {
                 self.pos += 1;
@@ -69,32 +71,23 @@ impl QueryParser {
         }
     }
 
-    /// goal [, goal]* — right-associated `','(A, B)` compounds, the
-    /// same shape the frontend produces for conjunctions.
-    fn parse_conjunction(&mut self, m: &mut Machine) -> Result<Word, String> {
-        let first = self.parse_term(m)?;
-        self.skip_ws();
-        if self.peek() == Some(',') {
-            self.pos += 1;
-            let rest = self.parse_conjunction(m)?;
-            let comma = m.atoms.intern(",");
-            let idx = m.heap.len();
-            m.heap.push(cell::pack_functor(comma, 2));
-            m.heap.push(first);
-            m.heap.push(rest);
-            Ok(cell::make(cell::TAG_STR, idx as u64))
-        } else {
-            Ok(first)
-        }
+    pub(crate) fn make_binop(&self, m: &mut Machine, name: &str, a: Word, b: Word) -> Word {
+        let id = m.atoms.intern(name);
+        let idx = m.heap.len();
+        m.heap.push(cell::pack_functor(id, 2));
+        m.heap.push(a);
+        m.heap.push(b);
+        cell::make(cell::TAG_STR, idx as u64)
     }
 
-    fn parse_term(&mut self, m: &mut Machine) -> Result<Word, String> {
+    /// A primary term: constants, variables, compounds, lists, parens.
+    pub(crate) fn parse_primary(&mut self, m: &mut Machine) -> Result<Word, String> {
         self.skip_ws();
         match self.peek() {
             None => Err("unexpected end of query".to_string()),
             Some('(') => {
                 self.pos += 1;
-                let t = self.parse_conjunction(m)?;
+                let t = self.parse_level(m, 1200)?;
                 self.expect(')')?;
                 Ok(t)
             }
@@ -103,7 +96,7 @@ impl QueryParser {
                 let name = self.read_quoted()?;
                 self.parse_atom_or_compound(m, name)
             }
-            Some(c) if c.is_ascii_digit() => self.parse_integer(m, false),
+            Some(c) if c.is_ascii_digit() => self.parse_number(m, false),
             Some('-')
                 if self
                     .chars
@@ -111,7 +104,21 @@ impl QueryParser {
                     .is_some_and(|c| c.is_ascii_digit()) =>
             {
                 self.pos += 1;
-                self.parse_integer(m, true)
+                self.parse_number(m, true)
+            }
+            Some('-') => {
+                // Prefix minus over a non-literal: -(Term).
+                self.pos += 1;
+                let t = self.parse_primary(m)?;
+                let id = m.atoms.intern("-");
+                let idx = m.heap.len();
+                m.heap.push(cell::pack_functor(id, 1));
+                m.heap.push(t);
+                Ok(cell::make(cell::TAG_STR, idx as u64))
+            }
+            Some('!') => {
+                self.pos += 1;
+                Ok(cell::make_atom(m.atoms.intern("!")))
             }
             Some(c) if c.is_uppercase() || c == '_' => {
                 let name = self.read_ident();
@@ -130,13 +137,14 @@ impl QueryParser {
         // No whitespace allowed between functor and `(` (ISO).
         if self.peek() == Some('(') {
             self.pos += 1;
-            let mut args = vec![self.parse_term(m)?];
+            // Arguments parse at priority 999 (no bare `,`).
+            let mut args = vec![self.parse_level(m, 999)?];
             loop {
                 self.skip_ws();
                 match self.peek() {
                     Some(',') => {
                         self.pos += 1;
-                        args.push(self.parse_term(m)?);
+                        args.push(self.parse_level(m, 999)?);
                     }
                     Some(')') => {
                         self.pos += 1;
@@ -161,18 +169,18 @@ impl QueryParser {
             self.pos += 1;
             return Ok(cell::make_atom(plg_shared::atom::ATOM_NIL));
         }
-        let mut elements = vec![self.parse_term(m)?];
+        let mut elements = vec![self.parse_level(m, 999)?];
         let mut tail = None;
         loop {
             self.skip_ws();
             match self.peek() {
                 Some(',') => {
                     self.pos += 1;
-                    elements.push(self.parse_term(m)?);
+                    elements.push(self.parse_level(m, 999)?);
                 }
                 Some('|') => {
                     self.pos += 1;
-                    tail = Some(self.parse_term(m)?);
+                    tail = Some(self.parse_level(m, 999)?);
                     self.expect(']')?;
                     break;
                 }
@@ -198,11 +206,32 @@ impl QueryParser {
         Ok(w)
     }
 
-    fn parse_integer(&mut self, m: &mut Machine, neg: bool) -> Result<Word, String> {
-        let _ = m;
+    /// Integer or float literal. A `.` continues a float only when a
+    /// digit follows (otherwise it's the goal terminator) — same
+    /// disambiguation as the frontend tokenizer.
+    fn parse_number(&mut self, m: &mut Machine, neg: bool) -> Result<Word, String> {
         let start = self.pos;
         while self.peek().is_some_and(|c| c.is_ascii_digit()) {
             self.pos += 1;
+        }
+        let is_float = self.peek() == Some('.')
+            && self
+                .chars
+                .get(self.pos + 1)
+                .is_some_and(|c| c.is_ascii_digit());
+        if is_float {
+            self.pos += 1; // '.'
+            while self.peek().is_some_and(|c| c.is_ascii_digit()) {
+                self.pos += 1;
+            }
+            let text: String = self.chars[start..self.pos].iter().collect();
+            let f: f64 = text
+                .parse()
+                .map_err(|_| format!("invalid float `{text}`"))?;
+            let f = if neg { -f } else { f };
+            let idx = m.heap.len();
+            m.heap.push(f.to_bits());
+            return Ok(cell::make(cell::TAG_FLT, idx as u64));
         }
         let digits: String = self.chars[start..self.pos].iter().collect();
         let n: i64 = digits
@@ -215,7 +244,7 @@ impl QueryParser {
         Ok(cell::make_int(n))
     }
 
-    fn read_ident(&mut self) -> String {
+    pub(crate) fn read_ident(&mut self) -> String {
         let start = self.pos;
         while self.peek().is_some_and(|c| c.is_alphanumeric() || c == '_') {
             self.pos += 1;
@@ -273,15 +302,18 @@ mod tests {
         Machine::new(StringInterner::new(), Vec::new())
     }
 
+    fn functor_name(m: &Machine, w: Word) -> String {
+        let idx = payload(w) as usize;
+        let (f, _) = unpack_functor(m.heap[idx]);
+        m.atoms.resolve(f).to_string()
+    }
+
     #[test]
     fn parses_compound_with_vars() {
         let mut m = machine();
         let w = parse_query(&mut m, "parent(tom, X)").unwrap();
         assert_eq!(tag_of(w), TAG_STR);
-        let idx = payload(w) as usize;
-        let (f, n) = unpack_functor(m.heap[idx]);
-        assert_eq!(m.atoms.resolve(f), "parent");
-        assert_eq!(n, 2);
+        assert_eq!(functor_name(&m, w), "parent");
         assert_eq!(m.query_vars.len(), 1);
         assert_eq!(m.query_vars[0].0, "X");
     }
@@ -290,11 +322,46 @@ mod tests {
     fn conjunction_shares_variables() {
         let mut m = machine();
         let w = parse_query(&mut m, "p(X), q(X, Y)").unwrap();
+        assert_eq!(functor_name(&m, w), ",");
+        assert_eq!(m.query_vars.len(), 2, "X shared, Y new");
+    }
+
+    #[test]
+    fn operator_goals_parse() {
+        let mut m = machine();
+        let w = parse_query(&mut m, "X is 2 + 3 * 4").unwrap();
+        assert_eq!(functor_name(&m, w), "is");
+        let w = parse_query(&mut m, "1 < 2").unwrap();
+        assert_eq!(functor_name(&m, w), "<");
+        let w = parse_query(&mut m, "(a ; b)").unwrap();
+        assert_eq!(functor_name(&m, w), ";");
+        let w = parse_query(&mut m, "(a -> b ; c)").unwrap();
+        assert_eq!(functor_name(&m, w), ";");
+        let w = parse_query(&mut m, "\\+ p(X)").unwrap();
+        assert_eq!(functor_name(&m, w), "\\+");
+    }
+
+    #[test]
+    fn precedence_multiplication_binds_tighter() {
+        let mut m = machine();
+        // is(X, +(2, *(3, 4)))
+        let w = parse_query(&mut m, "X is 2 + 3 * 4").unwrap();
+        let idx = payload(w) as usize;
+        let rhs = m.deref(m.heap[idx + 2]);
+        assert_eq!(functor_name(&m, rhs), "+");
+        let plus_idx = payload(rhs) as usize;
+        let right = m.deref(m.heap[plus_idx + 2]);
+        assert_eq!(functor_name(&m, right), "*");
+    }
+
+    #[test]
+    fn args_parse_operators_but_not_bare_comma() {
+        let mut m = machine();
+        let w = parse_query(&mut m, "p(1 + 2, X)").unwrap();
         let idx = payload(w) as usize;
         let (f, n) = unpack_functor(m.heap[idx]);
-        assert_eq!(m.atoms.resolve(f), ",");
-        assert_eq!(n, 2);
-        assert_eq!(m.query_vars.len(), 2, "X shared, Y new");
+        assert_eq!(m.atoms.resolve(f), "p");
+        assert_eq!(n, 2, "1 + 2 is one arg, X the other");
     }
 
     #[test]

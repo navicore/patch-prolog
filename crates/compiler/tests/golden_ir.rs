@@ -63,7 +63,7 @@ fn last_body_goal_restores_caller_continuation() {
     let ir = plgc::compile_to_ir("a(X) :- b(X), c(X).\nb(1).\nc(1).").unwrap();
     // The continuation for the last goal loads k from the body frame
     // (slots 0/1) and reinstalls it — last-call optimization.
-    assert!(ir.contains("_k1(ptr %m, i64 %bf)"), "{ir}");
+    assert!(ir.contains("_a1(ptr %m, i64 %bf)"), "{ir}");
     assert!(ir.contains("@plg_rt_set_k"), "{ir}");
 }
 
@@ -71,8 +71,45 @@ fn last_body_goal_restores_caller_continuation() {
 fn unsupported_builtins_compile_to_runtime_error_stub() {
     // Late binding (v1 contract): the program compiles; reaching the
     // goal raises a clear runtime error. Unrelated queries keep working.
-    let ir = plgc::compile_to_ir("p(X) :- \\+ q(X).\nq(a).").unwrap();
+    let ir = plgc::compile_to_ir("p(X) :- findall(Y, q(Y), X).\nq(a).").unwrap();
     assert!(ir.contains("call i32 @plg_rt_unsupported_builtin"), "{ir}");
+}
+
+#[test]
+fn m3_control_compiles_natively() {
+    // NAF, if-then-else, and cut are compiled control flow now — no
+    // unsupported stubs, real choice points and commit heights.
+    let ir = plgc::compile_to_ir(
+        "p(X) :- \\+ q(X).\n\
+         r(X, S) :- (q(X) -> S = yes ; S = no).\n\
+         m(X, Y, X) :- X >= Y, !.\n\
+         m(_, Y, Y).\n\
+         q(a).",
+    )
+    .unwrap();
+    assert!(!ir.contains("call i32 @plg_rt_unsupported_builtin"), "{ir}");
+    assert!(ir.contains("call void @plg_rt_cut"), "{ir}");
+    assert!(ir.contains("call i64 @plg_rt_cp_top"), "{ir}");
+    assert!(ir.contains("call i32 @plg_rt_b_arith_cmp"), "{ir}");
+}
+
+#[test]
+fn first_arg_indexing_emits_switch() {
+    let ir =
+        plgc::compile_to_ir("color(red, warm).\ncolor(blue, cool).\ncolor(green, cool).").unwrap();
+    assert!(ir.contains("switch i64"), "{ir}");
+    assert!(ir.contains(", indexed"), "{ir}");
+    // Distinct keys + no var-keyed clauses: each key chain is a single
+    // candidate ⇒ deterministic dispatch pushes NO choice point. The
+    // only push_cp in the entry belongs to the unbound-argument (REF)
+    // path, which must try all three clauses.
+    let entry = ir.split("define i32 @plg_pred_").nth(1).unwrap();
+    let entry_fn = &entry[..entry.find("\n}").unwrap()];
+    assert_eq!(
+        entry_fn.matches("call void @plg_rt_push_cp").count(),
+        1,
+        "keyed chains should be deterministic (only the REF/all chain pushes):\n{entry_fn}"
+    );
 }
 
 #[test]

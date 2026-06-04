@@ -43,6 +43,20 @@ Variables < Numbers < Atoms < Compounds
 - Step limit raises `resource_error(steps)` — intentionally **uncatchable** so a rule can't trap its own timeout. This is a safety guarantee, not an ISO requirement.
 - `catch/3` is opaque to cut: `!` inside catch's goal cannot escape past the catch frame.
 
+## Cut (divergence from patch-prolog v1)
+
+- `!` is **transparent in `;`, `->` and `,`** per ISO 7.8.4: a cut
+  inside a disjunction branch cuts the whole clause, including the
+  disjunction's other branch and the predicate's remaining clauses.
+  `t(X) :- (m(X), X > 1, ! ; X = fallback).` with `m(1). m(2). m(3).`
+  yields exactly `X = 2`.
+- **v1 diverged here** (undocumented): it treated the cut as local to
+  the disjunction branch and also produced `X = fallback`. patch-prolog2
+  deliberately follows ISO (and SWI/GNU Prolog) instead of reproducing
+  the v1 behavior; the differential test corpus whitelists this case.
+- Cut remains **opaque** inside `\+/1`, `once/1`, the condition of
+  `->` (local commit), and `catch/3` per ISO.
+
 ## Dynamic Predicates
 
 - `:- dynamic(F/A).` directive declares a predicate as having clauses populated at runtime/build time externally. An undefined dynamic predicate fails silently; an undefined non-dynamic predicate raises `existence_error(procedure, F/A)` per ISO 7.7.3.

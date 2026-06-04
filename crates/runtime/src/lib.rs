@@ -9,7 +9,9 @@
 //! docs/design/COMPILATION_MODEL.md and docs/design/LESSONS_FROM_V1.md).
 
 pub mod abi;
+pub mod builtins;
 pub mod cell;
+pub mod control;
 pub mod entry;
 pub mod machine;
 pub mod query;

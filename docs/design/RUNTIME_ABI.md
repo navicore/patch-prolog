@@ -99,14 +99,33 @@ i64 lands in M4) · `STR=3` (idx → `[functor:u32|arity:u32][args…]`) ·
 `LST=4` (idx → `[head][tail]`) · `FLT=5` (idx → f64 bits, `to_bits`
 equality).
 
-## M3/M4 additions (planned)
+## M3 additions (implemented)
 
-Builtins arrive as `plg_rt_b_<name>_<arity>` deterministic calls or
-inline IR (tag tests, arithmetic); `plg_rt_cut(m, barrier)`;
-`plg_rt_naf(m, goal_fn, env)` running a bounded sub-search;
-`plg_rt_call` registry metacall for `call/1` and `findall/3`. Errors
-become structured terms (today: preformatted v1-compatible message
-strings in `Machine::error`).
+| symbol | signature (IR) | purpose |
+|---|---|---|
+| `plg_rt_cp_top` | `i64 (ptr)` | choice-point height (cut barriers, commit slots) |
+| `plg_rt_cut` | `void (ptr, i64)` | truncate cps to height (M4: stop at CATCH frames) |
+| `plg_rt_deref` | `i64 (ptr, i64)` | first-arg indexing dispatch |
+| `plg_rt_str_key` | `i64 (ptr, i64)` | STR → packed functor cell, else u64::MAX |
+| `plg_rt_b_is` | `i32 (ptr, i64, i64)` | is/2 (v1 eval semantics, exact error strings) |
+| `plg_rt_b_arith_cmp` | `i32 (ptr, i32, i64, i64)` | op 0..5 = `<` `>` `=<` `>=` `=:=` `=\=` |
+| `plg_rt_b_neq` | `i32 (ptr, i64, i64)` | `\=` (trail-rewinding attempt) |
+| `plg_rt_b_term_cmp` | `i32 (ptr, i32, i64, i64)` | op 0..5 = `==` `\==` `@<` `@>` `@=<` `@>=` |
+| `plg_rt_b_compare` | `i32 (ptr, i64, i64, i64)` | compare/3 |
+
+Op-code tables live in codegen `lower.rs` and runtime `control.rs` and
+must stay in sync. Control constructs (`;`, `->`, `\+`, `once`) have NO
+runtime symbols for compiled code — they compile to choice points and
+commit slots (body.rs); the runtime's `control.rs` mirrors the same
+shapes only for goals built at runtime (queries, M4 metacalls), walking
+goal terms, never clauses.
+
+## M4 additions (planned)
+
+`plg_rt_call` registry metacall for `call/N` and `findall/3`; CATCH
+choice-point frames for `catch/3`; remaining builtin families as
+`plg_rt_b_*`. Errors become structured terms (today: preformatted
+v1-compatible message strings in `Machine::error`).
 
 ## Environment
 

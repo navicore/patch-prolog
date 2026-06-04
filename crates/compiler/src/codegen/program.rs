@@ -31,6 +31,15 @@ declare void @plg_rt_push_cp(ptr, i64, i64)
 declare i32 @plg_rt_pred_fail(ptr, i64)
 declare i32 @plg_rt_existence_error(ptr, i32, i32)
 declare i32 @plg_rt_unsupported_builtin(ptr, i32, i32)
+declare i64 @plg_rt_cp_top(ptr)
+declare void @plg_rt_cut(ptr, i64)
+declare i64 @plg_rt_deref(ptr, i64)
+declare i64 @plg_rt_str_key(ptr, i64)
+declare i32 @plg_rt_b_is(ptr, i64, i64)
+declare i32 @plg_rt_b_arith_cmp(ptr, i32, i64, i64)
+declare i32 @plg_rt_b_neq(ptr, i64, i64)
+declare i32 @plg_rt_b_term_cmp(ptr, i32, i64, i64)
+declare i32 @plg_rt_b_compare(ptr, i64, i64, i64)
 ";
 
 /// Host target triple (plgc compiles for the machine it runs on).
