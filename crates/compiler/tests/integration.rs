@@ -2,50 +2,10 @@
 //! per program (clang dominates test time), then assert stdout bytes
 //! and exit codes for many queries — the v1 wire contract.
 
-use std::path::PathBuf;
+mod harness;
+use harness::{Compiled, compile};
 use std::process::Command;
 use std::sync::OnceLock;
-
-/// Compile a fixture program to a temp binary once; reuse across queries.
-struct Compiled {
-    _dir: tempfile::TempDir,
-    bin: PathBuf,
-}
-
-fn compile(source: &str) -> Compiled {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let src = dir.path().join("prog.pl");
-    std::fs::write(&src, source).expect("write source");
-    let bin = dir.path().join("prog");
-    let out = Command::new(env!("CARGO_BIN_EXE_plgc"))
-        .args(["build"])
-        .arg(&src)
-        .arg("-o")
-        .arg(&bin)
-        .output()
-        .expect("run plgc");
-    assert!(
-        out.status.success(),
-        "plgc build failed:\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    Compiled { _dir: dir, bin }
-}
-
-impl Compiled {
-    /// Run `--query` and return (stdout, exit code).
-    fn query(&self, goal: &str, extra: &[&str]) -> (String, i32) {
-        let out = Command::new(&self.bin)
-            .args(["--query", goal])
-            .args(extra)
-            .output()
-            .expect("run compiled binary");
-        (
-            String::from_utf8_lossy(&out.stdout).into_owned(),
-            out.status.code().unwrap_or(-1),
-        )
-    }
-}
 
 fn family() -> &'static Compiled {
     static C: OnceLock<Compiled> = OnceLock::new();

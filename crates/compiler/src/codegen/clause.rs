@@ -1,22 +1,22 @@
-//! Compile one clause to LLVM functions: head unification, then the
-//! body as a `musttail` chain of goal calls linked by continuation
-//! functions whose state lives in a heap frame.
+//! Compile one clause: head unification, then the lowered body via the
+//! sequence compiler in body.rs.
 //!
-//! Predicate frame layout (built by the entry function, see
-//! predicate.rs):   [arg0 .. arg(A-1), k_fn, k_env]
-//! Clause body frame layout: [k_fn, k_env, var0 .. var(V-1)]
+//! Predicate frame (built by the entry function, predicate.rs):
+//!   [arg0 .. arg(A-1), k_fn, k_env, cut_barrier]
+//! Body frame: see body.rs.
 
+use super::body::{After, ClauseCtx};
+use super::lower::{self, LGoal};
 use super::term_emit::collect_vars;
 use super::{CodeGen, GoalTarget};
-use plg_shared::atom::ATOM_TRUE;
 use plg_shared::term::VarId;
 use plg_shared::{AtomId, Clause, Term};
 use std::collections::HashMap;
 use std::fmt::Write;
 
 impl CodeGen<'_> {
-    /// Emit the clause function `@plg_p<F>_<A>_c<j>` plus its body-goal
-    /// continuation functions.
+    /// Emit the clause function `@plg_p<F>_<A>_c<j>` plus all auxiliary
+    /// continuation/branch functions its body needs.
     pub fn emit_clause(
         &mut self,
         functor: AtomId,
@@ -25,19 +25,19 @@ impl CodeGen<'_> {
         clause: &Clause,
     ) -> Result<(), String> {
         let base = format!("plg_p{functor}_{arity}_c{j}");
-        let goals = flatten_body(&clause.body, self.interner.lookup(","));
+        let goals = lower::lower_body(&clause.body, self.interner)?;
 
         // Clause variables in deterministic order (head first).
         let mut var_list: Vec<VarId> = Vec::new();
         collect_vars(&clause.head, &mut var_list);
         for g in &goals {
-            collect_vars(g, &mut var_list);
+            lower::collect_goal_vars(g, &mut var_list);
         }
+        let scratch = lower::count_scratch(&goals);
 
         self.reset_temps();
-        let mut b = String::new(); // function body text
+        let mut b = String::new();
         let mut vars: HashMap<VarId, String> = HashMap::new();
-        let mut label = 0u32;
 
         // --- Head: load incoming args; alias first-occurrence var
         // patterns, queue everything else for unification.
@@ -72,218 +72,209 @@ impl CodeGen<'_> {
         for (arg, pat) in to_unify {
             let w = self.emit_term(&mut b, pat, &vars)?;
             let u = self.fresh();
-            label += 1;
             writeln!(
                 b,
                 "  {u} = call i32 @plg_rt_unify(ptr %m, i64 {arg}, i64 {w})"
             )
             .unwrap();
-            let c = self.fresh();
-            writeln!(b, "  {c} = icmp ne i32 {u}, 0").unwrap();
-            writeln!(b, "  br i1 {c}, label %h{label}, label %fail").unwrap();
-            writeln!(b, "h{label}:").unwrap();
+            self.emit_branch_on(&mut b, &u);
         }
 
         // --- Body.
-        match goals.len() {
-            0 => {
-                // Fact: jump straight to the caller's continuation.
-                let (kf, ke) = self.load_pred_k(&mut b, "%f", arity);
-                self.emit_musttail_k(&mut b, &kf, &ke);
-            }
-            1 => {
-                // Single goal in tail position: keep the caller's k.
-                let (kf, ke) = self.load_pred_k(&mut b, "%f", arity);
-                writeln!(b, "  call void @plg_rt_set_k(ptr %m, i64 {kf}, i64 {ke})").unwrap();
-                self.emit_goal_tail(&mut b, &goals[0], &vars)?;
-            }
-            n => {
-                // Body frame: [k_fn, k_env, vars...]
-                let (kf, ke) = self.load_pred_k(&mut b, "%f", arity);
-                let bf = self.fresh();
-                writeln!(
-                    b,
-                    "  {bf} = call i64 @plg_rt_frame_alloc(ptr %m, i32 {})",
-                    2 + var_list.len()
-                )
-                .unwrap();
-                writeln!(
-                    b,
-                    "  call void @plg_rt_frame_set(ptr %m, i64 {bf}, i32 0, i64 {kf})"
-                )
-                .unwrap();
-                writeln!(
-                    b,
-                    "  call void @plg_rt_frame_set(ptr %m, i64 {bf}, i32 1, i64 {ke})"
-                )
-                .unwrap();
-                for (i, v) in var_list.iter().enumerate() {
-                    let w = &vars[v];
-                    writeln!(
-                        b,
-                        "  call void @plg_rt_frame_set(ptr %m, i64 {bf}, i32 {}, i64 {w})",
-                        2 + i
-                    )
-                    .unwrap();
-                }
-                let k1 = self.fresh();
-                writeln!(b, "  {k1} = ptrtoint ptr @{base}_k1 to i64").unwrap();
-                writeln!(b, "  call void @plg_rt_set_k(ptr %m, i64 {k1}, i64 {bf})").unwrap();
-                self.emit_goal_tail(&mut b, &goals[0], &vars)?;
-
-                // Continuation functions for goals 1..n-1.
-                for (g, goal) in goals.iter().enumerate().skip(1) {
-                    self.emit_continuation(&base, g, n, goal, &var_list)?;
-                }
-            }
+        if goals.is_empty() {
+            // Fact: jump straight to the caller's continuation.
+            let kf = self.fresh();
+            writeln!(
+                b,
+                "  {kf} = call i64 @plg_rt_frame_get(ptr %m, i64 %f, i32 {arity})"
+            )
+            .unwrap();
+            let ke = self.fresh();
+            writeln!(
+                b,
+                "  {ke} = call i64 @plg_rt_frame_get(ptr %m, i64 %f, i32 {})",
+                arity + 1
+            )
+            .unwrap();
+            let kp = self.fresh();
+            writeln!(b, "  {kp} = inttoptr i64 {kf} to ptr").unwrap();
+            let r = self.fresh();
+            writeln!(b, "  {r} = musttail call i32 {kp}(ptr %m, i64 {ke})").unwrap();
+            writeln!(b, "  ret i32 {r}").unwrap();
+            self.write_fn(&base, "%f", &b);
+            return Ok(());
         }
 
-        // Assemble the clause function.
+        // Build the body frame: [k_fn, k_env, barrier, vars..., scratch...].
+        let mut ctx = ClauseCtx::new(base.clone(), var_list.clone(), String::new());
+        let bf = self.fresh();
+        writeln!(
+            b,
+            "  {bf} = call i64 @plg_rt_frame_alloc(ptr %m, i32 {})",
+            ctx.frame_size(scratch)
+        )
+        .unwrap();
+        for (slot, src) in [(0u32, arity), (1, arity + 1), (2, arity + 2)] {
+            let t = self.fresh();
+            writeln!(
+                b,
+                "  {t} = call i64 @plg_rt_frame_get(ptr %m, i64 %f, i32 {src})"
+            )
+            .unwrap();
+            writeln!(
+                b,
+                "  call void @plg_rt_frame_set(ptr %m, i64 {bf}, i32 {slot}, i64 {t})"
+            )
+            .unwrap();
+        }
+        for (i, v) in var_list.iter().enumerate() {
+            let w = &vars[v];
+            writeln!(
+                b,
+                "  call void @plg_rt_frame_set(ptr %m, i64 {bf}, i32 {}, i64 {w})",
+                3 + i
+            )
+            .unwrap();
+        }
+        ctx.bf = bf;
+        // Top-level body: `!` targets the predicate barrier (slot 2).
+        self.compile_seq(&mut b, &goals, &After::CallerK, &mut ctx, &vars, 2)?;
         writeln!(
             self.out,
             "; clause {j} of {}/{arity}",
             self.interner.resolve(functor)
         )
         .unwrap();
-        writeln!(self.out, "define internal i32 @{base}(ptr %m, i64 %f) {{").unwrap();
+        self.write_fn(&base, "%f", &b);
+        self.emit_aux_fns(&mut ctx)?;
+        Ok(())
+    }
+
+    fn write_fn(&mut self, sym: &str, env_name: &str, body: &str) {
+        writeln!(
+            self.out,
+            "define internal i32 @{sym}(ptr %m, i64 {env_name}) {{"
+        )
+        .unwrap();
         writeln!(self.out, "entry:").unwrap();
-        self.out.push_str(&b);
+        self.out.push_str(body);
         writeln!(self.out, "fail:").unwrap();
         writeln!(self.out, "  ret i32 0").unwrap();
         writeln!(self.out, "}}").unwrap();
-        Ok(())
     }
 
-    /// Continuation after goal `g-1` succeeds: run goal `g`.
-    fn emit_continuation(
-        &mut self,
-        base: &str,
-        g: usize,
-        n: usize,
-        goal: &Term,
-        var_list: &[VarId],
-    ) -> Result<(), String> {
-        self.reset_temps();
-        let mut b = String::new();
-        // Reload clause variables from the body frame.
-        let mut vars: HashMap<VarId, String> = HashMap::new();
-        for (i, v) in var_list.iter().enumerate() {
-            let t = self.fresh();
-            writeln!(
-                b,
-                "  {t} = call i64 @plg_rt_frame_get(ptr %m, i64 %bf, i32 {})",
-                2 + i
-            )
-            .unwrap();
-            vars.insert(*v, t);
-        }
-        if g == n - 1 {
-            // Last goal: restore the caller's continuation (LCO).
-            let kf = self.fresh();
-            writeln!(
-                b,
-                "  {kf} = call i64 @plg_rt_frame_get(ptr %m, i64 %bf, i32 0)"
-            )
-            .unwrap();
-            let ke = self.fresh();
-            writeln!(
-                b,
-                "  {ke} = call i64 @plg_rt_frame_get(ptr %m, i64 %bf, i32 1)"
-            )
-            .unwrap();
-            writeln!(b, "  call void @plg_rt_set_k(ptr %m, i64 {kf}, i64 {ke})").unwrap();
-        } else {
-            let kn = self.fresh();
-            writeln!(b, "  {kn} = ptrtoint ptr @{base}_k{} to i64", g + 1).unwrap();
-            writeln!(b, "  call void @plg_rt_set_k(ptr %m, i64 {kn}, i64 %bf)").unwrap();
-        }
-        self.emit_goal_tail(&mut b, goal, &vars)?;
-
-        writeln!(
-            self.out,
-            "define internal i32 @{base}_k{g}(ptr %m, i64 %bf) {{"
-        )
-        .unwrap();
-        writeln!(self.out, "entry:").unwrap();
-        self.out.push_str(&b);
-        writeln!(self.out, "}}").unwrap();
-        Ok(())
+    /// `br` to a fresh continue-label or %fail on an i32 result.
+    pub fn emit_branch_on(&mut self, b: &mut String, result: &str) {
+        let l = self.fresh_label();
+        let c = self.fresh();
+        writeln!(b, "  {c} = icmp ne i32 {result}, 0").unwrap();
+        writeln!(b, "  br i1 {c}, label %{l}, label %fail").unwrap();
+        writeln!(b, "{l}:").unwrap();
     }
 
-    /// Load the caller's continuation out of the predicate frame.
-    fn load_pred_k(&mut self, b: &mut String, f: &str, arity: u32) -> (String, String) {
-        let kf = self.fresh();
-        writeln!(
-            b,
-            "  {kf} = call i64 @plg_rt_frame_get(ptr %m, i64 {f}, i32 {arity})"
-        )
-        .unwrap();
-        let ke = self.fresh();
-        writeln!(
-            b,
-            "  {ke} = call i64 @plg_rt_frame_get(ptr %m, i64 {f}, i32 {})",
-            arity + 1
-        )
-        .unwrap();
-        (kf, ke)
-    }
-
-    /// `musttail` into a continuation held as a u64 word.
-    fn emit_musttail_k(&mut self, b: &mut String, kf: &str, ke: &str) {
-        let kp = self.fresh();
-        writeln!(b, "  {kp} = inttoptr i64 {kf} to ptr").unwrap();
-        let r = self.fresh();
-        writeln!(b, "  {r} = musttail call i32 {kp}(ptr %m, i64 {ke})").unwrap();
-        writeln!(b, "  ret i32 {r}").unwrap();
-    }
-
-    /// Emit a body goal in tail position: load argument registers and
-    /// `musttail` into the callee (the installed k is the continuation).
-    fn emit_goal_tail(
+    /// Deterministic builtins executed inline within a sequence.
+    pub fn emit_inline_builtin(
         &mut self,
         b: &mut String,
-        goal: &Term,
+        g: &LGoal,
         vars: &HashMap<VarId, String>,
     ) -> Result<(), String> {
-        let (functor, args): (AtomId, &[Term]) = match goal {
-            Term::Atom(id) => (*id, &[]),
-            Term::Compound { functor, args } => (*functor, args),
-            other => {
-                return Err(format!(
-                    "unsupported goal (M2 supports user predicates only): {other:?}"
-                ));
+        let r = match g {
+            LGoal::Unify(x, y) => {
+                let (wx, wy) = (self.emit_term(b, x, vars)?, self.emit_term(b, y, vars)?);
+                let r = self.fresh();
+                writeln!(
+                    b,
+                    "  {r} = call i32 @plg_rt_unify(ptr %m, i64 {wx}, i64 {wy})"
+                )
+                .unwrap();
+                r
             }
+            LGoal::NotUnify(x, y) => {
+                let (wx, wy) = (self.emit_term(b, x, vars)?, self.emit_term(b, y, vars)?);
+                let r = self.fresh();
+                writeln!(
+                    b,
+                    "  {r} = call i32 @plg_rt_b_neq(ptr %m, i64 {wx}, i64 {wy})"
+                )
+                .unwrap();
+                r
+            }
+            LGoal::TermCmp(op, x, y) => {
+                let (wx, wy) = (self.emit_term(b, x, vars)?, self.emit_term(b, y, vars)?);
+                let r = self.fresh();
+                writeln!(
+                    b,
+                    "  {r} = call i32 @plg_rt_b_term_cmp(ptr %m, i32 {op}, i64 {wx}, i64 {wy})"
+                )
+                .unwrap();
+                r
+            }
+            LGoal::Compare(o, x, y) => {
+                let wo = self.emit_term(b, o, vars)?;
+                let (wx, wy) = (self.emit_term(b, x, vars)?, self.emit_term(b, y, vars)?);
+                let r = self.fresh();
+                writeln!(
+                    b,
+                    "  {r} = call i32 @plg_rt_b_compare(ptr %m, i64 {wo}, i64 {wx}, i64 {wy})"
+                )
+                .unwrap();
+                r
+            }
+            LGoal::Is(x, e) => {
+                let wx = self.emit_term(b, x, vars)?;
+                let we = self.emit_term(b, e, vars)?;
+                let r = self.fresh();
+                writeln!(
+                    b,
+                    "  {r} = call i32 @plg_rt_b_is(ptr %m, i64 {wx}, i64 {we})"
+                )
+                .unwrap();
+                r
+            }
+            LGoal::ArithCmp(op, x, y) => {
+                let (wx, wy) = (self.emit_term(b, x, vars)?, self.emit_term(b, y, vars)?);
+                let r = self.fresh();
+                writeln!(
+                    b,
+                    "  {r} = call i32 @plg_rt_b_arith_cmp(ptr %m, i32 {op}, i64 {wx}, i64 {wy})"
+                )
+                .unwrap();
+                r
+            }
+            _ => unreachable!("not an inline builtin"),
         };
-        // `fail`/`false` compile to an immediate failure return.
-        if args.is_empty() {
-            let name = self.interner.resolve(functor);
-            if name == "fail" || name == "false" {
-                writeln!(b, "  ret i32 0").unwrap();
-                return Ok(());
-            }
-        }
-        // Builtins and control constructs are reserved. Like v1, binding
-        // is late: the program still compiles, and reaching the goal
-        // raises a clear runtime error (instead of miscompiling it as an
-        // undefined user predicate). Entries leave reserved_builtin() as
-        // milestones implement them.
-        if reserved_builtin(self.interner.resolve(functor)).is_some() {
-            let r = self.fresh();
-            writeln!(
-                b,
-                "  {r} = call i32 @plg_rt_unsupported_builtin(ptr %m, i32 {functor}, i32 {})",
-                args.len()
-            )
-            .unwrap();
-            writeln!(b, "  ret i32 {r}").unwrap();
-            return Ok(());
-        }
+        self.emit_branch_on(b, &r);
+        Ok(())
+    }
+
+    /// Emit a predicate call in tail position: load argument registers
+    /// and `musttail` into the callee (the installed k continues).
+    pub fn emit_call_tail(
+        &mut self,
+        b: &mut String,
+        functor: AtomId,
+        args: &[Term],
+        vars: &HashMap<VarId, String>,
+    ) -> Result<(), String> {
         let arity = args.len() as u32;
         if arity as usize > crate::MAX_GOAL_ARITY {
             return Err(format!(
                 "goal arity {arity} exceeds the supported maximum of {}",
                 crate::MAX_GOAL_ARITY
             ));
+        }
+        // Builtins not yet implemented compile to a clear runtime error
+        // raised only when reached (late binding, v1 contract).
+        if reserved_builtin(self.interner.resolve(functor)).is_some() {
+            let r = self.fresh();
+            writeln!(
+                b,
+                "  {r} = call i32 @plg_rt_unsupported_builtin(ptr %m, i32 {functor}, i32 {arity})"
+            )
+            .unwrap();
+            writeln!(b, "  ret i32 {r}").unwrap();
+            return Ok(());
         }
         match self.how_to_call(functor, arity) {
             GoalTarget::Undefined => {
@@ -318,17 +309,12 @@ impl CodeGen<'_> {
     }
 }
 
-/// v1's builtin vocabulary, reserved so programs using them fail at
-/// compile time with a roadmap pointer instead of miscompiling into
-/// existence errors. Entries move out of this table as the milestones
-/// implement them.
+/// Builtins still pending implementation (shrinks as milestones land —
+/// the M3 control/comparison/arithmetic set is now compiled for real).
 fn reserved_builtin(name: &str) -> Option<&'static str> {
-    const M3: &[&str] = &[
-        ";", "->", "\\+", "!", "=", "\\=", "==", "\\==", "is", "<", ">", "=<", ">=", "=:=", "=\\=",
-        "@<", "@>", "@=<", "@>=", "once", "compare",
-    ];
     const M4: &[&str] = &[
         "call",
+        "once",
         "findall",
         "catch",
         "throw",
@@ -365,32 +351,5 @@ fn reserved_builtin(name: &str) -> Option<&'static str> {
         "halt",
         "unify_with_occurs_check",
     ];
-    if M3.contains(&name) {
-        Some("M3")
-    } else if M4.contains(&name) {
-        Some("M4")
-    } else {
-        None
-    }
-}
-
-/// Flatten a parsed body (a single `,`-tree per the frontend) into a
-/// goal list, dropping bare `true`. `comma` is the interned id of ","
-/// (None when the program never interned it — no conjunctions exist).
-pub fn flatten_body(body: &[Term], comma: Option<AtomId>) -> Vec<Term> {
-    fn walk(t: &Term, comma: Option<AtomId>, out: &mut Vec<Term>) {
-        match t {
-            Term::Compound { functor, args } if args.len() == 2 && Some(*functor) == comma => {
-                walk(&args[0], comma, out);
-                walk(&args[1], comma, out);
-            }
-            Term::Atom(id) if *id == ATOM_TRUE => {}
-            other => out.push(other.clone()),
-        }
-    }
-    let mut out = Vec::new();
-    for t in body {
-        walk(t, comma, &mut out);
-    }
-    out
+    if M4.contains(&name) { Some("M4") } else { None }
 }

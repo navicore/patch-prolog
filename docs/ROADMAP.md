@@ -39,15 +39,29 @@ Gate results:
   atoms/vars/ints/compounds/lists/conjunctions (operators arrive with
   their builtins).
 
-## M3 — Control and arithmetic
+## M3 — Control and arithmetic ✅ (2026-06-04)
 
-Backtracking across clauses/disjunctions, if-then-else, cut barriers,
-negation-as-failure, first-argument indexing as IR switch, ISO
-arithmetic (`is/2`, comparisons; floored mod, checked overflow, NaN
-rejection), step limit.
+Disjunction, if-then-else, cut (transparent in `;`/`->`/`,`, local in
+call-like contexts — both tested), negation-as-failure, `once/1`,
+`=`/`\=`/`==`/`\==`/`@`-comparisons/`compare/3`, full v1 arithmetic
+(`is/2`, comparisons; floored mod, checked overflow, NaN rejection —
+error strings oracle-captured byte-for-byte), first-argument indexing
+as IR `switch`, runtime query parser grown to the standard operator set
+plus floats, query-level control walker (goal TERMS only — never
+clauses).
 
-Gate: recursive predicates (ancestor, append) match the v1 oracle;
-deep determinate recursion runs in constant C stack (tested).
+Gate results:
+- 14-test M3 integration suite asserts oracle-captured bytes (cut,
+  disjunction order, NAF, ITE, arithmetic values and error messages).
+- Adversarial diff sweep vs the v1 interpreter: all matches except the
+  documented ISO cut divergence (below) and variable-numbering noise.
+- Indexing: the 5k-fact chain query dropped from ~10s (M2 linear scan)
+  to 3ms; keyed single-candidate dispatch pushes NO choice point.
+- Cut under 512KB stack across 1500-deep recursion: constant C stack.
+- **Deliberate v1 divergence**: v1 treated `!` as opaque inside `;`
+  (non-ISO, undocumented). plgc follows ISO 7.8.4 — see
+  ISO_COMPLIANCE.md "Cut".
+- linting.pl (needs `\+`) now compiles and matches the oracle.
 
 ## M4 — Builtin parity and errors
 

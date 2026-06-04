@@ -6,7 +6,9 @@
 //! stack. See docs/design/COMPILATION_MODEL.md.
 
 mod atoms;
+mod body;
 mod clause;
+mod lower;
 mod predicate;
 mod program;
 mod term_emit;
@@ -35,6 +37,7 @@ pub struct CodeGen<'a> {
     pub dynamic_only: Vec<(AtomId, u32)>,
     pub out: String,
     tmp: u32,
+    label: u32,
 }
 
 impl<'a> CodeGen<'a> {
@@ -45,6 +48,7 @@ impl<'a> CodeGen<'a> {
             dynamic_only: Vec::new(),
             out: String::new(),
             tmp: 0,
+            label: 0,
         }
     }
 
@@ -54,9 +58,16 @@ impl<'a> CodeGen<'a> {
         format!("%t{}", self.tmp)
     }
 
-    /// Reset the SSA counter (names are function-local).
+    /// Fresh basic-block label.
+    pub fn fresh_label(&mut self) -> String {
+        self.label += 1;
+        format!("L{}", self.label)
+    }
+
+    /// Reset the SSA/label counters (names are function-local).
     pub fn reset_temps(&mut self) {
         self.tmp = 0;
+        self.label = 0;
     }
 
     /// Symbol-safe predicate entry name: `plg_pred_<id>_<arity>__<sane>`.

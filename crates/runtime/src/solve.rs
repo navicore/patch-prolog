@@ -8,7 +8,9 @@
 //! depth — this loop is the trampoline.
 
 use crate::cell::*;
-use crate::machine::{ContFn, MAX_ARGS, Machine};
+#[cfg(test)]
+use crate::machine::ContFn;
+use crate::machine::{MAX_ARGS, Machine};
 use crate::render;
 
 pub enum Outcome {
@@ -52,18 +54,26 @@ unsafe extern "C" fn capture_k(m: *mut Machine, _env: u64) -> i32 {
     }
 }
 
-/// Dispatch a goal term: look it up in the registry, load argument
-/// registers, and call the compiled entry. Also used by the `,`
-/// continuation (and later by call/1 and findall/3).
+/// Dispatch a goal term: control constructs and deterministic builtins
+/// go through `control::try_builtin`; everything else is a registry
+/// lookup into compiled code. Also used by control continuations (and
+/// later by call/1 and findall/3).
 pub fn call_goal(m: &mut Machine, goal: Word) -> i32 {
     let goal = m.deref(goal);
     match tag_of(goal) {
-        TAG_ATOM => dispatch(m, atom_id(goal), 0, 0),
+        TAG_ATOM => {
+            let name = m.atoms.resolve(atom_id(goal)).to_string();
+            if let Some(r) = crate::control::try_atom_builtin(m, &name) {
+                return r;
+            }
+            dispatch(m, atom_id(goal), 0, 0)
+        }
         TAG_STR => {
             let idx = payload(goal) as usize;
             let (f, n) = unpack_functor(m.heap[idx]);
-            if n == 2 && m.atoms.resolve(f) == "," {
-                return call_conjunction(m, m.heap[idx + 1], m.heap[idx + 2]);
+            let name = m.atoms.resolve(f).to_string();
+            if let Some(r) = crate::control::try_builtin(m, &name, idx + 1, n) {
+                return r;
             }
             dispatch(m, f, n, idx + 1)
         }
@@ -102,29 +112,6 @@ fn dispatch(m: &mut Machine, functor: u32, arity: u32, args_idx: usize) -> i32 {
         m.areg[i] = m.heap[args_idx + i];
     }
     unsafe { f(m as *mut Machine, 0) }
-}
-
-/// `,`/2 at the query level: run A with a continuation that runs B.
-/// (Conjunctions inside clause bodies are compiled, never routed here.)
-fn call_conjunction(m: &mut Machine, a: Word, b: Word) -> i32 {
-    // Frame: [b_word, saved_k_fn, saved_k_env]
-    let frame = m.frame_alloc(3);
-    m.heap[frame] = b;
-    m.heap[frame + 1] = m.k_fn as usize as u64;
-    m.heap[frame + 2] = m.k_env;
-    m.k_fn = conj_k;
-    m.k_env = frame as u64;
-    call_goal(m, a)
-}
-
-unsafe extern "C" fn conj_k(m: *mut Machine, env: u64) -> i32 {
-    let m = unsafe { &mut *m };
-    let frame = env as usize;
-    let b = m.heap[frame];
-    let k_fn: ContFn = unsafe { std::mem::transmute(m.heap[frame + 1] as usize) };
-    m.k_fn = k_fn;
-    m.k_env = m.heap[frame + 2];
-    call_goal(m, b)
 }
 
 #[cfg(test)]
