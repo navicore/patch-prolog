@@ -99,22 +99,27 @@ overflow raises `evaluation_error(int_overflow)` (ISO_COMPLIANCE.md).
 
 ## What is compiled vs called
 
-Compiled inline in v1:
+Compiled inline (in clause code):
 - clause dispatch: `switch` on `%A0` tag/value (first-argument indexing,
-  same keys as v1 `first_arg_key()`); var first-arg ⇒ try all clauses
-- head unification for shallow patterns (atom/int/var/one-level struct)
-- tag-test builtins (`var/1`, `atom/1`, `integer/1`, …)
-- arithmetic evaluation and comparison (checked ops + branch-to-error)
-- cut, conjunction sequencing, disjunction branching
+  same keys as v1 `first_arg_key()`); var first-arg ⇒ try all clauses;
+  single-candidate keyed dispatch pushes NO choice point
+- cut, conjunction sequencing, disjunction branching, if-then-else /
+  once / `\+` commit machinery (choice points + commit-height slots)
+- atom/immediate-integer constants (tagged words baked into the IR)
 
-Runtime calls in v1 (inline later if profiles demand):
-- `plg_rt_unify` — generic unification fallback for deep heads. Shares
-  the same bind/deref/trail primitives as compiled head-unify so the
-  two cannot diverge.
-- `plg_rt_put_*` term construction helpers
-- the builtin library (lists, atoms, `functor/3`, `=..`, `sort`,
-  `findall`, I/O, …) — direct ports of v1 `builtins.rs`
-- `plg_rt_call` — metacall dispatch via the registry
+Runtime calls (the pragmatic v1-scope line — inlining is the named
+escape hatch if profiles ever demand it):
+- `plg_rt_unify` — generic unification, including head unification
+  (head patterns are built with `put_*` then unified; specialized
+  inline head-matching is future work). Shares bind/deref/trail
+  primitives with everything else so behaviors cannot diverge.
+- `plg_rt_b_is` / `plg_rt_b_arith_cmp` — arithmetic evaluates the
+  static expression tree in the runtime (ported v1 `eval` with exact
+  error strings); an inline integer fast path is future work.
+- the deterministic builtin library (`plg_rt_b_*`, generated
+  declarations from one table), `plg_rt_b_findall_3`/`catch_3`/
+  `throw_1`, `plg_rt_metacall`, `plg_rt_pred_between_3` (nondet,
+  uniform predicate signature)
 
 ## Worked example
 

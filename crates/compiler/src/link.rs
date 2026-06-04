@@ -115,11 +115,15 @@ pub fn link_ir(ir_path: &Path, output_path: &Path, opt: OptLevel) -> Result<(), 
     };
 
     let mut clang = Command::new("clang");
+    clang.arg(opt_flag);
+    // DWARF only in --debug builds: it multiplies binary size ~8x
+    // (4.4M vs ~550K for hello-world) and the line info resolves into
+    // the Rust runtime, not the user's .pl. Release binaries stay lean
+    // (v1 shipped without debug info too).
+    if opt == OptLevel::O0 {
+        clang.arg("-g");
+    }
     clang
-        .arg(opt_flag)
-        // Preserve DWARF emitted by codegen — pure metadata, no runtime
-        // cost; only increases binary size.
-        .arg("-g")
         .arg(ir_path)
         .arg("-o")
         .arg(output_path)
@@ -137,6 +141,12 @@ pub fn link_ir(ir_path: &Path, output_path: &Path, opt: OptLevel) -> Result<(), 
         clang.arg("-Wl,-dead_strip");
     } else if cfg!(target_os = "linux") {
         clang.arg("-Wl,--gc-sections");
+        // The runtime archive's members carry Rust std DWARF; without
+        // this the linker copies it all in (~3.8M on a ~550K binary).
+        // --debug builds keep it.
+        if opt != OptLevel::O0 {
+            clang.arg("-Wl,--strip-debug");
+        }
     }
 
     let output = clang

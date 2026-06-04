@@ -7,6 +7,29 @@ use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+fn run_script(source: &str, args: &[String]) -> ExitCode {
+    let dir = match tempfile::tempdir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: cannot create temp dir: {e}");
+            return ExitCode::from(3);
+        }
+    };
+    let bin = dir.path().join("plg-script");
+    let src = std::path::Path::new(source);
+    if let Err(e) = plgc::compile_files(&[src], &bin, false, plgc::OptLevel::O3) {
+        eprintln!("error: {e}");
+        return ExitCode::from(3);
+    }
+    match std::process::Command::new(&bin).args(args).status() {
+        Ok(status) => ExitCode::from(status.code().unwrap_or(3) as u8),
+        Err(e) => {
+            eprintln!("error: failed to run compiled script: {e}");
+            ExitCode::from(3)
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "plgc",
@@ -61,6 +84,14 @@ enum Commands {
 }
 
 fn main() -> ExitCode {
+    // Script mode (`#!/usr/bin/env plgc`): `plgc prog.pl [binary args…]`
+    // compiles to a temp binary and execs it — same path as `plgc run`,
+    // never interpretation.
+    let raw: Vec<String> = std::env::args().collect();
+    if raw.len() >= 2 && raw[1].ends_with(".pl") && std::path::Path::new(&raw[1]).exists() {
+        return run_script(&raw[1], &raw[2..]);
+    }
+
     let cli = Cli::parse();
 
     match cli.command {
