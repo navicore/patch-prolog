@@ -93,17 +93,33 @@ Gate results:
   pinned by the ported corpus itself.
 - 123 runtime + 48 frontend unit tests; full `just ci` green.
 
-## M5 — Polish
+## M5 — Polish ✅ (2026-06-04)
 
-Binary-size tuning, shell completions, shebang script mode, docs and
-footprint finalization.
+- **Binary size**: release links strip the runtime archive's DWARF
+  (`-Wl,--strip-debug`); hello-world dropped 4.4M → **676K**
+  (`--debug` keeps DWARF + `-O0`). Guarded by
+  `tests/binary_size.rs`: a 1.3M ceiling plus a Linux `ldd` check
+  enforcing the standalone contract (libc/libm/libgcc/loader only) —
+  both in `just ci` via `check-binary-contents`.
+- **Script mode**: `#!/usr/bin/env plgc` shebang works — `plgc
+  prog.pl [args…]` compiles to a temp binary and execs it (the
+  parser blanks a leading `#!` line, preserving line numbers).
+- Shell completions (`plgc completions <shell>`) verified; docs
+  corrected (COMPILATION_MODEL's compiled-vs-runtime line now matches
+  the implementation); footprint recorded here.
 
-Gate: full `just ci` including `check-binary-contents`.
+Footprint record (x86_64-linux, clang 19, 2026-06-04): hello-world
+676K default · 4.4M `--debug` · binary answers `--query` with only
+base system libraries loaded.
 
-## Future (explicitly out of scope for now)
+## Future (explicitly out of scope)
 
-- REPL and LSP (v1 had both; they return only after compiler parity)
-- WAM-style instruction-level codegen (performance escape hatch)
+- REPL and LSP (v1 had both; they return now that the compiler is at
+  parity)
+- WAM-style instruction-level codegen; inline head-unification and
+  integer-arithmetic fast paths (performance escape hatches)
 - Copying GC for long-running determinate queries
 - `assert/retract` beyond the silent-fail dynamic contract
 - Cross-compilation (`--target`)
+- bagof/setof, DCG, modules, `op/3` (v1 scope decisions — the language
+  definition excludes them deliberately)

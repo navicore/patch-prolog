@@ -82,9 +82,9 @@ diff-test: build
     @echo "Running differential tests vs ../patch-prolog oracle..."
     cargo test --locked --release -p plg-compiler --test differential -- --nocapture
 
-# Assert compiled binaries contain no dead runtime code
+# Binary hygiene: size ceiling + standalone (system-libs-only) contract
 check-binary-contents:
-    cargo test --locked --release -p plg-compiler --test no_dead_code -- --nocapture
+    cargo test --locked --release -p plg-compiler --test binary_size -- --nocapture
 
 # Lint all Prolog example sources with the compiler's static checks
 lint-pl: build
@@ -120,8 +120,9 @@ footprint: build
     rm -rf "$tmp"
 
 # Run all CI checks (same as Forgejo Actions!)
-# Grows with milestones: M4 adds diff-test + check-binary-contents.
-ci: fmt-check lint test build build-examples test-integration lint-pl
+# (diff-test is intentionally NOT here: it needs the local v1 oracle.
+# Run it manually when ../patch-prolog is present.)
+ci: fmt-check lint test build build-examples test-integration lint-pl check-binary-contents
     @echo ""
     @echo "✅ All CI checks passed!"
 

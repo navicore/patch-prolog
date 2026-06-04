@@ -47,8 +47,14 @@ fn parse_sources(
         Parser::parse_program_with_directives(STDLIB_PL, &mut interner)
             .map_err(|e| format!("internal: stdlib parse error: {e}"))?;
     for path in sources {
-        let src = std::fs::read_to_string(path)
+        let mut src = std::fs::read_to_string(path)
             .map_err(|e| format!("{}: cannot read file: {e}", path.display()))?;
+        // Script mode: a leading `#!/usr/bin/env plgc` line is not
+        // Prolog; blank it out (preserving line numbers in errors).
+        if src.starts_with("#!") {
+            let eol = src.find('\n').unwrap_or(src.len());
+            src.replace_range(..eol, "");
+        }
         let (mut cs, ds) = Parser::parse_program_with_directives(&src, &mut interner)
             .map_err(|msg| format_parse_error(path, &msg))?;
         clauses.append(&mut cs);
