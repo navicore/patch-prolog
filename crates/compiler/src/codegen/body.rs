@@ -152,17 +152,23 @@ impl CodeGen<'_> {
                 | LGoal::TermCmp(..)
                 | LGoal::Compare(..)
                 | LGoal::Is(..)
-                | LGoal::ArithCmp(..)) => self.emit_inline_builtin(b, g, vars)?,
+                | LGoal::ArithCmp(..)
+                | LGoal::RtDet { .. }) => self.emit_inline_builtin(b, g, vars)?,
                 LGoal::Call { functor, args } => {
                     let rest_after = self.rest_after(rest, after, ctx, cut_slot);
                     self.emit_set_k(b, &rest_after, &bf);
                     return self.emit_call_tail(b, *functor, args, vars);
                 }
-                LGoal::Metacall(_) => {
-                    return Err(
-                        "variable goals (metacall) are not yet supported by plgc (planned: M4)"
-                            .to_string(),
-                    );
+                LGoal::Metacall(t) => {
+                    // Runtime goal walker; the installed k is the
+                    // continuation, exactly like a predicate call.
+                    let rest_after = self.rest_after(rest, after, ctx, cut_slot);
+                    self.emit_set_k(b, &rest_after, &bf);
+                    let g = self.emit_term(b, t, vars)?;
+                    let r = self.fresh();
+                    writeln!(b, "  {r} = call i32 @plg_rt_metacall(ptr %m, i64 {g})").unwrap();
+                    writeln!(b, "  ret i32 {r}").unwrap();
+                    return Ok(());
                 }
                 LGoal::Disj(a, b2) => {
                     // Cut is transparent in both branches.

@@ -20,6 +20,26 @@ pub fn unify(m: &mut Machine, a: Word, b: Word) -> bool {
             (TAG_REF, _) => m.bind(payload(a) as usize, b),
             (_, TAG_REF) => m.bind(payload(b) as usize, a),
             (TAG_ATOM, TAG_ATOM) | (TAG_INT, TAG_INT) => return false, // a != b
+            (TAG_BIG, TAG_BIG) => {
+                let va = m.heap[payload(a) as usize] as i64;
+                let vb = m.heap[payload(b) as usize] as i64;
+                if va != vb {
+                    return false;
+                }
+            }
+            // INT vs BIG: same integer type, compare by value (a boxed
+            // value never fits i61 by construction, so this only matches
+            // defensively).
+            (TAG_INT, TAG_BIG) => {
+                if int_value(a) != m.heap[payload(b) as usize] as i64 {
+                    return false;
+                }
+            }
+            (TAG_BIG, TAG_INT) => {
+                if (m.heap[payload(a) as usize] as i64) != int_value(b) {
+                    return false;
+                }
+            }
             (TAG_FLT, TAG_FLT) => {
                 // to_bits comparison: NaN == NaN, -0.0 != 0.0 (v1 rule)
                 let fa = m.heap[payload(a) as usize];

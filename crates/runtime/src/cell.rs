@@ -13,8 +13,10 @@ pub const TAG_INT: u64 = 2; // payload = signed 61-bit immediate
 pub const TAG_STR: u64 = 3; // payload = heap index of [functor|arity][args...]
 pub const TAG_LST: u64 = 4; // payload = heap index of [head][tail]
 pub const TAG_FLT: u64 = 5; // payload = heap index of an f64-bits cell
+pub const TAG_BIG: u64 = 6; // payload = heap index of a raw i64 cell
 
-/// Largest magnitude representable as an immediate integer.
+/// Largest magnitude representable as an immediate integer; values
+/// outside box to a TAG_BIG heap cell (full i64 range, v1 parity).
 pub const INT_MAX: i64 = (1 << 60) - 1;
 pub const INT_MIN: i64 = -(1 << 60);
 

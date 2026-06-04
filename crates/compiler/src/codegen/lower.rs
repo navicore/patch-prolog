@@ -25,15 +25,58 @@ pub const ORDER_OPS: &[(&str, i32)] = &[
     ("@>=", 5),
 ];
 
+/// Deterministic runtime builtins: (name, arity, C symbol). The exact
+/// v1 builtin vocabulary — names NOT here (and not control) fall
+/// through to existence_error, like v1. Mirrored by the runtime's
+/// query-side dispatch (control.rs); the diff corpus guards the pair.
+pub const DET_BUILTINS: &[(&str, u32, &str)] = &[
+    ("var", 1, "plg_rt_b_var_1"),
+    ("nonvar", 1, "plg_rt_b_nonvar_1"),
+    ("atom", 1, "plg_rt_b_atom_1"),
+    ("number", 1, "plg_rt_b_number_1"),
+    ("integer", 1, "plg_rt_b_integer_1"),
+    ("float", 1, "plg_rt_b_float_1"),
+    ("compound", 1, "plg_rt_b_compound_1"),
+    ("is_list", 1, "plg_rt_b_is_list_1"),
+    ("functor", 3, "plg_rt_b_functor_3"),
+    ("arg", 3, "plg_rt_b_arg_3"),
+    ("=..", 2, "plg_rt_b_univ_2"),
+    ("copy_term", 2, "plg_rt_b_copy_term_2"),
+    ("atom_length", 2, "plg_rt_b_atom_length_2"),
+    ("atom_concat", 3, "plg_rt_b_atom_concat_3"),
+    ("atom_chars", 2, "plg_rt_b_atom_chars_2"),
+    ("number_chars", 2, "plg_rt_b_number_chars_2"),
+    ("number_codes", 2, "plg_rt_b_number_codes_2"),
+    ("msort", 2, "plg_rt_b_msort_2"),
+    ("sort", 2, "plg_rt_b_sort_2"),
+    ("succ", 2, "plg_rt_b_succ_2"),
+    ("plus", 3, "plg_rt_b_plus_3"),
+    (
+        "unify_with_occurs_check",
+        2,
+        "plg_rt_b_unify_with_occurs_check_2",
+    ),
+    ("write", 1, "plg_rt_b_write_1"),
+    ("writeln", 1, "plg_rt_b_writeln_1"),
+    ("nl", 0, "plg_rt_b_nl_0"),
+];
+
 #[derive(Clone)]
 pub enum LGoal {
-    /// User predicate (or dynamic / undefined / reserved-M4 builtin).
+    /// User predicate (or dynamic / undefined / control builtin routed
+    /// through emit_call_tail).
     Call {
         functor: AtomId,
         args: Vec<Term>,
     },
-    /// A variable goal (`p :- X.`) — metacall, lands with call/1 in M4.
+    /// A variable goal (`p :- X.`) — runtime metacall.
     Metacall(Term),
+    /// Deterministic runtime builtin executed inline: call the C
+    /// symbol with the argument words, branch on the i32 result.
+    RtDet {
+        sym: &'static str,
+        args: Vec<Term>,
+    },
     True,
     Fail,
     Cut,
@@ -99,6 +142,9 @@ pub fn lower_goal(t: &Term, interner: &StringInterner) -> Result<LGoal, String> 
         ("once", 1) if !matches!(args[0], Term::Var(_)) => {
             LGoal::Once(Box::new(lower_goal(&args[0], interner)?))
         }
+        // once(Var): route through the runtime metacall (the goal walker
+        // implements once over runtime-built goals).
+        ("once", 1) => LGoal::Metacall(t.clone()),
         ("=", 2) => LGoal::Unify(args[0].clone(), args[1].clone()),
         ("\\=", 2) => LGoal::NotUnify(args[0].clone(), args[1].clone()),
         ("compare", 3) => LGoal::Compare(args[0].clone(), args[1].clone(), args[2].clone()),
@@ -112,6 +158,14 @@ pub fn lower_goal(t: &Term, interner: &StringInterner) -> Result<LGoal, String> 
                 && args.len() == 2
             {
                 LGoal::TermCmp(op, args[0].clone(), args[1].clone())
+            } else if let Some(&(_, _, sym)) = DET_BUILTINS
+                .iter()
+                .find(|(n, a, _)| *n == name && *a as usize == args.len())
+            {
+                LGoal::RtDet {
+                    sym,
+                    args: args.to_vec(),
+                }
             } else {
                 let functor = match t {
                     Term::Atom(id) => *id,
@@ -213,6 +267,11 @@ pub fn collect_goal_vars(g: &LGoal, out: &mut Vec<plg_shared::term::VarId>) {
             }
         }
         LGoal::Metacall(t) => collect_vars(t, out),
+        LGoal::RtDet { args, .. } => {
+            for a in args {
+                collect_vars(a, out);
+            }
+        }
         LGoal::True | LGoal::Fail | LGoal::Cut => {}
     }
 }

@@ -22,30 +22,36 @@ use std::cmp::Ordering;
 fn type_rank(w: Word) -> u8 {
     match tag_of(w) {
         TAG_REF => 0,
-        TAG_INT | TAG_FLT => 1,
+        TAG_INT | TAG_FLT | TAG_BIG => 1,
         TAG_ATOM => 2,
         TAG_STR | TAG_LST => 3,
         _ => unreachable!("bad tag in term order"),
     }
 }
 
-/// Numeric value of an INT/FLT word as an f64, for cross-type comparison.
-fn float_of(m: &Machine, w: Word) -> f64 {
+/// A number word normalized for comparison: INT and boxed BIG are both
+/// integers; FLT is a float.
+enum Num {
+    I(i64),
+    F(f64),
+}
+
+fn num_of(m: &Machine, w: Word) -> Num {
     match tag_of(w) {
-        TAG_INT => int_value(w) as f64,
-        TAG_FLT => f64::from_bits(m.heap[payload(w) as usize]),
+        TAG_INT => Num::I(int_value(w)),
+        TAG_BIG => Num::I(m.heap[payload(w) as usize] as i64),
+        TAG_FLT => Num::F(f64::from_bits(m.heap[payload(w) as usize])),
         _ => unreachable!(),
     }
 }
 
-/// Compare two numbers (INT or FLT). Float < Integer at numeric equality;
-/// NaN sorts after every other float (v1 rule).
+/// Compare two numbers. Float < Integer at numeric equality; NaN sorts
+/// after every other float (v1 rule). Cross-type comparison goes through
+/// f64 like v1 (documented precision caveat for huge i64).
 fn compare_numbers(m: &Machine, a: Word, b: Word) -> Ordering {
-    match (tag_of(a), tag_of(b)) {
-        (TAG_INT, TAG_INT) => int_value(a).cmp(&int_value(b)),
-        (TAG_FLT, TAG_FLT) => {
-            let fa = float_of(m, a);
-            let fb = float_of(m, b);
+    match (num_of(m, a), num_of(m, b)) {
+        (Num::I(ia), Num::I(ib)) => ia.cmp(&ib),
+        (Num::F(fa), Num::F(fb)) => {
             fa.partial_cmp(&fb)
                 .unwrap_or_else(|| match (fa.is_nan(), fb.is_nan()) {
                     (true, true) => Ordering::Equal,
@@ -54,33 +60,24 @@ fn compare_numbers(m: &Machine, a: Word, b: Word) -> Ordering {
                     (false, false) => unreachable!(),
                 })
         }
-        (TAG_INT, TAG_FLT) => {
-            let fb = float_of(m, b);
+        (Num::I(ia), Num::F(fb)) => {
             if fb.is_nan() {
                 return Ordering::Less; // NaN sorts after everything
             }
-            match (int_value(a) as f64)
-                .partial_cmp(&fb)
-                .unwrap_or(Ordering::Less)
-            {
+            match (ia as f64).partial_cmp(&fb).unwrap_or(Ordering::Less) {
                 Ordering::Equal => Ordering::Greater, // integer > float at equality
                 other => other,
             }
         }
-        (TAG_FLT, TAG_INT) => {
-            let fa = float_of(m, a);
+        (Num::F(fa), Num::I(ib)) => {
             if fa.is_nan() {
                 return Ordering::Greater;
             }
-            match fa
-                .partial_cmp(&(int_value(b) as f64))
-                .unwrap_or(Ordering::Greater)
-            {
+            match fa.partial_cmp(&(ib as f64)).unwrap_or(Ordering::Greater) {
                 Ordering::Equal => Ordering::Less, // float < integer at equality
                 other => other,
             }
         }
-        _ => unreachable!(),
     }
 }
 

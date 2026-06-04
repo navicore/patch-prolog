@@ -242,6 +242,16 @@ impl CodeGen<'_> {
                 .unwrap();
                 r
             }
+            LGoal::RtDet { sym, args } => {
+                let mut words = Vec::with_capacity(args.len());
+                for a in args {
+                    words.push(self.emit_term(b, a, vars)?);
+                }
+                let arglist: Vec<String> = words.iter().map(|w| format!(", i64 {w}")).collect();
+                let r = self.fresh();
+                writeln!(b, "  {r} = call i32 @{sym}(ptr %m{})", arglist.join("")).unwrap();
+                r
+            }
             _ => unreachable!("not an inline builtin"),
         };
         self.emit_branch_on(b, &r);
@@ -264,17 +274,76 @@ impl CodeGen<'_> {
                 crate::MAX_GOAL_ARITY
             ));
         }
-        // Builtins not yet implemented compile to a clear runtime error
-        // raised only when reached (late binding, v1 contract).
-        if reserved_builtin(self.interner.resolve(functor)).is_some() {
-            let r = self.fresh();
-            writeln!(
-                b,
-                "  {r} = call i32 @plg_rt_unsupported_builtin(ptr %m, i32 {functor}, i32 {arity})"
-            )
-            .unwrap();
-            writeln!(b, "  ret i32 {r}").unwrap();
-            return Ok(());
+        // Control builtins taking goal/term arguments: the installed k
+        // is the continuation; the runtime walks the goal terms.
+        let name = self.interner.resolve(functor).to_string();
+        match (name.as_str(), arity) {
+            ("throw", 1) => {
+                let w = self.emit_term(b, &args[0], vars)?;
+                let r = self.fresh();
+                writeln!(b, "  {r} = call i32 @plg_rt_b_throw_1(ptr %m, i64 {w})").unwrap();
+                writeln!(b, "  ret i32 {r}").unwrap();
+                return Ok(());
+            }
+            ("catch", 3) => {
+                let g = self.emit_term(b, &args[0], vars)?;
+                let c = self.emit_term(b, &args[1], vars)?;
+                let rec = self.emit_term(b, &args[2], vars)?;
+                let r = self.fresh();
+                writeln!(
+                    b,
+                    "  {r} = call i32 @plg_rt_b_catch_3(ptr %m, i64 {g}, i64 {c}, i64 {rec})"
+                )
+                .unwrap();
+                writeln!(b, "  ret i32 {r}").unwrap();
+                return Ok(());
+            }
+            ("findall", 3) => {
+                let t = self.emit_term(b, &args[0], vars)?;
+                let g = self.emit_term(b, &args[1], vars)?;
+                let bag = self.emit_term(b, &args[2], vars)?;
+                let r = self.fresh();
+                writeln!(
+                    b,
+                    "  {r} = call i32 @plg_rt_b_findall_3(ptr %m, i64 {t}, i64 {g}, i64 {bag})"
+                )
+                .unwrap();
+                writeln!(b, "  ret i32 {r}").unwrap();
+                return Ok(());
+            }
+            ("call", n) if n >= 1 => {
+                // Build the call/N structure; the runtime extends and
+                // dispatches it (try_builtin "call").
+                let goal = Term::Compound {
+                    functor,
+                    args: args.to_vec(),
+                };
+                let g = self.emit_term(b, &goal, vars)?;
+                let r = self.fresh();
+                writeln!(b, "  {r} = call i32 @plg_rt_metacall(ptr %m, i64 {g})").unwrap();
+                writeln!(b, "  ret i32 {r}").unwrap();
+                return Ok(());
+            }
+            ("between", 3) => {
+                // Nondeterministic builtin with a uniform predicate
+                // signature: dispatched exactly like a user predicate.
+                let mut words = Vec::with_capacity(args.len());
+                for a in args {
+                    words.push(self.emit_term(b, a, vars)?);
+                }
+                for (i, w) in words.iter().enumerate() {
+                    writeln!(b, "  call void @plg_rt_areg_set(ptr %m, i32 {i}, i64 {w})").unwrap();
+                }
+                let r = self.fresh();
+                writeln!(
+                    b,
+                    "  {r} = musttail call i32 @plg_rt_pred_between_3(ptr %m, i64 0)"
+                )
+                .unwrap();
+                writeln!(b, "  ret i32 {r}").unwrap();
+                return Ok(());
+            }
+            _ => {}
         }
         match self.how_to_call(functor, arity) {
             GoalTarget::Undefined => {
@@ -307,49 +376,4 @@ impl CodeGen<'_> {
         }
         Ok(())
     }
-}
-
-/// Builtins still pending implementation (shrinks as milestones land —
-/// the M3 control/comparison/arithmetic set is now compiled for real).
-fn reserved_builtin(name: &str) -> Option<&'static str> {
-    const M4: &[&str] = &[
-        "call",
-        "once",
-        "findall",
-        "catch",
-        "throw",
-        "var",
-        "nonvar",
-        "atom",
-        "number",
-        "integer",
-        "float",
-        "atomic",
-        "compound",
-        "callable",
-        "is_list",
-        "functor",
-        "arg",
-        "=..",
-        "copy_term",
-        "atom_length",
-        "atom_concat",
-        "atom_chars",
-        "atom_codes",
-        "char_code",
-        "number_chars",
-        "number_codes",
-        "msort",
-        "sort",
-        "between",
-        "succ",
-        "plus",
-        "write",
-        "writeln",
-        "nl",
-        "print",
-        "halt",
-        "unify_with_occurs_check",
-    ];
-    if M4.contains(&name) { Some("M4") } else { None }
 }

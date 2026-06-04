@@ -120,12 +120,46 @@ commit slots (body.rs); the runtime's `control.rs` mirrors the same
 shapes only for goals built at runtime (queries, M4 metacalls), walking
 goal terms, never clauses.
 
-## M4 additions (planned)
+## M4 additions (implemented)
 
-`plg_rt_call` registry metacall for `call/N` and `findall/3`; CATCH
-choice-point frames for `catch/3`; remaining builtin families as
-`plg_rt_b_*`. Errors become structured terms (today: preformatted
-v1-compatible message strings in `Machine::error`).
+**Structured errors.** `Machine::error` carries a relocatable ball
+(`copyterm::TermBuf`) plus its pre-rendered v1-format message. Balls
+survive heap rewinding; `solve::drive` unwinds them to the nearest
+catch frame (a `CpKind::Catch` choice point whose env holds
+`[catcher, recovery, k_fn, k_env]`). `plg_rt_cut` stops at catch
+frames (v1: catch is opaque to cut). The step-limit ball remains
+uncatchable.
+
+**Control builtins** (the installed k is the continuation; the runtime
+walks goal TERMS only — never clauses):
+
+| symbol | signature (IR) | purpose |
+|---|---|---|
+| `plg_rt_metacall` | `i32 (ptr, i64)` | dispatch a runtime goal term (var goals, call/N) |
+| `plg_rt_b_catch_3` | `i32 (ptr, i64, i64, i64)` | push catch frame, run goal |
+| `plg_rt_b_throw_1` | `i32 (ptr, i64)` | snapshot ball, raise |
+| `plg_rt_b_findall_3` | `i32 (ptr, i64, i64, i64)` | bounded sub-search via the shared driver |
+| `plg_rt_pred_between_3` | `i32 (ptr, i64)` | nondet builtin, uniform predicate signature (A-registers) |
+| `plg_rt_put_big` | `i64 (ptr, i64)` | box an i64 beyond the i61 immediate (TAG_BIG = 6) |
+
+C-stack note: `plg_rt_metacall` / `plg_rt_b_catch_3` /
+`plg_rt_b_findall_3` hold one Rust frame while their goal runs, so
+nesting depth of those constructs (not Prolog recursion) consumes C
+stack — bounded by the step limit; full CPS compilation of metacalls is
+a named escape hatch.
+
+**Deterministic builtins** `plg_rt_b_<name>_<arity>` — one symbol per
+entry in codegen's `DET_BUILTINS` table (lower.rs), declarations
+generated from the same table. The runtime's query-side dispatch
+(control.rs `det_builtin`) mirrors it; the differential corpus guards
+the pair. Vocabulary = exactly v1's: type checks, functor/arg/univ/
+copy_term, atom/number conversions, msort/sort, succ/plus,
+unify_with_occurs_check, write/writeln/nl.
+
+**Stdlib.** `crates/compiler/stdlib.pl` (v1's file, verbatim) is parsed
+before user sources in every `plgc build` — member/append/length/last/
+reverse/nth0/nth1 are ordinary compiled predicates in every binary,
+exactly like v1's embedding.
 
 ## Environment
 

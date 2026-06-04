@@ -89,6 +89,15 @@ pub extern "C" fn plg_rt_put_float(m: *mut Machine, bits: u64) -> u64 {
     cell::make(cell::TAG_FLT, idx as u64)
 }
 
+/// Box an i64 outside the i61 immediate range (BIG cell).
+#[unsafe(no_mangle)]
+pub extern "C" fn plg_rt_put_big(m: *mut Machine, value: i64) -> u64 {
+    let m = mref(m);
+    let idx = m.heap.len();
+    m.heap.push(value as u64);
+    cell::make(cell::TAG_BIG, idx as u64)
+}
+
 /// Generic unification; returns 1 on success.
 #[unsafe(no_mangle)]
 pub extern "C" fn plg_rt_unify(m: *mut Machine, a: u64, b: u64) -> i32 {
@@ -136,26 +145,7 @@ pub extern "C" fn plg_rt_pred_fail(_m: *mut Machine, _env: u64) -> i32 {
 pub extern "C" fn plg_rt_existence_error(m: *mut Machine, functor: u32, arity: u32) -> i32 {
     let m = mref(m);
     let name = m.atoms.resolve(functor).to_string();
-    m.error = Some(crate::machine::RtError {
-        message: format!(
-            "error(existence_error(procedure, /({name}, {arity})), Undefined procedure: {name}/{arity})"
-        ),
-        uncatchable: false,
-    });
-    0
-}
-
-/// A goal references a builtin the compiler recognizes but has not yet
-/// implemented. Raised only when the goal is REACHED (v1 binds late;
-/// unrelated queries against the same program must keep working).
-#[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_unsupported_builtin(m: *mut Machine, functor: u32, arity: u32) -> i32 {
-    let m = mref(m);
-    let name = m.atoms.resolve(functor).to_string();
-    m.error = Some(crate::machine::RtError {
-        message: format!("builtin {name}/{arity} is not yet implemented by plgc"),
-        uncatchable: false,
-    });
+    crate::errors::existence_procedure(m, &name, arity);
     0
 }
 

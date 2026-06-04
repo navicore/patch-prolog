@@ -28,6 +28,12 @@ pub enum OptLevel {
     O3,
 }
 
+/// The embedded standard library (ported verbatim from v1): pure-Prolog
+/// list predicates compiled into every binary, parsed BEFORE user files
+/// exactly like v1's runner. User clauses for the same name/arity
+/// append to the stdlib predicate (v1 behavior).
+pub const STDLIB_PL: &str = include_str!("../stdlib.pl");
+
 /// Parse each source against a shared interner (v1 pattern: line/col
 /// reports stay relative to the originating file).
 fn parse_sources(
@@ -37,8 +43,9 @@ fn parse_sources(
         return Err("no input files".to_string());
     }
     let mut interner = StringInterner::new();
-    let mut clauses = Vec::new();
-    let mut directives = ProgramDirectives::default();
+    let (mut clauses, mut directives) =
+        Parser::parse_program_with_directives(STDLIB_PL, &mut interner)
+            .map_err(|e| format!("internal: stdlib parse error: {e}"))?;
     for path in sources {
         let src = std::fs::read_to_string(path)
             .map_err(|e| format!("{}: cannot read file: {e}", path.display()))?;

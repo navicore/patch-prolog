@@ -32,8 +32,17 @@ impl CodeGen<'_> {
         let n = clauses.len();
 
         // --- Candidate chains from first-argument keys.
-        let keys: Vec<Option<FirstArgKey>> =
-            clauses.iter().map(|c| c.head.first_arg_key()).collect();
+        let keys: Vec<Option<FirstArgKey>> = clauses
+            .iter()
+            .map(|c| {
+                c.head.first_arg_key().filter(|k| {
+                    // Boxed-range integers can't be switch constants;
+                    // treat those clauses as unindexable (var bucket).
+                    !matches!(k, FirstArgKey::Integer(n)
+                        if !(super::term_emit::IMM_INT_MIN..=super::term_emit::IMM_INT_MAX).contains(n))
+                })
+            })
+            .collect();
         let indexable = arity > 0 && keys.iter().any(|k| k.is_some());
 
         let mut chains: Vec<Vec<usize>> = Vec::new();

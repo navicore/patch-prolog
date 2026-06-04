@@ -63,17 +63,35 @@ Gate results:
   ISO_COMPLIANCE.md "Cut".
 - linting.pl (needs `\+`) now compiles and matches the oracle.
 
-## M4 — Builtin parity and errors
+## M4 — Builtin parity and errors ✅ (2026-06-04)
 
-All remaining v1 builtin families: type checks, term construction
-(`functor/3`, `arg/3`, `=..`, `copy_term/2`), atom/number conversions,
-lists, sorting, `findall/3`, `between/3`, I/O (`write/1`, `nl/0`),
-`catch/3`/`throw/1` with the full ISO error taxonomy, dynamic
-silent-fail.
+Full v1 builtin vocabulary (and ONLY it — non-v1 names like `atomic`
+raise existence_error exactly like v1): type checks, `functor/3`,
+`arg/3`, `=..`, `copy_term/2`, atom/number conversions, `msort/sort`,
+`succ/plus`, `unify_with_occurs_check/2`, `write/writeln/nl`,
+`findall/3`, `between/3` (nondet, uniform predicate signature),
+`call/N` + variable-goal metacall, `catch/3`/`throw/1`. Structured
+error balls (relocatable copies surviving heap rewind) with v1's
+byte-identical rendering; cut stops at catch frames; step limit stays
+uncatchable. Boxed i64 (TAG_BIG) lifts the i61 immediate limit. v1's
+stdlib.pl embedded verbatim and compiled into every binary. The runtime
+goal walker gained proper cut barriers (qbarrier, snapshotted in every
+continuation frame) and v1's operator surface (`:` xfy, prefix `+`/`\`,
+standalone operator atoms, cycle-safe rendering of `X = f(X)`).
 
-Gate: the entire ported v1 integration suite passes against compiled
-binaries; full differential corpus matches; dead-code guard passes.
-Afterwards the differential dependency on the old repo is retired.
+Gate results:
+- The ported v1 corpus — 89 grouped tests representing ~200 of v1's 248
+  (the rest are in-process library-API tests with no wire analog;
+  skip list documented in tests/v1_errors.rs) — passes with ZERO
+  ignores. All six divergences the port surfaced were triaged as plgc
+  bugs (per the ISO-over-bug-compat rule, checked against the LIVE
+  oracle) and fixed: walker cut barriers, cyclic-term render crash,
+  between/3 i64 boxing, query-parser operator surface.
+- Permanent 57-goal differential corpus (`just diff-test`,
+  auto-skipped in CI) matches the oracle byte-for-byte modulo variable
+  numbering. The oracle dependency is now optional — semantics are
+  pinned by the ported corpus itself.
+- 123 runtime + 48 frontend unit tests; full `just ci` green.
 
 ## M5 — Polish
 
