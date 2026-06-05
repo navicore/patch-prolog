@@ -24,8 +24,12 @@ rules.pl ──parse──▶ AST ──analyze──▶ codegen ──▶ rules
 - `libplg_runtime.a` is built from `crates/runtime` and embedded into
   the `plgc` binary via `include_bytes!` (set up by
   `crates/compiler/build.rs`, which also enforces exact version match
-  between compiler and runtime). At link time it is extracted to a temp
-  dir, passed to clang, and deleted.
+  between compiler and runtime, and bakes in a content hash of the
+  archive). At link time it is materialized at a content-addressed
+  cache path (`$XDG_CACHE_HOME/plgc/runtime-<hash>/`, else
+  `~/.cache/plgc/…`) that every run of the same build reuses; stale
+  entries are age-swept. HOME-less environments fall back to a private
+  per-link extraction that is removed after linking.
 - `-Wl,--gc-sections` (Linux) / `-Wl,-dead_strip` (macOS) strips
   runtime code the program can't reach, keeping binaries small.
 - Users of `plgc` need clang. Users of compiled binaries need nothing.

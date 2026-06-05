@@ -2,15 +2,16 @@
 //! binary linked against the embedded `libplg_runtime.a`.
 //!
 //! Ported from patch-seq crates/compiler/src/lib.rs (the success
-//! pattern): extract the embedded archive to a temp dir, invoke clang,
-//! dead-strip unreachable runtime code, clean up.
+//! pattern): materialize the embedded archive at a content-addressed cache
+//! path shared by every run of this build, invoke clang, dead-strip
+//! unreachable runtime code.
 
 use crate::{OptLevel, RUNTIME_LIB};
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
+use std::time::{Duration, SystemTime};
 
 /// Minimum clang/LLVM version required.
 /// Generated IR uses opaque pointers (`ptr`), which requires LLVM 15+.
@@ -93,29 +94,166 @@ fn parse_clang_version(output: &str) -> Option<u32> {
 
 static RUNTIME_EXTRACTED: OnceLock<Result<std::path::PathBuf, String>> = OnceLock::new();
 
-/// Extract the embedded runtime archive once per process. The path is
-/// pid-keyed so concurrent plgc processes don't race, and parallel
-/// in-process compiles (integration tests) share one extraction.
-fn extracted_runtime() -> Result<std::path::PathBuf, String> {
+/// Orphaned `.libplg_runtime.a.<pid>` temps older than this are reclaimed: a
+/// live extraction renames within milliseconds, so minutes of age means the
+/// writer died mid-extraction (PR #5 review, finding 1).
+const STALE_TEMP_AGE: Duration = Duration::from_secs(10 * 60);
+
+/// Sibling `runtime-*` dirs (other plgc builds) older than this are
+/// reclaimed. The week of grace keeps a concurrently *running* older build's
+/// archive from being swept out from under its clang invocation (PR #5
+/// review, finding 2); disk stays bounded at "builds actually used this
+/// week".
+const STALE_SIBLING_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// The materialized runtime archive a link uses. Kept alive across the clang
+/// invocation; the ephemeral variant removes its extraction on drop.
+enum RuntimeArchive {
+    /// Shared content-addressed cache entry — persists by design.
+    Cached(std::path::PathBuf),
+    /// HOME-less/XDG-less fallback: a private per-link extraction. A shared
+    /// dir under the world-writable temp root would have a predictable,
+    /// poisonable name — and a non-cryptographic content key can't make a
+    /// reuse check adversary-proof — so we don't share there at all
+    /// (PR #5 review, finding 3).
+    Ephemeral(#[allow(dead_code)] tempfile::TempDir, std::path::PathBuf),
+}
+
+impl RuntimeArchive {
+    fn lib_path(&self) -> &Path {
+        match self {
+            RuntimeArchive::Cached(path) => path,
+            RuntimeArchive::Ephemeral(_, path) => path,
+        }
+    }
+}
+
+/// Materialize the embedded runtime archive; the handle stays valid for the
+/// duration of one link.
+///
+/// When a per-user cache location exists, the archive lives at a stable,
+/// content-addressed path keyed by a build-time hash of its bytes
+/// (`PLG_RUNTIME_HASH`, emitted by build.rs): every process of the same plgc
+/// build shares ONE extraction — the pid-keyed scheme this replaces left one
+/// ~21MB dir behind per invocation (issue #4). The archive keeps its
+/// canonical `libplg_runtime.a` name (clang finds it via `-L <dir>
+/// -lplg_runtime`); the hash lives in the directory name. The `OnceLock`
+/// memoizes within a process for parallel in-process compiles, and each
+/// process performs one age-gated hygiene sweep of stale leftovers.
+fn extracted_runtime() -> Result<RuntimeArchive, String> {
+    let Some(base) = cache_base() else {
+        // No private per-user location exists: extract for this link only
+        // and let `TempDir` reclaim it on drop. ~21MB per link is acceptable
+        // in this rare environment; a poisonable shared path is not.
+        let dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {e}"))?;
+        let path = dir.path().join("libplg_runtime.a");
+        fs::write(&path, RUNTIME_LIB).map_err(|e| format!("Failed to write runtime lib: {e}"))?;
+        return Ok(RuntimeArchive::Ephemeral(dir, path));
+    };
+
     RUNTIME_EXTRACTED
         .get_or_init(|| {
-            let dir = std::env::temp_dir().join(format!("plgc-{}", std::process::id()));
-            fs::create_dir_all(&dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
+            let dir = base.join(concat!("runtime-", env!("PLG_RUNTIME_HASH")));
             let path = dir.join("libplg_runtime.a");
-            let mut file = fs::File::create(&path)
-                .map_err(|e| format!("Failed to create runtime lib: {e}"))?;
-            file.write_all(RUNTIME_LIB)
+
+            // Hygiene before the fast path, so aged orphans are reclaimed on
+            // warm runs too (the common case).
+            sweep_stale(&base, &dir);
+
+            // Fast path: already extracted by an earlier run. The dir name
+            // encodes the content hash; the length check guards against
+            // exotic corruption (installs below are atomic renames, so a
+            // partial file can never appear under the final name).
+            if let Ok(meta) = fs::metadata(&path)
+                && meta.len() == RUNTIME_LIB.len() as u64
+            {
+                return Ok(path);
+            }
+
+            fs::create_dir_all(&dir)
+                .map_err(|e| format!("Failed to create runtime cache dir: {e}"))?;
+
+            // Write under a process-unique temp name, then rename into
+            // place. Renames are atomic, so concurrent first runs of the
+            // same build race benignly: last one wins with identical bytes.
+            let tmp = dir.join(format!(".libplg_runtime.a.{}", std::process::id()));
+            fs::write(&tmp, RUNTIME_LIB)
                 .map_err(|e| format!("Failed to write runtime lib: {e}"))?;
+            fs::rename(&tmp, &path).map_err(|e| format!("Failed to install runtime lib: {e}"))?;
+
             Ok(path)
         })
         .clone()
+        .map(RuntimeArchive::Cached)
+}
+
+/// `$XDG_CACHE_HOME/plgc`, else `$HOME/.cache/plgc`; `None` when neither is
+/// available — there is no private per-user place to cache in (see
+/// `RuntimeArchive::Ephemeral`).
+fn cache_base() -> Option<std::path::PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME")
+        && !xdg.is_empty()
+    {
+        return Some(std::path::PathBuf::from(xdg).join("plgc"));
+    }
+    if let Some(home) = std::env::var_os("HOME")
+        && !home.is_empty()
+    {
+        return Some(std::path::PathBuf::from(home).join(".cache").join("plgc"));
+    }
+    None
+}
+
+/// Cache hygiene, once per process: reclaim sibling `runtime-*` dirs left by
+/// other plgc builds, and orphaned `.libplg_runtime.a.*` temps in our own
+/// dir (writers killed between write and rename). Both sweeps are age-gated
+/// so nothing in active use is ever touched.
+fn sweep_stale(base: &Path, keep: &Path) {
+    if let Ok(entries) = fs::read_dir(base) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path != keep
+                && path
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("runtime-"))
+                && older_than(&path, STALE_SIBLING_AGE)
+            {
+                let _ = fs::remove_dir_all(&path);
+            }
+        }
+    }
+    if let Ok(entries) = fs::read_dir(keep) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with(".libplg_runtime.a."))
+                && older_than(&path, STALE_TEMP_AGE)
+            {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+}
+
+fn older_than(path: &Path, age: Duration) -> bool {
+    let Ok(meta) = fs::metadata(path) else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    SystemTime::now()
+        .duration_since(modified)
+        .is_ok_and(|elapsed| elapsed > age)
 }
 
 /// Link an LLVM IR file into a standalone executable against the
 /// embedded runtime archive.
 pub fn link_ir(ir_path: &Path, output_path: &Path, opt: OptLevel) -> Result<(), String> {
     check_clang_version()?;
-    let runtime_path = extracted_runtime()?;
+    // Bound to a local so an ephemeral extraction outlives the clang call.
+    let runtime = extracted_runtime()?;
 
     let opt_flag = match opt {
         OptLevel::O0 => "-O0",
@@ -136,7 +274,7 @@ pub fn link_ir(ir_path: &Path, output_path: &Path, opt: OptLevel) -> Result<(), 
         .arg("-o")
         .arg(output_path)
         .arg("-L")
-        .arg(runtime_path.parent().unwrap())
+        .arg(runtime.lib_path().parent().unwrap())
         .arg("-lplg_runtime")
         // libm: arithmetic builtins reach libm symbols via the runtime
         // archive; the link must be explicit. Harmless on macOS where
