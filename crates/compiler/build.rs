@@ -51,8 +51,31 @@ fn main() {
         runtime_lib.display()
     );
 
+    // Content-hash the archive and bake the digest in. link.rs keys its
+    // shared extraction cache (cache_base()/runtime-<hash>/) on it: the key
+    // changes exactly when the embedded bytes change, and identical rebuilds
+    // keep reusing the same extraction. (The cargo version is NOT a valid
+    // key — dev rebuilds embed different bytes under the same version.)
+    let runtime_bytes = fs::read(&runtime_lib).expect("Failed to read runtime lib for hashing");
+    println!(
+        "cargo:rustc-env=PLG_RUNTIME_HASH={:016x}",
+        fnv1a64(&runtime_bytes)
+    );
+
     // Rerun if the runtime library changes
     println!("cargo:rerun-if-changed={}", runtime_lib.display());
+}
+
+/// FNV-1a, 64-bit: tiny, dependency-free, and deterministic across builds,
+/// platforms, and Rust versions — which is all a cache key needs (this is
+/// invalidation, not cryptography).
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 fn find_runtime_in_deps(deps_dir: &PathBuf) -> Option<PathBuf> {

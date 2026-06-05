@@ -2,12 +2,12 @@
 //! binary linked against the embedded `libplg_runtime.a`.
 //!
 //! Ported from patch-seq crates/compiler/src/lib.rs (the success
-//! pattern): extract the embedded archive to a temp dir, invoke clang,
-//! dead-strip unreachable runtime code, clean up.
+//! pattern): materialize the embedded archive at a content-addressed cache
+//! path shared by every run of this build, invoke clang, dead-strip
+//! unreachable runtime code.
 
 use crate::{OptLevel, RUNTIME_LIB};
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
@@ -93,22 +93,86 @@ fn parse_clang_version(output: &str) -> Option<u32> {
 
 static RUNTIME_EXTRACTED: OnceLock<Result<std::path::PathBuf, String>> = OnceLock::new();
 
-/// Extract the embedded runtime archive once per process. The path is
-/// pid-keyed so concurrent plgc processes don't race, and parallel
-/// in-process compiles (integration tests) share one extraction.
+/// Materialize the embedded runtime archive at a stable, content-addressed
+/// cache path, reusing a previous extraction when the bytes already match.
+///
+/// The directory is keyed by a build-time hash of the archive bytes
+/// (`PLG_RUNTIME_HASH`, emitted by build.rs), so every process of the same
+/// plgc build shares ONE extraction — the pid-keyed scheme this replaces
+/// left one ~21MB dir behind per invocation (issue #4). A build with a
+/// different runtime gets a different directory, and stale siblings are
+/// swept the first time the new build links. The archive keeps its
+/// canonical `libplg_runtime.a` name (clang finds it via `-L <dir>
+/// -lplg_runtime`); the hash lives in the directory name. The `OnceLock`
+/// still memoizes within a process for parallel in-process compiles.
 fn extracted_runtime() -> Result<std::path::PathBuf, String> {
     RUNTIME_EXTRACTED
         .get_or_init(|| {
-            let dir = std::env::temp_dir().join(format!("plgc-{}", std::process::id()));
-            fs::create_dir_all(&dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
+            let base = cache_base();
+            let dir = base.join(concat!("runtime-", env!("PLG_RUNTIME_HASH")));
             let path = dir.join("libplg_runtime.a");
-            let mut file = fs::File::create(&path)
-                .map_err(|e| format!("Failed to create runtime lib: {e}"))?;
-            file.write_all(RUNTIME_LIB)
+
+            // Fast path: already extracted by an earlier run. The dir name
+            // encodes the content hash; the length check guards against
+            // exotic corruption (installs below are atomic renames, so a
+            // partial file can never appear under the final name).
+            if let Ok(meta) = fs::metadata(&path)
+                && meta.len() == RUNTIME_LIB.len() as u64
+            {
+                return Ok(path);
+            }
+
+            fs::create_dir_all(&dir)
+                .map_err(|e| format!("Failed to create runtime cache dir: {e}"))?;
+
+            // Write under a process-unique temp name, then rename into
+            // place. Renames are atomic, so concurrent first runs of the
+            // same build race benignly: last one wins with identical bytes.
+            let tmp = dir.join(format!(".libplg_runtime.a.{}", std::process::id()));
+            fs::write(&tmp, RUNTIME_LIB)
                 .map_err(|e| format!("Failed to write runtime lib: {e}"))?;
+            fs::rename(&tmp, &path).map_err(|e| format!("Failed to install runtime lib: {e}"))?;
+
+            sweep_stale_runtimes(&base, &dir);
             Ok(path)
         })
         .clone()
+}
+
+/// `$XDG_CACHE_HOME/plgc`, else `$HOME/.cache/plgc`, else a temp-dir
+/// fallback for HOME-less environments.
+fn cache_base() -> std::path::PathBuf {
+    if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME")
+        && !xdg.is_empty()
+    {
+        return std::path::PathBuf::from(xdg).join("plgc");
+    }
+    if let Some(home) = std::env::var_os("HOME")
+        && !home.is_empty()
+    {
+        return std::path::PathBuf::from(home).join(".cache").join("plgc");
+    }
+    std::env::temp_dir().join("plgc-cache")
+}
+
+/// Remove extractions left behind by other plgc builds. `cache_base()` is
+/// plgc's own namespace, so reclaiming siblings is safe; racing a concurrent
+/// plgc of a *different* build here is theoretical and self-healing (its
+/// next link simply re-extracts).
+fn sweep_stale_runtimes(base: &Path, keep: &Path) {
+    let Ok(entries) = fs::read_dir(base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path != keep
+            && path
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("runtime-"))
+        {
+            let _ = fs::remove_dir_all(&path);
+        }
+    }
 }
 
 /// Link an LLVM IR file into a standalone executable against the
