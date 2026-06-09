@@ -275,3 +275,68 @@ pub fn collect_goal_vars(g: &LGoal, out: &mut Vec<plg_shared::term::VarId>) {
         LGoal::True | LGoal::Fail | LGoal::Cut => {}
     }
 }
+
+#[cfg(test)]
+mod vocab_invariant {
+    //! Codegen half of the `plg-shared::builtins` invariant
+    //! (docs/design/BUILTIN_VOCAB.md): the names this crate recognizes —
+    //! `DET_BUILTINS` + `ARITH_OPS` + `ORDER_OPS` + the structural
+    //! match-arms of `lower_goal`/`clause.rs` — must be EXACTLY the
+    //! `BUILTINS` vocabulary. Adding a row to one side without the other
+    //! turns red here.
+    use super::{ARITH_OPS, DET_BUILTINS, ORDER_OPS};
+    use plg_shared::{BUILTINS, builtins::BuiltinKind};
+    use std::collections::BTreeSet;
+
+    /// Names recognized by structural match arms in `lower_goal` (and
+    /// `clause.rs` for `catch`/`throw`/`findall`/`call`/`between`) — the
+    /// only hand-maintained mirror; everything else below is const data.
+    #[rustfmt::skip]
+    const STRUCTURAL: &[(&str, u32)] = &[
+        // inline specials (own LGoal variant)
+        ("=", 2), ("\\=", 2), ("is", 2), ("compare", 3),
+        // control constructs
+        (",", 2), (";", 2), ("->", 2), ("\\+", 1), ("once", 1),
+        ("catch", 3), ("throw", 1), ("findall", 3), ("call", 1), ("between", 3),
+        // reserved atoms
+        ("true", 0), ("fail", 0), ("false", 0), ("!", 0),
+    ];
+
+    #[test]
+    fn det_builtins_are_det_rows_in_shared() {
+        for &(name, arity, _sym) in DET_BUILTINS {
+            let row = BUILTINS
+                .iter()
+                .find(|s| s.name == name && s.arity == arity)
+                .unwrap_or_else(|| panic!("DET_BUILTINS {name}/{arity} missing from BUILTINS"));
+            assert_eq!(
+                row.kind,
+                BuiltinKind::Det,
+                "{name}/{arity} is in DET_BUILTINS but not kind Det in BUILTINS"
+            );
+        }
+    }
+
+    #[test]
+    fn recognized_names_equal_shared_vocabulary() {
+        let mut covered: BTreeSet<(&str, u32)> = BTreeSet::new();
+        for &(n, a, _) in DET_BUILTINS {
+            covered.insert((n, a));
+        }
+        for &(n, _) in ARITH_OPS {
+            covered.insert((n, 2));
+        }
+        for &(n, _) in ORDER_OPS {
+            covered.insert((n, 2));
+        }
+        covered.extend(STRUCTURAL.iter().copied());
+
+        let vocab: BTreeSet<(&str, u32)> = BUILTINS.iter().map(|s| (s.name, s.arity)).collect();
+
+        assert_eq!(
+            covered, vocab,
+            "codegen-recognized names diverge from BUILTINS \
+             (left = codegen, right = shared table)"
+        );
+    }
+}

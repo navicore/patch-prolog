@@ -780,3 +780,43 @@ mod m4_tests {
         assert_eq!(sols, vec!["L=[1, 2, 3, 4, 5],X=_0"]);
     }
 }
+
+#[cfg(test)]
+mod vocab_invariant {
+    //! Runtime half of the `plg-shared::builtins` invariant
+    //! (docs/design/BUILTIN_VOCAB.md). `det_builtin` above is the
+    //! query-side mirror of codegen's `DET_BUILTINS`; this asserts the
+    //! arms it handles are EXACTLY the arity>0 `Det` rows of `BUILTINS`
+    //! (`nl/0` is Det but dispatched via `try_atom_builtin`, so it is
+    //! excluded here). Referenced only under `#[cfg(test)]` — the `doc`
+    //! strings never reach a compiled program binary.
+    use plg_shared::{BUILTINS, builtins::BuiltinKind};
+    use std::collections::BTreeSet;
+
+    /// Hand mirror of the `det_builtin` match arms. Adding an arm there
+    /// without updating this (or `BUILTINS`) turns the test red.
+    #[rustfmt::skip]
+    const DET_DISPATCH: &[(&str, u32)] = &[
+        ("var", 1), ("nonvar", 1), ("atom", 1), ("number", 1), ("integer", 1),
+        ("float", 1), ("compound", 1), ("is_list", 1), ("functor", 3), ("arg", 3),
+        ("=..", 2), ("copy_term", 2), ("atom_length", 2), ("atom_concat", 3),
+        ("atom_chars", 2), ("number_chars", 2), ("number_codes", 2), ("msort", 2),
+        ("sort", 2), ("succ", 2), ("plus", 3), ("unify_with_occurs_check", 2),
+        ("write", 1), ("writeln", 1),
+    ];
+
+    #[test]
+    fn det_dispatch_equals_shared_det_subset() {
+        let dispatch: BTreeSet<(&str, u32)> = DET_DISPATCH.iter().copied().collect();
+        let shared_det: BTreeSet<(&str, u32)> = BUILTINS
+            .iter()
+            .filter(|s| s.kind == BuiltinKind::Det && s.arity > 0)
+            .map(|s| (s.name, s.arity))
+            .collect();
+        assert_eq!(
+            dispatch, shared_det,
+            "runtime det dispatch diverges from BUILTINS Det subset \
+             (left = control.rs, right = shared table)"
+        );
+    }
+}
