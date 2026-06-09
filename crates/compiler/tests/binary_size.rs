@@ -7,6 +7,9 @@
 
 mod harness;
 
+#[allow(unused_imports)]
+use std::process::Command;
+
 /// Generous ceiling: hello-world is ~676K today; alert at 2x-ish.
 const MAX_HELLO_BYTES: u64 = 1_400_000;
 
