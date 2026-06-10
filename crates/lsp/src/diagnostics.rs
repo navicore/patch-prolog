@@ -9,18 +9,115 @@
 //! but that is a separate, additive frontend change — see
 //! docs/design/LSP_PORT.md delta-3.
 
-use plg_frontend::Parser;
-use plg_shared::StringInterner;
+use std::collections::BTreeMap;
+
+use plg_frontend::{Parser, lint};
+use plg_shared::{STDLIB_PL, StringInterner};
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 const SOURCE: &str = "plgl";
 
 pub fn compute(content: &str) -> Vec<Diagnostic> {
     let mut interner = StringInterner::new();
+    // Seed the interner with the stdlib so its predicates (member/2,
+    // append/3, …) count as defined — the compiler prepends stdlib for the
+    // same reason. Parsed SEPARATELY so the buffer keeps its own line
+    // numbers for parse-error positions.
+    let stdlib = Parser::parse_program_with_directives(STDLIB_PL, &mut interner)
+        .map(|(c, _)| c)
+        .unwrap_or_default();
     match Parser::parse_program_with_directives(content, &mut interner) {
-        Ok(_) => Vec::new(),
+        // Parse OK → run the undefined-predicate lint. These are WARNINGS
+        // in the editor (yellow), distinct from red parse errors: the
+        // program still compiles and raises a catchable existence_error at
+        // runtime per ISO; the warning just flags the likely typo. Strict
+        // failure lives in `plgc --deny-undefined`, not here.
+        Ok((clauses, directives)) => {
+            let mut all = stdlib;
+            all.extend(clauses);
+            undefined_warnings(content, &all, &directives, &interner)
+        }
         Err(msg) => vec![error_string_to_diagnostic(&msg, content)],
     }
+}
+
+/// One warning per call site of a predicate that is defined nowhere.
+fn undefined_warnings(
+    content: &str,
+    clauses: &[plg_shared::Clause],
+    directives: &plg_frontend::ProgramDirectives,
+    interner: &StringInterner,
+) -> Vec<Diagnostic> {
+    // Distinct callee → its suggestion (the lint may report it from
+    // several callers; the squiggle goes on the call sites, not callers).
+    let mut callees: BTreeMap<(String, usize), Option<String>> = BTreeMap::new();
+    for u in lint::undefined_calls(clauses, directives, interner) {
+        callees.entry(u.callee).or_insert(u.suggestion);
+    }
+
+    let mut diags = Vec::new();
+    for ((name, arity), suggestion) in callees {
+        let mut message = format!("undefined predicate {name}/{arity}");
+        if let Some(s) = &suggestion {
+            message.push_str(&format!(" — did you mean {s}?"));
+        }
+        for range in call_site_ranges(content, &name, arity) {
+            diags.push(Diagnostic {
+                range,
+                severity: Some(DiagnosticSeverity::WARNING),
+                source: Some(SOURCE.to_string()),
+                message: message.clone(),
+                ..Default::default()
+            });
+        }
+    }
+    diags
+}
+
+/// Find the ranges where `name` is used as a callable: an identifier run
+/// equal to `name` that (for arity > 0) is immediately followed by `(`.
+/// Columns are UTF-16 code units per the LSP convention.
+fn call_site_ranges(content: &str, name: &str, arity: usize) -> Vec<Range> {
+    let is_id = |c: char| c.is_alphanumeric() || c == '_';
+    let mut ranges = Vec::new();
+    for (line_idx, line) in content.lines().enumerate() {
+        let mut col_u16: u32 = 0;
+        let mut word_start_u16: Option<u32> = None;
+        let mut word_start_byte = 0usize;
+        let mut emit = |start: u32, end_u16: u32, end_byte: usize, word: &str| {
+            if word == name {
+                // arity > 0 must be a compound: next non-space char is `(`.
+                let follows_paren = line[end_byte..].trim_start().starts_with('(');
+                if arity == 0 || follows_paren {
+                    ranges.push(Range {
+                        start: Position {
+                            line: line_idx as u32,
+                            character: start,
+                        },
+                        end: Position {
+                            line: line_idx as u32,
+                            character: end_u16,
+                        },
+                    });
+                }
+            }
+        };
+        for (b, ch) in line.char_indices() {
+            if is_id(ch) {
+                if word_start_u16.is_none() {
+                    word_start_u16 = Some(col_u16);
+                    word_start_byte = b;
+                }
+            } else if let Some(ws) = word_start_u16.take() {
+                emit(ws, col_u16, b, &line[word_start_byte..b]);
+            }
+            col_u16 += ch.len_utf16() as u32;
+        }
+        if let Some(ws) = word_start_u16 {
+            emit(ws, col_u16, line.len(), &line[word_start_byte..]);
+        }
+    }
+    ranges
 }
 
 /// Parse `<message> at line N col M` into a `Diagnostic`. If the suffix is
@@ -137,5 +234,33 @@ mod tests {
         // Regression: error messages must not leak TokenKind variant names.
         let diags = compute("go :- bar(]).\n");
         assert!(!diags[0].message.contains("RBracket"));
+    }
+
+    #[test]
+    fn undefined_predicate_is_a_warning_on_the_call_site() {
+        // parent/1 defined; ancestor's body calls the typo xarent/1.
+        let src = "parent(tom).\nancestor(X) :- xarent(X).\n";
+        let diags = compute(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let d = &diags[0];
+        assert_eq!(d.severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(d.range.start.line, 1, "squiggle on the call site line");
+        // Range covers `xarent` — `ancestor(X) :- ` is 15 chars, so 15..21.
+        assert_eq!(d.range.start.character, 15);
+        assert_eq!(d.range.end.character, 21);
+        assert!(d.message.contains("xarent/1"), "{}", d.message);
+        assert!(
+            d.message.contains("did you mean parent/1?"),
+            "{}",
+            d.message
+        );
+    }
+
+    #[test]
+    fn defined_and_builtin_calls_produce_no_warnings() {
+        // member/2 is stdlib... but compute() parses only the buffer (no
+        // stdlib), so use a self-defined predicate + a builtin here.
+        let src = "greet(X) :- helper(X), write(X).\nhelper(_).\n";
+        assert!(compute(src).is_empty(), "{:?}", compute(src));
     }
 }

@@ -56,6 +56,9 @@ enum Commands {
         /// Build with -O0 and debug-friendly output
         #[arg(long)]
         debug: bool,
+        /// Treat calls to undefined predicates as errors, not warnings
+        #[arg(long)]
+        deny_undefined: bool,
     },
     /// Compile to a temp binary and run it immediately (never interprets)
     Run {
@@ -70,17 +73,42 @@ enum Commands {
         /// Output format: json or text
         #[arg(long, default_value = "text")]
         format: String,
+        /// Treat calls to undefined predicates as errors, not warnings
+        #[arg(long)]
+        deny_undefined: bool,
     },
     /// Parse and statically check .pl sources without compiling
     Check {
         /// Input .pl files
         inputs: Vec<PathBuf>,
+        /// Treat calls to undefined predicates as errors, not warnings
+        #[arg(long)]
+        deny_undefined: bool,
     },
     /// Generate shell completion scripts
     Completions {
         /// Shell to generate completions for
         shell: clap_complete::Shell,
     },
+}
+
+/// Run the undefined-predicate lint and report it. Prints one line per
+/// finding — `warning:` by default, `error:` under `--deny-undefined`.
+/// Returns `Err(exit_code)` only when `deny` is set and findings exist, so
+/// the caller aborts before producing a binary. A parse error is left for
+/// the compile/check path to report (avoids double-reporting).
+fn lint_undefined(sources: &[&std::path::Path], deny: bool) -> Result<(), u8> {
+    let Ok(lints) = plgc::undefined_predicate_lints(sources) else {
+        return Ok(());
+    };
+    let label = if deny { "error" } else { "warning" };
+    for m in &lints {
+        eprintln!("{label}: {m}");
+    }
+    if deny && !lints.is_empty() {
+        return Err(2);
+    }
+    Ok(())
 }
 
 fn main() -> ExitCode {
@@ -100,6 +128,7 @@ fn main() -> ExitCode {
             output,
             keep_ir,
             debug,
+            deny_undefined,
         } => {
             if inputs.is_empty() {
                 eprintln!("error: no input files");
@@ -108,6 +137,9 @@ fn main() -> ExitCode {
             let output =
                 output.unwrap_or_else(|| PathBuf::from(inputs[0].file_stem().unwrap_or_default()));
             let sources: Vec<&std::path::Path> = inputs.iter().map(|p| p.as_path()).collect();
+            if let Err(code) = lint_undefined(&sources, deny_undefined) {
+                return ExitCode::from(code);
+            }
             let opt = if debug {
                 plgc::OptLevel::O0
             } else {
@@ -126,6 +158,7 @@ fn main() -> ExitCode {
             query,
             limit,
             format,
+            deny_undefined,
         } => {
             // Compile to a temp binary and exec it — NEVER interpret.
             // Dev mode and production mode share one execution path
@@ -133,6 +166,10 @@ fn main() -> ExitCode {
             if inputs.is_empty() {
                 eprintln!("error: no input files");
                 return ExitCode::from(3);
+            }
+            let sources: Vec<&std::path::Path> = inputs.iter().map(|p| p.as_path()).collect();
+            if let Err(code) = lint_undefined(&sources, deny_undefined) {
+                return ExitCode::from(code);
             }
             let dir = match tempfile::tempdir() {
                 Ok(d) => d,
@@ -142,7 +179,6 @@ fn main() -> ExitCode {
                 }
             };
             let bin = dir.path().join("plg-run");
-            let sources: Vec<&std::path::Path> = inputs.iter().map(|p| p.as_path()).collect();
             if let Err(e) = plgc::compile_files(&sources, &bin, false, plgc::OptLevel::O0) {
                 eprintln!("error: {e}");
                 // Parse errors carry file:line:col; map them to exit 2.
@@ -166,10 +202,16 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Commands::Check { inputs } => {
+        Commands::Check {
+            inputs,
+            deny_undefined,
+        } => {
             let sources: Vec<&std::path::Path> = inputs.iter().map(|p| p.as_path()).collect();
             match plgc::check_files(&sources) {
-                Ok(()) => ExitCode::SUCCESS,
+                Ok(()) => match lint_undefined(&sources, deny_undefined) {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(code) => ExitCode::from(code),
+                },
                 Err(e) => {
                     eprintln!("error: {e}");
                     ExitCode::from(2)

@@ -1,9 +1,11 @@
-//! plg-frontend: ISO Prolog tokenizer and parser, ported from patch-prolog.
+//! plg-frontend: ISO Prolog tokenizer, parser, and source-level static
+//! analysis, ported from patch-prolog.
 //!
-//! This crate is consumed only by the compiler. Compiled Prolog binaries
-//! carry a minimal goal-only parser inside the runtime instead.
+//! Consumed by the compiler and the LSP. Compiled Prolog binaries carry a
+//! minimal goal-only parser inside the runtime instead.
 
 pub mod error;
+pub mod lint;
 pub mod parser;
 pub mod tokenizer;
 

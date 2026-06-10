@@ -62,6 +62,12 @@ Variables < Numbers < Atoms < Compounds
 - `:- dynamic(F/A).` directive declares a predicate as having clauses populated at runtime/build time externally. An undefined dynamic predicate fails silently; an undefined non-dynamic predicate raises `existence_error(procedure, F/A)` per ISO 7.7.3.
 - This preserves the linter contract ("missing data = compliant") for predicates the user explicitly declares dynamic.
 
+## Undefined-predicate lint (ISO-preserving, opt-in strictness)
+
+- A direct body goal that calls a predicate defined nowhere (no clauses, no `:- dynamic`, not a builtin/stdlib) compiles and raises a **catchable** `existence_error` *when reached* — required so `catch(foo(X), error(existence_error(procedure,_),_), R)` works and so `unknown=error` stays a runtime condition (ISO 7.7.3, 7.8.9). The program is well-formed: the call may be caught or never reached. `compile`-and-`run` of such a program is verified by `undefined_in_rule_body_raises_when_reached`.
+- Because patch-prolog is a whole-program compiler with no `assert`/`retract`, such a *direct* call can never succeed, so `plgc check`/`build`/`run` emit a **warning** (and `plgl` shows a warning squiggle) — the editor/CLI lint mature Prolog systems also provide (cf. SWI `list_undefined`). This does not change what compiles or how it runs.
+- `--deny-undefined` promotes the warning to a hard error (no binary, non-zero exit) for callers that prioritize correctness over leniency. This is opt-in strictness layered *above* the ISO-compliant default, not a divergence from it. Runtime-built goals (`call/N`, variable goals) are never flagged — only statically-resolvable direct calls.
+
 ## What We Don't Implement
 
 - `assert/1`, `retract/1` — knowledge base is immutable (compiled at build time); `:- dynamic` only enables silent-fail, not runtime mutation

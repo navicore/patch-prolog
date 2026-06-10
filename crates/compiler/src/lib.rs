@@ -99,6 +99,19 @@ pub fn check_files(sources: &[&Path]) -> Result<(), String> {
     parse_sources(sources).map(|_| ())
 }
 
+/// Run the undefined-predicate lint over `sources`, returning one rendered
+/// message per distinct undefined `(caller, callee)`. Spans the full
+/// compilation unit (stdlib included) so stdlib calls aren't flagged.
+/// `Err` only on a parse failure. Callers decide warning vs. error.
+pub fn undefined_predicate_lints(sources: &[&Path]) -> Result<Vec<String>, String> {
+    use plg_frontend::lint;
+    let (clauses, directives, interner) = parse_sources(sources)?;
+    Ok(lint::undefined_calls(&clauses, &directives, &interner)
+        .iter()
+        .map(lint::message)
+        .collect())
+}
+
 /// Render a frontend parse error as `path:line:col: message`. The
 /// frontend embeds source coordinates as `... at line N col M`; lift
 /// them into the conventional prefix so editors and CI can jump to the
