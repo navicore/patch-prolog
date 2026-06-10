@@ -3,9 +3,9 @@
 //! per-URI document cache and publishes parse-error diagnostics.
 //!
 //! Features: text sync + parse-error diagnostics, completion (built-ins
-//! from `plg_shared::builtins` + stdlib + buffer predicates), and hover
-//! (built-in docs + user clause heads). Goto-definition is the remaining
-//! `buffer.rs` consumer — see docs/design/LSP_PORT.md.
+//! from `plg_shared::builtins` + stdlib + buffer predicates), hover
+//! (built-in docs + user clause heads), and goto-definition (first clause
+//! head in the buffer). Full v1 LSP parity — see docs/design/LSP_PORT.md.
 
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -17,6 +17,7 @@ use tracing::{info, warn};
 
 mod buffer;
 mod completion;
+mod definition;
 mod diagnostics;
 mod hover;
 
@@ -69,7 +70,7 @@ impl LanguageServer for PrologLanguageServer {
                 // appears in `:-`/`?-`, not predicate position.
                 completion_provider: Some(CompletionOptions::default()),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
-                // goto-definition capability lands with its handler next.
+                definition_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -129,6 +130,22 @@ impl LanguageServer for PrologLanguageServer {
         Ok(self.documents.read().ok().and_then(|docs| {
             docs.get(uri)
                 .and_then(|doc| hover::compute(&doc.content, position))
+        }))
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
+        let position = params.text_document_position_params.position;
+        Ok(self.documents.read().ok().and_then(|docs| {
+            docs.get(&uri)
+                .and_then(|doc| definition::compute(&doc.content, position, &uri))
         }))
     }
 }

@@ -21,7 +21,9 @@ use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, Position};
 use crate::buffer::{parse_best_effort, position_to_byte_offset, predicate_indicator};
 
 /// Stdlib predicate `(name, arity)` pairs — parsed once on first access.
-fn stdlib_predicates() -> &'static [(String, usize)] {
+/// Shared with `definition` (which uses it to skip goto-def for
+/// engine-provided predicates that have no source in the user's buffer).
+pub(crate) fn stdlib_predicates() -> &'static [(String, usize)] {
     static CACHE: OnceLock<Vec<(String, usize)>> = OnceLock::new();
     CACHE.get_or_init(|| {
         let mut seen = BTreeSet::new();
