@@ -6,9 +6,13 @@
 //! `libplg_runtime.a`. It must stay dependency-free and lean.
 
 pub mod atom;
+pub mod builtins;
 pub mod interner;
+pub mod stdlib;
 pub mod term;
 
 pub use atom::AtomId;
+pub use builtins::{BUILTINS, BuiltinKind, BuiltinSpec};
 pub use interner::StringInterner;
+pub use stdlib::STDLIB_PL;
 pub use term::{Clause, FirstArgKey, Term, VarId};

@@ -28,11 +28,10 @@ pub enum OptLevel {
     O3,
 }
 
-/// The embedded standard library (ported verbatim from v1): pure-Prolog
-/// list predicates compiled into every binary, parsed BEFORE user files
-/// exactly like v1's runner. User clauses for the same name/arity
-/// append to the stdlib predicate (v1 behavior).
-pub const STDLIB_PL: &str = include_str!("../stdlib.pl");
+/// The embedded standard library source now lives in `plg-shared`
+/// (language definition, shared with the LSP); re-exported here for
+/// compatibility with existing `plgc::STDLIB_PL` users.
+pub use plg_shared::STDLIB_PL;
 
 /// Parse each source against a shared interner (v1 pattern: line/col
 /// reports stay relative to the originating file).
@@ -98,6 +97,19 @@ pub fn compile_to_ir(source: &str) -> Result<String, String> {
 /// Returns `Ok(())` only when every file parses cleanly.
 pub fn check_files(sources: &[&Path]) -> Result<(), String> {
     parse_sources(sources).map(|_| ())
+}
+
+/// Run the undefined-predicate lint over `sources`, returning one rendered
+/// message per distinct undefined `(caller, callee)`. Spans the full
+/// compilation unit (stdlib included) so stdlib calls aren't flagged.
+/// `Err` only on a parse failure. Callers decide warning vs. error.
+pub fn undefined_predicate_lints(sources: &[&Path]) -> Result<Vec<String>, String> {
+    use plg_frontend::lint;
+    let (clauses, directives, interner) = parse_sources(sources)?;
+    Ok(lint::undefined_calls(&clauses, &directives, &interner)
+        .iter()
+        .map(lint::message)
+        .collect())
 }
 
 /// Render a frontend parse error as `path:line:col: message`. The

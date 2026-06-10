@@ -17,8 +17,11 @@ build: build-runtime build-compiler
 # no-hash file stale, producing a plgc whose self-reported version
 # doesn't match its embedded runtime bytes.
 install: build
-    @echo "Installing the compiler..."
+    @echo "Installing the compiler (plgc)..."
     cargo install --path crates/compiler --force
+    @echo "Installing the language server (plgl)..."
+    cargo install --path crates/lsp --force
+    @echo "✅ Installed: plgc, plgl"
 
 # Build the Rust runtime as static library
 build-runtime:

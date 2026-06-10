@@ -1,6 +1,22 @@
 # LSP Port (ADR)
 
-**Status: proposed (next milestone after v1 parity, 2026-06-04).**
+**Status: DONE (2026-06-09).** Full v1 LSP parity reached. Deltas 1–2
+landed (builtin vocabulary table + `STDLIB_PL` now in `plg-shared`,
+`docs/design/BUILTIN_VOCAB.md`); delta-3 (point-position diagnostics)
+shipped. The crate is `plg-lsp`, binary **`plgl`** (alongside
+`plgc`/`plgr`) — not the `plg-lsp` binary name floated below. All four
+features verified end-to-end over stdio: parse-error diagnostics,
+completion (shared vocabulary + stdlib + buffer predicates,
+user-shadows-stdlib-shadows-builtin; operators/`!` filtered via
+`completable()`), hover (built-in docs + user clause heads), and
+goto-definition (first clause head; builtins/stdlib skipped, stdlib set
+derived from `STDLIB_PL` not hardcoded). The `patch-prolog.nvim` plugin
+points its default `cmd` at `plgl`.
+
+Known parity-preserving gap (not a regression): hover/goto-def use
+`word_at_position`, which extracts identifier runs only — operator-named
+builtins (`=..`, `@<`, `\+`) can't be hovered. v1 had the same limit.
+Symbol-token recognition would be an additive enhancement.
 
 Bring v1's language server to patch-prolog2. Verdict from reading v1's
 `crates/lsp` (1,259 lines: buffer/completion/definition/diagnostics/
