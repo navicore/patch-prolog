@@ -1,6 +1,14 @@
 # LSP Port (ADR)
 
-**Status: proposed (next milestone after v1 parity, 2026-06-04).**
+**Status: in progress (2026-06-09).** Deltas 1–2 landed: the builtin
+vocabulary table and `STDLIB_PL` now live in `plg-shared`
+(`docs/design/BUILTIN_VOCAB.md`). The crate is `plg-lsp`, binary **`plgl`**
+(alongside `plgc`/`plgr`) — not the `plg-lsp` binary name floated below.
+Shipped, verified end-to-end over stdio: text sync + parse-error
+diagnostics (delta-3), completion (built-ins from the shared vocabulary +
+stdlib + buffer predicates, user-shadows-stdlib-shadows-builtin), and
+hover (built-in docs + user clause heads). Remaining: goto-definition
+(the last `buffer.rs` consumer).
 
 Bring v1's language server to patch-prolog2. Verdict from reading v1's
 `crates/lsp` (1,259 lines: buffer/completion/definition/diagnostics/

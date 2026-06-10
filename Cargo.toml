@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/shared", "crates/frontend", "crates/runtime", "crates/compiler"]
+members = ["crates/shared", "crates/frontend", "crates/runtime", "crates/compiler", "crates/lsp"]
 resolver = "2"
 
 [workspace.package]
@@ -15,6 +15,15 @@ clap_complete = "4.5"
 
 # Build-script TOML parsing (version-sync enforcement)
 toml = "1.0"
+
+# LSP server (plg-lsp / `plgl` only — isolated from the runtime/compiled-binary
+# dependency graph; the no-heavy-deps rule applies to plg-shared/plg-runtime).
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["io-std", "macros", "rt"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Testing
 tempfile = "3"

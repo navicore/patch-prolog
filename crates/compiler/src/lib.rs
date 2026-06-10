@@ -28,11 +28,10 @@ pub enum OptLevel {
     O3,
 }
 
-/// The embedded standard library (ported verbatim from v1): pure-Prolog
-/// list predicates compiled into every binary, parsed BEFORE user files
-/// exactly like v1's runner. User clauses for the same name/arity
-/// append to the stdlib predicate (v1 behavior).
-pub const STDLIB_PL: &str = include_str!("../stdlib.pl");
+/// The embedded standard library source now lives in `plg-shared`
+/// (language definition, shared with the LSP); re-exported here for
+/// compatibility with existing `plgc::STDLIB_PL` users.
+pub use plg_shared::STDLIB_PL;
 
 /// Parse each source against a shared interner (v1 pattern: line/col
 /// reports stay relative to the originating file).
