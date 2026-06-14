@@ -50,6 +50,15 @@ an interpreter) is rejected.
 Dependency rule: nothing heavy (clap, serde, …) may enter `plg-runtime`
 or `plg-shared`; every byte there lands in every user binary.
 
+> **Future-work note (negotiable, case-by-case).** The zero-dep rule is a
+> strong default, not an absolute. A dependency that pays for its bytes —
+> measured against the footprint gate, not assumed — is on the table. In
+> particular, `iddqd` (multi-index maps) would be **considered** for the
+> fact-table compilation feature; see
+> `design/UNSAFE_POC_CANDIDATES.md`. The bar for any such exception:
+> demonstrate the footprint/`ldd` contract still holds, or scope the dep
+> to compiler-side crates only.
+
 ## Execution model (summary)
 
 Full detail: `design/COMPILATION_MODEL.md` and `design/RUNTIME_ABI.md`.
