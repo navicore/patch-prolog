@@ -18,6 +18,19 @@ Answer: **yes, one clean fit (the interner), one real-perf-but-high-cost
 fit (the runtime heap), and one that maps to a *future* feature, not
 today's code (multi-index → fact-table compilation).** Ranked below.
 
+**Guiding bar — learning is the motive, production-viability is the
+filter.** The point of a PoC here is to learn, but we only spend effort
+on candidates that have a *real chance of graduating to production* if
+they prove out. "Graduating" means: same public API (no caller churn),
+no weakening of the system's trust (Miri-clean, differential-proven
+equal to the safe path, every existing test still passing on its own
+terms), and a measured win that justifies the bytes/risk. A candidate
+that can't clear that bar even in principle is interesting reading, not
+work we schedule. If a PoC proves out it ships; if it doesn't, it is
+**reverted/shelved, not parked half-in** — we don't accumulate
+feature-gated curiosities that erode confidence in the codebase. The
+learning is banked either way; the tree stays clean.
+
 ## The candidates (ranked for a *learning* PoC)
 
 1. **String interner — the direct `iddqd` analogue. RECOMMENDED.**
@@ -89,8 +102,10 @@ Keep `StringInterner` as the safe baseline. Add `UnsafeInterner` behind a
   the same equivalence-pinning discipline the project already uses for
   the v1 oracle corpus.
 - **Criterion bench**: intern N distinct atoms + resolve; record the
-  delta. If it isn't a clear win, the PoC's value was the *learning*, and
-  it stays feature-gated as a documented study — that's a fine outcome.
+  delta. A clear win + Miri-clean + differential-equal → graduate it
+  (replace the safe impl behind the unchanged API). Anything short of
+  that → bank the learning, **revert the branch**; do not leave a
+  feature-gated second interner lying around.
 
 ## Domain Events
 
@@ -109,9 +124,10 @@ Keep `StringInterner` as the safe baseline. Add `UnsafeInterner` behind a
    clean (no UB reported).
 2. Differential test: safe vs unsafe interner agree on ids + `resolve`
    across the example corpus.
-3. Criterion: intern/resolve delta recorded here (win, wash, or loss —
-   all acceptable for a study; only a *win* justifies shipping later).
+3. Criterion: intern/resolve delta recorded here. Win + checks 1–2 green
+   → graduate (swap behind the unchanged API). Wash or loss → bank the
+   learning and revert; nothing feature-gated lingers.
 4. Default `just ci` untouched and green; footprint + `ldd` contract
-   unchanged (feature is off by default, zero bytes in shipped binaries).
+   unchanged.
 5. Negative check: deliberately shrink an arena chunk's lifetime → Miri
    goes red (proves the harness actually catches the unsoundness).
