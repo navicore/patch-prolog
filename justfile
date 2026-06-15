@@ -21,7 +21,9 @@ install: build
     cargo install --path crates/compiler --force
     @echo "Installing the language server (plgl)..."
     cargo install --path crates/lsp --force
-    @echo "✅ Installed: plgc, plgl"
+    @echo "Installing the REPL (plgr)..."
+    cargo install --path crates/repl --force
+    @echo "✅ Installed: plgc, plgl, plgr"
 
 # Build the Rust runtime as static library
 build-runtime:

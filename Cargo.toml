@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/shared", "crates/frontend", "crates/runtime", "crates/compiler", "crates/lsp"]
+members = ["crates/shared", "crates/frontend", "crates/runtime", "crates/compiler", "crates/lsp", "crates/repl"]
 resolver = "2"
 
 [workspace.package]
@@ -24,6 +24,15 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# REPL (plg-repl / `plgr` only — TUI deps, isolated from the
+# runtime/compiled-binary graph like the LSP deps above).
+ratatui = "0.30"
+crossterm = "0.29"
+shlex = "2.0"
+# vim-motion line editor (patch-seq's crate). Caret major: lockfile pins
+# the exact 7.x; `cargo update` moves within `<8.0.0` only when we choose.
+vim-line = "7"
 
 # Testing
 tempfile = "3"
