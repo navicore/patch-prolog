@@ -122,9 +122,9 @@ impl Session {
 
 /// Split program source into individual clause strings, each including its
 /// terminating `.` and preserving original text (comments included). Uses
-/// the real tokenizer, so quotes, line/block comments, floats (`3.14`), and
-/// char codes (`0'.`) never produce a false clause boundary — only a bare
-/// `.` end-token does. Comment-only / whitespace-only spans are dropped.
+/// the real tokenizer, so quoted atoms, line/block comments, and floats
+/// (`3.14`) never produce a false clause boundary — only a bare `.`
+/// end-token does. Comment-only / whitespace-only spans are dropped.
 pub fn split_clauses(src: &str) -> Vec<String> {
     let Ok(tokens) = Tokenizer::tokenize(src) else {
         // Let the caller's whole-program parse report the real error.
@@ -207,5 +207,16 @@ mod tests {
         // comment rides with the clause that follows it.
         let got = split_clauses("% header\nfoo.\n% trailing\n");
         assert_eq!(got, ["% header\nfoo."]);
+    }
+
+    #[test]
+    fn block_comment_does_not_split_and_rides_with_clause() {
+        // A `/* */` comment between clauses rides with the following clause...
+        assert_eq!(
+            split_clauses("p. /* between */ q."),
+            ["p.", "/* between */ q."]
+        );
+        // ...and a `.` *inside* a block comment is not a clause boundary.
+        assert_eq!(split_clauses("p(/* . */ x)."), ["p(/* . */ x)."]);
     }
 }
