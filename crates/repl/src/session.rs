@@ -106,6 +106,33 @@ impl Session {
         Ok(n)
     }
 
+    /// Predicate names defined or declared in the buffer — clause heads
+    /// plus `:- dynamic` declarations — for completion. Re-parses the buffer
+    /// (cheap; buffers are small) and resolves functor atoms; on a parse
+    /// error (mid-edit) returns what's available, else empty.
+    pub fn predicate_names(&self) -> Vec<String> {
+        let mut interner = StringInterner::new();
+        let Ok((clauses, directives)) =
+            Parser::parse_program_with_directives(&self.source(), &mut interner)
+        else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = clauses
+            .iter()
+            .filter_map(|c| c.head.functor_arity())
+            .map(|(id, _)| interner.resolve(id).to_string())
+            .chain(
+                directives
+                    .dynamic
+                    .iter()
+                    .map(|(id, _)| interner.resolve(*id).to_string()),
+            )
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
     pub fn reset(&mut self) {
         self.clauses.clear();
         self.dirty = false;
@@ -160,7 +187,18 @@ fn byte_offset(src: &str, line: usize, col: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::split_clauses;
+    use super::{Session, split_clauses};
+
+    #[test]
+    fn predicate_names_cover_heads_and_dynamic_decls() {
+        let mut s = Session::default();
+        s.load_source(
+            "parent(tom, bob).\nancestor(X, Y) :- parent(X, Y).\n:- dynamic(extra/1).\ntest.",
+        )
+        .unwrap();
+        // Sorted, deduped: rule + fact heads plus the `:- dynamic` predicate.
+        assert_eq!(s.predicate_names(), ["ancestor", "extra", "parent", "test"]);
+    }
 
     #[test]
     fn splits_multiple_clauses_in_order() {

@@ -140,7 +140,8 @@ impl App {
         if prefix.is_empty() {
             return;
         }
-        let cands = completion::candidates(&prefix, &[]);
+        let preds = self.session.predicate_names();
+        let cands = completion::candidates(&prefix, &preds);
         if let Some(first) = cands.first() {
             let base = &text[..text.len() - prefix.len()];
             self.input.set(&format!("{base}{first}"));
