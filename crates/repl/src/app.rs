@@ -266,7 +266,16 @@ impl App {
                 if self.session.clauses.is_empty() {
                     self.log("  (empty session)");
                 } else {
-                    let listing = self.session.clauses.join("\n");
+                    let mut listing = String::new();
+                    for (i, clause) in self.session.clauses.iter().enumerate() {
+                        for (j, line) in clause.lines().enumerate() {
+                            if j == 0 {
+                                listing.push_str(&format!("  {:>3}  {line}\n", i + 1));
+                            } else {
+                                listing.push_str(&format!("       {line}\n"));
+                            }
+                        }
+                    }
                     self.log_block(&listing);
                 }
             }
@@ -283,13 +292,13 @@ impl App {
         }
     }
 
-    /// Consult a file into the session (append its text + recompile).
-    /// TODO: split into per-clause entries so `:list` reads naturally.
+    /// Consult a file: validate it whole, split it into individual ordered
+    /// clauses in the session buffer, then recompile.
     pub fn load_file(&mut self, path: &Path) {
         match std::fs::read_to_string(path) {
-            Ok(text) => match self.session.add_clause(text.trim()) {
-                Ok(()) => {
-                    self.log(format!("  loaded {}", path.display()));
+            Ok(text) => match self.session.load_source(&text) {
+                Ok(n) => {
+                    self.log(format!("  loaded {} ({n} clause(s))", path.display()));
                     self.recompile();
                 }
                 Err(e) => self.log(format!("  error loading {}: {e}", path.display())),
