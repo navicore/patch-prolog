@@ -15,8 +15,10 @@ pub enum Outcome {
     Continue,
     /// The user submitted this line.
     Submit(String),
-    /// History recall: `true` = previous, `false` = next.
-    History(bool),
+    /// History recall — previous (older) entry.
+    HistoryPrev,
+    /// History recall — next (newer) entry.
+    HistoryNext,
     /// The user cancelled the current line.
     Cancel,
 }
@@ -87,9 +89,14 @@ impl Editor {
                 self.inner.reset();
                 Outcome::Submit(format!(":{cmd}"))
             }
-            Some(Action::HistoryPrev) => Outcome::History(true),
-            Some(Action::HistoryNext) => Outcome::History(false),
+            Some(Action::HistoryPrev) => Outcome::HistoryPrev,
+            Some(Action::HistoryNext) => Outcome::HistoryNext,
             Some(Action::Cancel) => Outcome::Cancel,
+            // History-search vocabulary is reserved for a future vim-line
+            // search sub-mode — not emitted today, so a no-op here.
+            Some(Action::HistorySearch(_) | Action::HistoryAccept | Action::HistoryCancel) => {
+                Outcome::Continue
+            }
             None => Outcome::Continue,
         }
     }

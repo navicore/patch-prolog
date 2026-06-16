@@ -1,50 +1,46 @@
-//! TUI rendering: a scrollback pane, the input line, and a status line.
-//!
-//! TODO(vim-line): once the `vim-line` editor is wired, surface its mode
-//! (NORMAL/INSERT) in the input title and drive the cursor from it.
+//! Terminal-style rendering: one borderless transcript that flows
+//! top-down, with the live input inline on the last line behind the
+//! prompt — like a normal terminal REPL, not a boxed TUI. The vi-mode is
+//! shown dimly bottom-right only when *not* in insert mode (so ordinary
+//! typing stays clean, but you can never get silently stuck in normal
+//! mode). Helper panes (IR, etc.) are a later, on-demand addition.
 
-use crate::app::App;
+use crate::app::{App, CONT, PROMPT};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Position};
+use ratatui::layout::{Position, Rect};
 use ratatui::style::Stylize;
-use ratatui::text::Line as TLine;
-use ratatui::widgets::{Block, Paragraph, Wrap};
+use ratatui::text::Line;
+use ratatui::widgets::Paragraph;
 
 pub fn render(f: &mut Frame, app: &App) {
-    let areas = Layout::vertical([
-        Constraint::Min(1),
-        Constraint::Length(3),
-        Constraint::Length(1),
-    ])
-    .split(f.area());
+    let area = f.area();
 
-    let log: Vec<TLine> = app.output.iter().map(|l| TLine::raw(l.clone())).collect();
-    let scrollback = Paragraph::new(log)
-        .block(Block::bordered().title(" plgr — session "))
-        .wrap(Wrap { trim: false });
-    f.render_widget(scrollback, areas[0]);
+    // Transcript + the live input line behind a prompt (continuation
+    // prompt while a multi-line clause is still open).
+    let prompt = if app.pending.is_empty() { PROMPT } else { CONT };
+    let input_line = format!("{prompt}{}", app.input.text());
+    let mut lines: Vec<Line> = app.output.iter().map(|l| Line::raw(l.clone())).collect();
+    lines.push(Line::raw(input_line));
 
-    let hint = if app.pending.is_empty() {
-        "?- query · clause. · :help"
-    } else {
-        "continuing clause — end with `.`"
-    };
-    let title = format!(" input [{}]  ({hint}) ", app.input.status());
-    let input = Paragraph::new(app.input.text()).block(Block::bordered().title(title));
-    f.render_widget(input, areas[1]);
+    // Flow from the top; once the transcript is taller than the screen,
+    // drop the oldest lines so the newest (and the prompt) stay visible.
+    let height = area.height.max(1) as usize;
+    let skip = lines.len().saturating_sub(height);
+    let visible = lines.split_off(skip);
+    let cursor_row = (visible.len() - 1) as u16;
+    f.render_widget(Paragraph::new(visible), area);
 
-    // Cursor: +1 for the border, plus the editor's char-column.
-    let col = areas[1].x + 1 + app.input.cursor_col() as u16;
-    f.set_cursor_position(Position::new(col, areas[1].y + 1));
+    let col = (prompt.chars().count() + app.input.cursor_col()) as u16;
+    f.set_cursor_position(Position::new(area.x + col, area.y + cursor_row));
 
-    let status = format!(
-        " {} clause(s){}  ·  :load :list :reset :quit ",
-        app.session.clauses.len(),
-        if app.session.dirty {
-            " · modified (recompiles on next query)"
-        } else {
-            ""
-        },
-    );
-    f.render_widget(Paragraph::new(status).dim(), areas[2]);
+    // vi-mode indicator — only when not in insert mode.
+    let mode = app.input.status();
+    if !mode.eq_ignore_ascii_case("insert") {
+        let label = format!(" -- {} -- ", mode.to_uppercase());
+        let w = label.chars().count() as u16;
+        if area.width > w {
+            let rect = Rect::new(area.right() - w, area.bottom() - 1, w, 1);
+            f.render_widget(Paragraph::new(label).dim(), rect);
+        }
+    }
 }

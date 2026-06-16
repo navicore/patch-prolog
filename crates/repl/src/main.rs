@@ -68,6 +68,7 @@ fn run(file: Option<PathBuf>) -> Result<(), String> {
     }
 
     let result = event_loop(&mut terminal, &mut app);
+    app.save_history();
 
     let _ = disable_raw_mode();
     let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);

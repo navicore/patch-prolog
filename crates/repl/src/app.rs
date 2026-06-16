@@ -10,10 +10,18 @@ use crate::input::{Editor, Outcome};
 use crate::run::{self, RunResult};
 use crate::session::{Input, MetaCmd, Session, classify};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use vim_line::history::{Recall, Store};
 
 /// Solutions fetched per query batch (paging for `;` is a phase-2 TODO).
 const QUERY_LIMIT: usize = 100;
+
+/// The input prompt. Neutral (not `?-`): the same prompt accepts clause
+/// definitions and `?-` queries, so it must not imply query context —
+/// the user types their own `?-` for a query (echoed as `plg> ?- goal.`).
+pub const PROMPT: &str = "plg> ";
+/// Continuation prompt for multi-line clause entry (SWI-style).
+pub const CONT: &str = "|  ";
 
 #[derive(Default)]
 pub struct App {
@@ -24,15 +32,15 @@ pub struct App {
     pub pending: String,
     pub should_quit: bool,
     compiled: Option<Compiled>,
-    /// Submitted lines, oldest first, for Up/Down recall.
-    history: Vec<String>,
-    /// Cursor into `history` during recall; `None` = editing a fresh line.
-    hist_pos: Option<usize>,
+    /// Shared command-history store (vim-line): ring + dedup + draft stash.
+    /// Drives `k`/`j` and arrow recall; persisted across sessions.
+    store: Store,
 }
 
 impl App {
     pub fn new() -> Self {
         let mut app = App::default();
+        app.load_history();
         app.log("plgr — patch-prolog REPL.  :help for commands, :quit to exit.");
         app
     }
@@ -55,31 +63,61 @@ impl App {
             _ => match self.input.handle(key) {
                 Outcome::Continue => {}
                 Outcome::Submit(line) => self.submit(line),
-                Outcome::History(prev) => self.history_nav(prev),
+                Outcome::HistoryPrev => self.history_prev(),
+                Outcome::HistoryNext => self.history_next(),
                 Outcome::Cancel => self.input.clear(),
             },
         }
     }
 
-    /// Recall a previous/next submitted line into the editor.
-    fn history_nav(&mut self, prev: bool) {
-        if self.history.is_empty() {
-            return;
+    /// Recall the previous (older) history entry, stashing the in-progress
+    /// line as the draft on the first step (the store handles both).
+    fn history_prev(&mut self) {
+        if let Some(Recall::Entry(entry)) = self.store.prev(&self.input.text()) {
+            let entry = entry.to_string();
+            self.input.set(&entry);
         }
-        let pos = match (self.hist_pos, prev) {
-            (None, true) => self.history.len() - 1,
-            (None, false) => return,
-            (Some(i), true) => i.saturating_sub(1),
-            (Some(i), false) if i + 1 < self.history.len() => i + 1,
-            (Some(_), false) => {
-                self.hist_pos = None;
-                self.input.set("");
-                return;
-            }
+    }
+
+    /// Recall the next (newer) entry, or restore the stashed draft once we
+    /// step back past the newest entry.
+    fn history_next(&mut self) {
+        let recalled = match self.store.next() {
+            Some(Recall::Entry(e)) | Some(Recall::Draft(e)) => Some(e.to_string()),
+            None => None,
         };
-        self.hist_pos = Some(pos);
-        let entry = self.history[pos].clone();
-        self.input.set(&entry);
+        if let Some(text) = recalled {
+            self.input.set(&text);
+        }
+    }
+
+    /// History file path: `$HOME/.local/share/plgr_history` (mirrors seqr's
+    /// convention). The store owns dedup/bounding; this host owns the I/O.
+    fn history_path() -> Option<PathBuf> {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share/plgr_history"))
+    }
+
+    /// Seed the store from disk at startup. Missing/unreadable file = empty
+    /// history; the store bounds itself to its capacity.
+    fn load_history(&mut self) {
+        let Some(path) = Self::history_path() else {
+            return;
+        };
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            self.store.load(text.lines().filter(|l| !l.is_empty()));
+        }
+    }
+
+    /// Write the store's deduped, bounded entries back to disk (best effort).
+    pub fn save_history(&self) {
+        let Some(path) = Self::history_path() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let body: String = self.store.entries().map(|e| format!("{e}\n")).collect();
+        let _ = std::fs::write(&path, body);
     }
 
     /// Replace the word under the cursor with the first completion.
@@ -106,10 +144,6 @@ impl App {
     /// Accumulate input until a logical entry is complete, then dispatch.
     /// Meta-commands and queries are single-line; clauses run to a `.`.
     fn submit(&mut self, line: String) {
-        if !line.trim().is_empty() {
-            self.history.push(line.clone());
-        }
-        self.hist_pos = None;
         if self.pending.is_empty() {
             let t = line.trim();
             if t.is_empty() {
@@ -131,37 +165,44 @@ impl App {
     }
 
     fn dispatch(&mut self, entry: String) {
-        // Echo per input kind — a clause is a definition, not a `?-` query.
-        match classify(&entry) {
+        let kind = classify(&entry);
+        if matches!(kind, Input::Empty) {
+            return;
+        }
+        // Record the complete logical entry in history (the store dedups
+        // consecutive duplicates and ignores empties).
+        self.store.push(entry.trim());
+        // Echo what was typed at the prompt, terminal-style — the literal
+        // entry (including the user's own `?-` for queries), continuation
+        // lines under a `|` like SWI.
+        for (i, line) in entry.trim().lines().enumerate() {
+            if i == 0 {
+                self.log(format!("{PROMPT}{line}"));
+            } else {
+                self.log(format!("{CONT}{line}"));
+            }
+        }
+        match kind {
             Input::Empty => {}
-            Input::Meta(cmd) => {
-                self.log(entry.trim().to_string());
-                self.meta(cmd);
-            }
-            Input::Query(goal) => {
-                self.log(format!("?- {goal}."));
-                self.run_query(&goal);
-            }
-            Input::Clause(c) => {
-                self.log(c.clone());
-                match self.session.add_clause(&c) {
-                    Ok(()) => {
-                        self.recompile();
-                        if !self.session.dirty {
-                            self.log(format!(
-                                "  defined.  ({} in session)",
-                                self.session.clauses.len()
-                            ));
-                        }
-                    }
-                    Err(e) => {
-                        self.log(format!("  error: {e}"));
-                        if let Some(hint) = capitalization_hint(&c) {
-                            self.log(format!("  hint: {hint}"));
-                        }
+            Input::Meta(cmd) => self.meta(cmd),
+            Input::Query(goal) => self.run_query(&goal),
+            Input::Clause(c) => match self.session.add_clause(&c) {
+                Ok(()) => {
+                    self.recompile();
+                    if !self.session.dirty {
+                        self.log(format!(
+                            "  defined.  ({} in session)",
+                            self.session.clauses.len()
+                        ));
                     }
                 }
-            }
+                Err(e) => {
+                    self.log(format!("  error: {e}"));
+                    if let Some(hint) = capitalization_hint(&c) {
+                        self.log(format!("  hint: {hint}"));
+                    }
+                }
+            },
         }
     }
 

@@ -27,6 +27,7 @@ plg-shared = { path = "../shared" }
 ratatui.workspace = true
 crossterm.workspace = true
 shlex.workspace = true
-vim-line.workspace = true
+# `history` enables vim-line's pure command-history store (vim_line::history).
+vim-line = { workspace = true, features = ["history"] }
 tempfile.workspace = true
 clap.workspace = true
