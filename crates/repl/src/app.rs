@@ -198,8 +198,12 @@ impl App {
             Input::Empty => {}
             Input::Meta(cmd) => self.meta(cmd),
             Input::Query(goal) => self.run_query(&goal),
-            Input::Clause(c) => match self.session.add_clause(&c) {
-                Ok(()) => {
+            // A typed entry may contain more than one clause (e.g. a paste
+            // of `foo. bar.`); split it into individual ordered entries via
+            // the same path `:load` uses, so the buffer stays one-clause-per
+            // -entry and `:list` reads right.
+            Input::Clause(c) => match self.session.load_source(&c) {
+                Ok(_) => {
                     self.recompile();
                     if !self.session.dirty {
                         self.log(format!(

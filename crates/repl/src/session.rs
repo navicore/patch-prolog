@@ -86,22 +86,14 @@ impl Session {
         s
     }
 
-    /// Validate that `entry` parses (clauses are independent in ISO
-    /// Prolog, so it is checked on its own — keeping error line/col
-    /// relative to what the user typed) and, if so, append it and mark
-    /// the session dirty. On a parse error the buffer is left untouched.
-    pub fn add_clause(&mut self, entry: &str) -> Result<(), String> {
-        let mut interner = StringInterner::new();
-        Parser::parse_program_with_directives(entry, &mut interner)?;
-        self.clauses.push(entry.to_string());
-        self.dirty = true;
-        Ok(())
-    }
-
-    /// Consult `text` as a whole program: validate it once (one clear error
-    /// for a bad file), then append its clauses as **individual ordered
-    /// entries** so `:list` and per-clause handling read naturally. Returns
-    /// the number of clauses added.
+    /// Validate `text` as a whole program (one clear error, line/col
+    /// relative to `text`; the buffer is left untouched on failure), then
+    /// append its clauses as **individual ordered entries** so `:list` and
+    /// per-clause handling read naturally. Returns the number added.
+    ///
+    /// This is the single entry path for both `:load` and interactive
+    /// clause entry — a typed `foo. bar.` lands as two entries, same as a
+    /// consulted file.
     pub fn load_source(&mut self, text: &str) -> Result<usize, String> {
         let mut interner = StringInterner::new();
         Parser::parse_program_with_directives(text, &mut interner)?;
