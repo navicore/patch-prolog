@@ -110,6 +110,12 @@ impl App {
 
     /// Write the store's deduped, bounded entries back to disk (best effort).
     pub fn save_history(&self) {
+        // Never overwrite a real history file with nothing: an empty store
+        // means either a fresh empty session or a failed `load_history`
+        // (transient read error) — in both cases, leave the file alone.
+        if self.store.is_empty() {
+            return;
+        }
         let Some(path) = Self::history_path() else {
             return;
         };
@@ -149,7 +155,13 @@ impl App {
             if t.is_empty() {
                 return;
             }
-            if t.starts_with(':') || t.starts_with("?-") || t.ends_with('.') {
+            // Dispatch a complete line immediately; otherwise accumulate.
+            // A meta-command (`:` but not the `:-` directive) is single-line
+            // by spec; everything else — clause, `?-` query, `:-` directive —
+            // runs to a terminating `.`, so a one-line query/directive must
+            // NOT short-circuit before its `.` (it'd truncate mid-goal).
+            let is_meta = t.starts_with(':') && !t.starts_with(":-");
+            if is_meta || t.ends_with('.') {
                 self.dispatch(line);
             } else {
                 self.pending = line;

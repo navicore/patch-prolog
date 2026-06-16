@@ -65,15 +65,16 @@ clause-terminating `.` (SWI convention). Meta-commands: `:load` `:list`
 `:edit` (`$EDITOR` via `shlex`) `:reset` `:save` `:help` `:quit`. History
 persisted under XDG/`home` like seqr.
 
-**Presentation model (revisit — scaffold diverged).** seqr, though a
-ratatui app, *presents* as a line-oriented terminal REPL: a `seq>` prompt
-with inline results (`»`), no borders, and the TUI-ness (IR / helper
-panes) hidden until explicitly opened. The M6 scaffold instead drew
-visible bordered panes (input box + scrollback box) in the alternate
-screen — a "clearly a TUI" look. Target seqr's model: a terminal-native
-transcript by default (`?- ` prompt, inline solutions), panes revealed on
-demand. This is a `ui.rs` rendering change only — the input/engine/session
-split underneath is unaffected.
+**Presentation model (landed).** Like seqr — a ratatui app that
+*presents* as a line-oriented terminal REPL: a borderless transcript that
+flows top-down, the live input inline behind a prompt, results below, no
+boxes (helper/IR panes are a later, on-demand addition). The prompt is
+**`plg> `, deliberately neutral** — not `?-`. The same prompt accepts both
+clause definitions and `?-` queries, so a `?-` prompt would mislead for
+definitions and double up when the user types `?- goal.`; the user types
+their own `?-`, echoed as `plg> ?- goal.`. Multi-line clauses continue
+under `|  `. The vi-mode shows dimly bottom-right only when not in insert
+mode.
 
 Phase-2 candidates (not blocking): an LLVM-IR visualization pane (seqr
 has one — on-brand for the correctness ethos), LSP-client completions,
