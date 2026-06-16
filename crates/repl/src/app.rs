@@ -62,15 +62,24 @@ impl App {
     /// recompile. Atomic: a syntactically bad edit is rejected and the
     /// existing buffer is left intact.
     pub fn apply_edit(&mut self, content: &str) {
-        let mut next = Session::default();
-        match next.load_source(content) {
+        match self.replace_session(content) {
             Ok(n) => {
-                self.session = next;
                 self.log(format!("  edited.  ({n} clause(s))"));
                 self.recompile();
             }
             Err(e) => self.log(format!("  edit rejected (buffer unchanged): {e}")),
         }
+    }
+
+    /// Pure core of the `:edit` reload: parse `content` as a whole program
+    /// on a *scratch* session and swap it in only on success (the buffer is
+    /// untouched on a parse error). No recompile here, so the atomic-reject
+    /// guarantee is unit-testable without invoking the compiler.
+    fn replace_session(&mut self, content: &str) -> Result<usize, String> {
+        let mut next = Session::default();
+        let n = next.load_source(content)?;
+        self.session = next;
+        Ok(n)
     }
 
     fn log_block(&mut self, text: &str) {
@@ -380,3 +389,29 @@ const HELP: &str = "\
     :reset                    clear the session
     :help / :quit             this help / exit
   multi-line clauses continue until a line ends with `.`";
+
+#[cfg(test)]
+mod tests {
+    use super::App;
+
+    #[test]
+    fn replace_session_rejects_bad_source_and_keeps_buffer() {
+        let mut app = App::default();
+        app.replace_session("ok(1).").unwrap();
+        let before = app.session.clauses.clone();
+        let err = app.replace_session("garbage(").unwrap_err();
+        assert!(!err.is_empty());
+        assert_eq!(
+            app.session.clauses, before,
+            "a bad edit must leave the buffer untouched"
+        );
+    }
+
+    #[test]
+    fn replace_session_swaps_in_split_clauses() {
+        let mut app = App::default();
+        let n = app.replace_session("foo. bar(X) :- foo.").unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(app.session.clauses, ["foo.", "bar(X) :- foo."]);
+    }
+}

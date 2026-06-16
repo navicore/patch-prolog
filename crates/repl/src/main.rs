@@ -107,23 +107,31 @@ fn edit_session(
 ) -> io::Result<()> {
     use std::io::Write;
 
+    let before = app.session.source();
     let mut file = tempfile::Builder::new()
         .prefix("plgr-session-")
         .suffix(".pl")
         .tempfile()?;
-    file.write_all(app.session.source().as_bytes())?;
+    file.write_all(before.as_bytes())?;
     file.flush()?;
     let path = file.path().to_path_buf();
 
-    // Suspend the TUI and give the terminal to the editor.
+    // Suspend the TUI. Best-effort (`let _`): if leaving the alternate
+    // screen fails we still try to run the editor, and the panic hook is the
+    // backstop. Resume below uses `?` — failing to restore the terminal IS
+    // fatal, so the asymmetry is deliberate.
     let _ = disable_raw_mode();
     let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
     let _ = terminal.show_cursor();
 
-    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-    // shlex so `EDITOR="code --wait"` and quoted paths work.
+    // `$VISUAL` (full-screen editor) wins over `$EDITOR`, then `vi` — the
+    // conventional precedence. shlex so `EDITOR="code --wait"` and quoted
+    // paths work; an empty/whitespace value falls through to `vi`.
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".to_string());
     let parts = shlex::split(&editor).filter(|p| !p.is_empty());
-    let status = match parts {
+    let status = match &parts {
         Some(parts) => std::process::Command::new(&parts[0])
             .args(&parts[1..])
             .arg(&path)
@@ -131,17 +139,29 @@ fn edit_session(
         None => std::process::Command::new("vi").arg(&path).status(),
     };
 
-    // Resume the TUI.
+    // Resume the TUI (fatal on failure — see the suspend comment).
     enable_raw_mode()?;
     execute!(terminal.backend_mut(), EnterAlternateScreen)?;
     terminal.hide_cursor()?;
     terminal.clear()?;
 
     match status {
-        Ok(_) => {
+        // Reload only on a clean exit AND an actual change — `:cq`/abnormal
+        // exit or a no-op save should not recompile or claim "edited".
+        Ok(s) if s.success() => {
             let content = std::fs::read_to_string(&path).unwrap_or_default();
-            app.apply_edit(&content);
+            if content == before {
+                app.note("  :edit — no changes");
+            } else {
+                app.apply_edit(&content);
+            }
         }
+        Ok(s) => app.note(format!(
+            "  :edit aborted (editor exited {})",
+            s.code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "abnormally".to_string())
+        )),
         Err(e) => app.note(format!("  :edit could not launch '{editor}': {e}")),
     }
     Ok(())
