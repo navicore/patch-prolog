@@ -90,6 +90,59 @@ fn event_loop(
         {
             app.handle_key(key);
         }
+        if app.should_edit {
+            app.should_edit = false;
+            edit_session(terminal, app)?;
+        }
+    }
+    Ok(())
+}
+
+/// `:edit` — write the session buffer to a temp `.pl`, hand the terminal to
+/// `$EDITOR` (default `vi`), then reload the edited buffer and recompile.
+/// `main` owns the `Terminal`, so the suspend/resume lives here.
+fn edit_session(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut app::App,
+) -> io::Result<()> {
+    use std::io::Write;
+
+    let mut file = tempfile::Builder::new()
+        .prefix("plgr-session-")
+        .suffix(".pl")
+        .tempfile()?;
+    file.write_all(app.session.source().as_bytes())?;
+    file.flush()?;
+    let path = file.path().to_path_buf();
+
+    // Suspend the TUI and give the terminal to the editor.
+    let _ = disable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let _ = terminal.show_cursor();
+
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+    // shlex so `EDITOR="code --wait"` and quoted paths work.
+    let parts = shlex::split(&editor).filter(|p| !p.is_empty());
+    let status = match parts {
+        Some(parts) => std::process::Command::new(&parts[0])
+            .args(&parts[1..])
+            .arg(&path)
+            .status(),
+        None => std::process::Command::new("vi").arg(&path).status(),
+    };
+
+    // Resume the TUI.
+    enable_raw_mode()?;
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    terminal.hide_cursor()?;
+    terminal.clear()?;
+
+    match status {
+        Ok(_) => {
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            app.apply_edit(&content);
+        }
+        Err(e) => app.note(format!("  :edit could not launch '{editor}': {e}")),
     }
     Ok(())
 }

@@ -31,6 +31,9 @@ pub struct App {
     /// Partial multi-line clause accumulated until a terminating `.`.
     pub pending: String,
     pub should_quit: bool,
+    /// Set by `:edit`; `main` performs the terminal-suspend → `$EDITOR`
+    /// dance (it owns the `Terminal`) and clears this.
+    pub should_edit: bool,
     compiled: Option<Compiled>,
     /// Shared command-history store (vim-line): ring + dedup + draft stash.
     /// Drives `k`/`j` and arrow recall; persisted across sessions.
@@ -47,6 +50,27 @@ impl App {
 
     fn log(&mut self, msg: impl Into<String>) {
         self.output.push(msg.into());
+    }
+
+    /// Append a transcript line on behalf of the host (e.g. `:edit` status
+    /// from `main`, which owns the terminal but not the scrollback).
+    pub fn note(&mut self, msg: impl Into<String>) {
+        self.log(msg);
+    }
+
+    /// Replace the whole session with edited source (from `:edit`) and
+    /// recompile. Atomic: a syntactically bad edit is rejected and the
+    /// existing buffer is left intact.
+    pub fn apply_edit(&mut self, content: &str) {
+        let mut next = Session::default();
+        match next.load_source(content) {
+            Ok(n) => {
+                self.session = next;
+                self.log(format!("  edited.  ({n} clause(s))"));
+                self.recompile();
+            }
+            Err(e) => self.log(format!("  edit rejected (buffer unchanged): {e}")),
+        }
     }
 
     fn log_block(&mut self, text: &str) {
@@ -291,7 +315,7 @@ impl App {
             }
             MetaCmd::Load(path) => self.load_file(Path::new(&path)),
             MetaCmd::Save(path) => self.save(path.as_deref()),
-            MetaCmd::Edit => self.log("  :edit is not wired yet (TODO: $EDITOR via shlex)"),
+            MetaCmd::Edit => self.should_edit = true,
             MetaCmd::Help => self.log_block(HELP),
             MetaCmd::Unknown(c) => self.log(format!("  unknown command: {c} (try :help)")),
         }
@@ -351,6 +375,7 @@ const HELP: &str = "\
     ?- goal.                  run a query against the current program
     :load FILE                consult a .pl file into the session
     :list                     show the session buffer
+    :edit                     edit the whole session in $EDITOR, recompile
     :save FILE                write the session buffer to FILE
     :reset                    clear the session
     :help / :quit             this help / exit
