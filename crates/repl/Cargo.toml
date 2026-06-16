@@ -1,0 +1,33 @@
+[package]
+name = "plg-repl"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Interactive REPL for patch-prolog (`plgr`) — drives the compiler, never interprets"
+repository = "https://git.navicore.tech/navicore/patch-prolog"
+keywords = ["repl", "prolog", "patch-prolog", "tui"]
+categories = ["development-tools", "command-line-utilities"]
+
+# The crate is `plg-repl`; the installed binary is `plgr` (alongside plgc/plgl).
+[[bin]]
+name = "plgr"
+path = "src/main.rs"
+
+[dependencies]
+# Engine frontend — the REPL parses/validates input and sources its
+# completion vocabulary here. It NEVER links the solver; per
+# LESSONS_FROM_V1 rule 3 it drives the compiler (see docs/design/REPL.md).
+plg-frontend = { path = "../frontend" }
+plg-shared = { path = "../shared" }
+
+# TUI + vim-motion line editing. `vim-line` (patch-seq's editor) is
+# host-agnostic; `src/input.rs` adapts crossterm key events to it and
+# owns the text buffer per its contract. shlex is for the `:edit` flow.
+ratatui.workspace = true
+crossterm.workspace = true
+shlex.workspace = true
+# `history` enables vim-line's pure command-history store (vim_line::history).
+vim-line = { workspace = true, features = ["history"] }
+tempfile.workspace = true
+clap.workspace = true
