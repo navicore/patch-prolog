@@ -9,6 +9,12 @@
 //! text lines into `count` solutions. Re-rendering the JSON term objects
 //! ourselves would duplicate the engine's writer, so we don't.
 //!
+//! Paging past a batch re-fetches at a doubled limit (capped by the caller),
+//! so a full enumeration of N solutions re-renders ~2–3N total — geometric,
+//! i.e. linear in N, across ~log(N) spawns. Both passes assume the engine is
+//! deterministic across runs (pure Prolog — no random/assert/time), so the
+//! JSON `count` and the text lines describe the same solution set.
+//!
 //! Spawns nul stdin (keystrokes can't leak into the child) and kill on a
 //! `PLG_REPL_TIMEOUT` so a divergent query can't hang the REPL.
 
@@ -77,12 +83,11 @@ pub fn fetch(binary: &Path, goal: &str, limit: usize) -> Fetch {
     if let Some(msg) = json_error(&json) {
         return Fetch::Failed(msg);
     }
-    match json_count(&json) {
+    let count = match json_count(&json) {
         Some(0) | None => return Fetch::NoSolutions,
-        _ => {}
-    }
-    let count = json_count(&json).unwrap_or(0);
-    let exhausted = json.contains("\"exhausted\":true");
+        Some(n) => n,
+    };
+    let exhausted = json_exhausted(&json);
 
     // TEXT for canonical rendering; split into `count` solutions.
     let text = match run_raw(binary, &query_args(goal, limit, "text")) {
@@ -90,25 +95,48 @@ pub fn fetch(binary: &Path, goal: &str, limit: usize) -> Fetch {
         Raw::Timeout(t) => return Fetch::Timeout(t),
         Raw::SpawnError(e) => return Fetch::Error(e),
     };
-    Fetch::Found {
-        solutions: split_solutions(&text, count),
-        exhausted,
+    match split_solutions(&text, count) {
+        Some(solutions) => Fetch::Found {
+            solutions,
+            exhausted,
+        },
+        // The JSON count and text lines disagreed — surface it instead of
+        // silently paging through a wrong grouping.
+        None => Fetch::Failed("malformed query output (lines vs. count)".to_string()),
     }
+}
+
+/// Value slice of a *top-level* JSON field `"key":` — one preceded by `{` or
+/// `,` — so a same-named key *nested* inside a solution term can't be matched
+/// by accident if the header ever grows fields.
+fn top_field<'a>(json: &'a str, key: &str) -> Option<&'a str> {
+    let needle = format!("\"{key}\":");
+    let bytes = json.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = json[from..].find(&needle) {
+        let at = from + rel;
+        if matches!(at.checked_sub(1).map(|i| bytes[i]), Some(b'{') | Some(b',')) {
+            return Some(&json[at + needle.len()..]);
+        }
+        from = at + needle.len();
+    }
+    None
 }
 
 /// Top-level `"error":"..."` message, if the reply is an error. The engine's
 /// error strings contain no embedded `"`, so the first `"}` closes it.
 fn json_error(json: &str) -> Option<String> {
-    let start = json.find("\"error\":\"")? + "\"error\":\"".len();
-    let rest = &json[start..];
-    let end = rest.find("\"}").unwrap_or(rest.len());
+    let rest = top_field(json, "error")?.strip_prefix('"')?;
+    let end = rest
+        .find("\"}")
+        .or_else(|| rest.find('"'))
+        .unwrap_or(rest.len());
     Some(rest[..end].to_string())
 }
 
 /// Top-level `"count":N`.
 fn json_count(json: &str) -> Option<usize> {
-    let start = json.find("\"count\":")? + "\"count\":".len();
-    json[start..]
+    top_field(json, "count")?
         .chars()
         .take_while(char::is_ascii_digit)
         .collect::<String>()
@@ -116,21 +144,27 @@ fn json_count(json: &str) -> Option<usize> {
         .ok()
 }
 
+/// Top-level `"exhausted":true`.
+fn json_exhausted(json: &str) -> bool {
+    top_field(json, "exhausted").is_some_and(|v| v.starts_with("true"))
+}
+
 /// Split canonical `--format text` output into `count` solution strings.
 /// Every solution emits the same number of `Var = Value` lines (anonymous
 /// vars aren't reported; an all-anonymous solution emits `true.`), so the
-/// non-blank lines divide evenly into `count` groups. A non-uniform shape
-/// (shouldn't happen for valid output) degrades to one line per solution.
-fn split_solutions(text: &str, count: usize) -> Vec<String> {
+/// non-blank lines divide evenly into `count` groups. Returns `None` on a
+/// non-uniform shape (shouldn't happen for valid output) so the caller can
+/// report it rather than mis-group.
+fn split_solutions(text: &str, count: usize) -> Option<Vec<String>> {
     let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
     if count == 0 {
-        return Vec::new();
+        return Some(Vec::new());
+    }
+    if lines.is_empty() || !lines.len().is_multiple_of(count) {
+        return None;
     }
     let per = lines.len() / count;
-    if per == 0 || !lines.len().is_multiple_of(count) {
-        return lines.into_iter().map(str::to_string).collect();
-    }
-    lines.chunks(per).map(|c| c.join(", ")).collect()
+    Some(lines.chunks(per).map(|c| c.join(", ")).collect())
 }
 
 fn run_raw(path: &Path, args: &[String]) -> Raw {
@@ -179,37 +213,61 @@ fn drain<R: Read>(pipe: Option<R>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{json_count, json_error, split_solutions};
+    use super::{json_count, json_error, json_exhausted, split_solutions};
 
     #[test]
     fn splits_multi_var_solutions_into_groups() {
         let text = "X = tom\nY = bob\nX = bob\nY = ann\nX = ann\nY = sue";
         assert_eq!(
-            split_solutions(text, 3),
+            split_solutions(text, 3).unwrap(),
             ["X = tom, Y = bob", "X = bob, Y = ann", "X = ann, Y = sue"]
         );
     }
 
     #[test]
     fn splits_single_var_one_per_line() {
-        assert_eq!(split_solutions("X = 1\nX = 2", 2), ["X = 1", "X = 2"]);
+        assert_eq!(
+            split_solutions("X = 1\nX = 2", 2).unwrap(),
+            ["X = 1", "X = 2"]
+        );
     }
 
     #[test]
     fn all_anonymous_solutions_are_true() {
-        assert_eq!(split_solutions("true.\ntrue.", 2), ["true.", "true."]);
+        assert_eq!(
+            split_solutions("true.\ntrue.", 2).unwrap(),
+            ["true.", "true."]
+        );
     }
 
     #[test]
-    fn parses_count_and_error() {
+    fn non_uniform_lines_is_none() {
+        // 3 lines can't divide into 2 solutions — surfaced, not mis-grouped.
+        assert_eq!(split_solutions("X = 1\nX = 2\nY = 3", 2), None);
+    }
+
+    #[test]
+    fn parses_top_level_count_error_and_exhausted() {
         assert_eq!(
             json_count(r#"{"count":3,"exhausted":false,"solutions":[]}"#),
             Some(3)
         );
+        assert!(json_exhausted(
+            r#"{"count":1,"exhausted":true,"solutions":[{}]}"#
+        ));
+        assert!(!json_exhausted(
+            r#"{"count":3,"exhausted":false,"solutions":[]}"#
+        ));
         assert_eq!(json_error(r#"{"count":1}"#), None);
         assert_eq!(
             json_error(r#"{"error":"Runtime error: boom(a, b)"}"#).as_deref(),
             Some("Runtime error: boom(a, b)")
+        );
+        // A solution binding a var to a compound with a `count` functor must
+        // NOT be mistaken for the top-level count.
+        assert_eq!(
+            json_count(r#"{"count":1,"solutions":[{"X":{"functor":"count","args":[9]}}]}"#),
+            Some(1)
         );
     }
 }

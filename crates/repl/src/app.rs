@@ -17,6 +17,9 @@ use vim_line::history::{Recall, Store};
 /// the user only wants the first answer; doubled on demand as they page
 /// past it (the stateless-binary re-fetch the design notes).
 const PAGE_BATCH: usize = 25;
+/// Ceiling on the re-fetch limit, so paging a divergent/huge enumeration
+/// can't grow the per-fetch cost (and timeout exposure) without bound.
+const SOLUTION_CAP: usize = 4096;
 
 /// The input prompt. Neutral (not `?-`): the same prompt accepts clause
 /// definitions and `?-` queries, so it must not imply query context —
@@ -26,6 +29,11 @@ pub const PROMPT: &str = "plg> ";
 pub const CONT: &str = "|  ";
 
 /// Active `;`-paging over a query's solutions.
+///
+/// Re-fetch relies on a *limit-independent solution order*: a bigger batch's
+/// first `pos` solutions are exactly the ones already revealed, so `pos`
+/// carries across re-fetches. Standard left-to-right SLD resolution gives
+/// this; it's the invariant that makes the doubling strategy correct.
 struct Paging {
     goal: String,
     /// The fetched batch (rendered solution strings).
@@ -357,10 +365,17 @@ impl App {
             p.pos >= p.solutions.len() && !p.exhausted
         };
         if need_more {
-            let (goal, new_limit) = {
+            let (goal, limit) = {
                 let p = self.paging.as_ref().unwrap();
-                (p.goal.clone(), p.limit.saturating_mul(2))
+                (p.goal.clone(), p.limit)
             };
+            let new_limit = limit.saturating_mul(2).min(SOLUTION_CAP);
+            if new_limit == limit {
+                // Hit the cap and the engine still isn't exhausted.
+                self.log(format!("  stopped at {limit} solutions (batch cap)."));
+                self.paging = None;
+                return;
+            }
             let Some(binary) = self.compiled.as_ref().map(|c| c.binary.clone()) else {
                 self.paging = None;
                 return;
