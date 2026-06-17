@@ -17,7 +17,7 @@
 # Tooling
 
 - [REPL Guide](repl-guide.md)
-- [LSP & Editor Guide]()
+- [LSP & Editor Guide](lsp-guide.md)
 
 # Appendix
 
