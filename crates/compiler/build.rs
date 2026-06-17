@@ -89,10 +89,21 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     hash
 }
 
-/// Newest `libplg_runtime-*.a` in `deps/` by modification time. cargo writes
-/// the current build's artifact just before this script runs (build-deps are
-/// compiled first), so "newest" is the one that matches this build. Ties
-/// (same mtime) break on path for determinism.
+/// Newest `libplg_runtime-*.a` in `deps/` by modification time.
+///
+/// Guarantee this provides: cargo compiles build-dependencies before running
+/// this script, so it has just (re)written *this build's* runtime artifact —
+/// it is therefore the newest among the artifacts cargo touched, and that is
+/// what we embed. Guarantee it does NOT provide: a positive identity. We do
+/// not confirm this is the exact artifact cargo's metadata pinned for this
+/// build (the principled key is the build-dep's metadata hash in the
+/// filename). In a workspace where a sibling unit recompiles `plg-runtime`
+/// under a different hash, mtime could in principle prefer that copy. The
+/// airtight fix is artifact dependencies (`artifact = "staticlib"`), still
+/// nightly-only; mtime is the right shape for stable today.
+///
+/// Ties (identical mtime) break on the lexically-LARGER path — arbitrary but
+/// deterministic; direction chosen only so the rule is total.
 fn newest_runtime_lib(deps_dir: &Path) -> Option<PathBuf> {
     let mut best: Option<(SystemTime, PathBuf)> = None;
     for entry in fs::read_dir(deps_dir).ok()?.flatten() {

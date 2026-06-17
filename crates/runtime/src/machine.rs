@@ -42,6 +42,10 @@ pub struct SrcLoc {
 /// `site_id` sentinel meaning "no source location" — runtime-internal
 /// raises (query-side undefined goals) and any binary built without
 /// provenance. The error message gets no `at file:line:col` suffix.
+///
+/// ABI contract: MUST equal `plg_compiler::codegen::NO_SITE` (codegen emits
+/// this value as the `site_id` arg). Separate consts in separate crates;
+/// each pins `== u32::MAX` in a unit test to flag a one-sided renumber.
 pub const NO_SITE: u32 = u32::MAX;
 
 /// Catch frames participate in error unwinding (drive() in solve.rs)
@@ -272,6 +276,12 @@ mod tests {
         let v = m.new_var();
         assert_eq!(tag_of(v), TAG_REF);
         assert_eq!(m.deref(v), v);
+    }
+
+    #[test]
+    fn no_site_sentinel_value_is_pinned() {
+        // ABI contract with plg_compiler::codegen::NO_SITE (see its docs).
+        assert_eq!(NO_SITE, u32::MAX);
     }
 
     #[test]

@@ -23,7 +23,21 @@ v1). The compile path parses bodies into spanned top-level conjuncts
 **Remaining (fast-follow, zero new architecture):** thread `site_id`
 into the other raising builtins (`is/2`, comparisons, type-checks,
 `throw/1`) — each is "pass `site_id` to that call + read it in the error
-constructor"; and the diff-helper suffix-stripping for checkpoint 5. The lint call-site
+constructor"; and the diff-helper suffix-stripping for checkpoint 5.
+Two refactors to do *as part of* that fast-follow rather than after:
+(a) only `LGoal::Call` carries a `span` today — when more variants
+(`RtDet`, `Is`, `ArithCmp`, `Metacall`) start raising, lift the span to a
+wrapper (`LGoal { kind, span }`) so the bookkeeping lives in one place
+instead of per-variant; (b) `Machine::site_location` clones the filename
+per raise (fine for cold `existence_error`) — add an
+`append_to_error_msg(&mut self, &str)` helper before wiring tighter
+loops like arithmetic type errors.
+
+**Known coarseness:** a top-level `;` body collapses to one span, so an
+undefined call inside a disjunction branch reports the body's start
+column, not the call's (pinned by
+`existence_error_in_disjunctive_body_carries_coarse_span`). Granularizing
+this is a parser change, not an ABI change. The lint call-site
 squiggle is realized via parser-recorded atom-functor occurrences
 (`CallSite`) rather than a fully spanned AST — same user-visible result
 (squiggles on real calls, never on comment text), no codegen ripple.

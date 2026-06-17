@@ -351,6 +351,10 @@ impl CodeGen<'_> {
             GoalTarget::Undefined => {
                 // v1 contract: existence_error raised when the goal runs.
                 // The site_id carries source provenance (SPANS.md Layer 3).
+                // It is emitted as an `i32` (the runtime ABI is `u32`); the
+                // two's-complement bit pattern matches, so `NO_SITE`
+                // (`u32::MAX`) reads as `i32 -1` here and back to `u32::MAX`
+                // in the runtime.
                 let site = self.site_id(span);
                 let r = self.fresh();
                 writeln!(

@@ -47,20 +47,27 @@ fn parse_sources(
         Parser::parse_program_with_directives(STDLIB_PL, &mut interner)
             .map_err(|e| format!("internal: stdlib parse error: {e}"))?;
     for path in sources {
-        let mut src = std::fs::read_to_string(path)
-            .map_err(|e| format!("{}: cannot read file: {e}", path.display()))?;
-        // Script mode: a leading `#!/usr/bin/env plgc` line is not
-        // Prolog; blank it out (preserving line numbers in errors).
-        if src.starts_with("#!") {
-            let eol = src.find('\n').unwrap_or(src.len());
-            src.replace_range(..eol, "");
-        }
+        let src = read_source(path)?;
         let (mut cs, ds) = Parser::parse_program_with_directives(&src, &mut interner)
             .map_err(|e| format_parse_error(path, &src, &e))?;
         clauses.append(&mut cs);
         directives.dynamic.extend(ds.dynamic);
     }
     Ok((clauses, directives, interner))
+}
+
+/// Read a source file, blanking a leading `#!/usr/bin/env plgc` shebang line
+/// (script mode) while preserving line numbers for diagnostics. Shared by the
+/// lint/check path ([`parse_sources`]) and the codegen path
+/// ([`parse_sources_cg`]) so the two can't drift on shebang handling.
+fn read_source(path: &Path) -> Result<String, String> {
+    let mut src = std::fs::read_to_string(path)
+        .map_err(|e| format!("{}: cannot read file: {e}", path.display()))?;
+    if src.starts_with("#!") {
+        let eol = src.find('\n').unwrap_or(src.len());
+        src.replace_range(..eol, "");
+    }
+    Ok(src)
 }
 
 /// Codegen variant of [`parse_sources`]: clause bodies carry per-goal source
@@ -87,12 +94,7 @@ fn parse_sources_cg(
     let mut clauses: Vec<CgClause> = stdlib.into_iter().map(clause_without_provenance).collect();
     let mut cg_sources: Vec<CgSource> = Vec::new();
     for path in sources {
-        let mut src = std::fs::read_to_string(path)
-            .map_err(|e| format!("{}: cannot read file: {e}", path.display()))?;
-        if src.starts_with("#!") {
-            let eol = src.find('\n').unwrap_or(src.len());
-            src.replace_range(..eol, "");
-        }
+        let src = read_source(path)?;
         let file_id = cg_sources.len() as u32;
         let (mut cs, ds) = Parser::parse_program_cg(&src, &mut interner, file_id)
             .map_err(|e| format_parse_error(path, &src, &e))?;
