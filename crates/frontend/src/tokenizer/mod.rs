@@ -18,6 +18,9 @@ mod token;
 
 pub use token::{Token, TokenKind};
 
+use crate::parse_error::ParseError;
+use plg_shared::Span;
+
 pub struct Tokenizer<'a> {
     input: &'a [u8],
     pos: usize,
@@ -35,7 +38,7 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
+    pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
         let mut tok = Tokenizer::new(input);
         let mut tokens = Vec::new();
         loop {
@@ -116,7 +119,7 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    fn next_token(&mut self) -> Result<Token, String> {
+    fn next_token(&mut self) -> Result<Token, ParseError> {
         self.skip_whitespace();
         let lo = self.pos as u32;
         let mut token = self.next_token_inner()?;
@@ -127,7 +130,7 @@ impl<'a> Tokenizer<'a> {
         Ok(token)
     }
 
-    fn next_token_inner(&mut self) -> Result<Token, String> {
+    fn next_token_inner(&mut self) -> Result<Token, ParseError> {
         let line = self.line;
         let col = self.col;
 
@@ -173,17 +176,24 @@ impl<'a> Tokenizer<'a> {
             b'A'..=b'Z' | b'_' => self.read_variable(line, col),
 
             _ => {
+                let lo = self.pos as u32;
                 self.advance();
-                Err(format!(
-                    "Unexpected character '{}' at line {} col {}",
-                    ch as char, line, col
+                Err(ParseError::new(
+                    format!("Unexpected character '{}'", ch as char),
+                    Span::new(0, lo, self.pos as u32),
                 ))
             }
         }
     }
 
+    /// Build a lexer error pointing at the current byte position (where the
+    /// scanner stalled). Used for end-of-input and bad-token cases.
+    fn lex_error(&self, message: impl Into<String>) -> ParseError {
+        ParseError::new(message, Span::point(0, self.pos as u32))
+    }
+
     /// Consume one byte and emit a fixed single-character token.
-    fn single(&mut self, kind: TokenKind, line: usize, col: usize) -> Result<Token, String> {
+    fn single(&mut self, kind: TokenKind, line: usize, col: usize) -> Result<Token, ParseError> {
         self.advance();
         Ok(Token::new(kind, line, col))
     }

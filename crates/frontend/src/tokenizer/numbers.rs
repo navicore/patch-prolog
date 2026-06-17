@@ -4,9 +4,10 @@
 
 use super::Tokenizer;
 use super::token::{Token, TokenKind};
+use crate::parse_error::ParseError;
 
 impl Tokenizer<'_> {
-    pub(super) fn read_number(&mut self, line: usize, col: usize) -> Result<Token, String> {
+    pub(super) fn read_number(&mut self, line: usize, col: usize) -> Result<Token, ParseError> {
         let mut s = String::new();
         let mut is_float = false;
 
@@ -38,17 +39,17 @@ impl Tokenizer<'_> {
         }
 
         if is_float {
-            let val: f64 = s.parse().map_err(|e| format!("Invalid float '{s}': {e}"))?;
+            let val: f64 = s
+                .parse()
+                .map_err(|e| self.lex_error(format!("Invalid float '{s}': {e}")))?;
             if val.is_infinite() {
-                return Err(format!(
-                    "Float literal '{s}' overflows f64 at line {line} col {col}"
-                ));
+                return Err(self.lex_error(format!("Float literal '{s}' overflows f64")));
             }
             Ok(Token::new(TokenKind::Float(val), line, col))
         } else {
             let val: i64 = s
                 .parse()
-                .map_err(|e| format!("Invalid integer '{s}': {e}"))?;
+                .map_err(|e| self.lex_error(format!("Invalid integer '{s}': {e}")))?;
             Ok(Token::new(TokenKind::Integer(val), line, col))
         }
     }

@@ -33,10 +33,14 @@ pub struct ProgramDirectives {
 }
 
 /// A source occurrence of an atom-functor term (`name` or `name(...)`),
-/// captured during parsing. Over-approximates "call sites": it records
-/// every such term, goal or data, but never matches text in comments
-/// (those aren't parsed). The LSP filters these by the lint's undefined
-/// `(name, arity)` set to squiggle real calls instead of text matches.
+/// captured in `parse_primary`. This is a broad over-approximation of "call
+/// sites": it records *every* such term regardless of position — goals, but
+/// also atoms as constants (`X = foo`), atoms inside data (`p(foo, bar)`),
+/// functors in operator specs (`dynamic(foo/1)` records `dynamic`, `foo`,
+/// and `/`), and `[]` as `[]/0`. It never matches text in comments (those
+/// aren't parsed). The LSP narrows this to real calls by intersecting with
+/// the lint's undefined `(name, arity)` set, which keeps the false-positive
+/// surface small in practice.
 #[derive(Debug, Clone)]
 pub struct CallSite {
     pub functor: AtomId,

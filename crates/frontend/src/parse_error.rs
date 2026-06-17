@@ -27,19 +27,6 @@ impl ParseError {
     }
 }
 
-/// Lexer-level errors surface as plain `String`s (rare — invalid bytes,
-/// unterminated quotes). Wrapping them with a degenerate start-of-input span
-/// lets the parser use `?` on the tokenizer's `Result<_, String>` while still
-/// returning a `ParseError` everywhere.
-impl From<String> for ParseError {
-    fn from(message: String) -> Self {
-        Self {
-            message,
-            span: Span::point(0, 0),
-        }
-    }
-}
-
 impl std::fmt::Display for ParseError {
     /// Message only — position is rendered separately from the span, so this
     /// stays free of the old trailer.

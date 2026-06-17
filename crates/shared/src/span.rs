@@ -37,9 +37,13 @@ impl Span {
     }
 }
 
-/// A value annotated with its source span. Used to carry spans alongside the
-/// AST (e.g. body-goal sites for the undefined-predicate lint) without
-/// putting a span inside `Term` itself.
+/// A value annotated with its source span — carries spans alongside the AST
+/// without putting one inside `Term` itself.
+///
+/// No in-tree consumer yet: the undefined-call lint currently uses the
+/// parser's flat `CallSite` occurrences instead. `Spanned<T>` is reserved
+/// for the Layer 3 runtime-provenance path (see `docs/design/SPANS.md`),
+/// where spanned goals feed codegen's `@plg_srcmap` side-table.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Spanned<T> {
     pub node: T,

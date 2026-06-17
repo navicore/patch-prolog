@@ -20,8 +20,10 @@ impl<'a> SourceMap<'a> {
         SourceMap { src, line_starts }
     }
 
-    /// 1-based line and column (column counts characters from the line start).
-    /// For human-facing `file:line:col` rendering.
+    /// 1-based line and column for human-facing `file:line:col` rendering.
+    /// The column counts **characters** from the line start, not bytes — so
+    /// tooling that expects byte columns will mismatch on multibyte/emoji
+    /// source. (LSP wire positions use `utf16_position` instead.)
     pub fn line_col(&self, offset: u32) -> (usize, usize) {
         let line = self.line_index(offset);
         let start = self.line_starts[line] as usize;

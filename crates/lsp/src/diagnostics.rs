@@ -57,6 +57,8 @@ fn undefined_warnings(
 
     let sm = SourceMap::new(content);
     let mut diags = Vec::new();
+    // O(callees × call_sites): fine for editor-buffer sizes. If a very large
+    // buffer ever makes this visible, index call_sites by (functor, arity).
     for ((name, arity), suggestion) in callees {
         let mut message = format!("undefined predicate {name}/{arity}");
         if let Some(s) = &suggestion {

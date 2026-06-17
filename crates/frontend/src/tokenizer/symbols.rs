@@ -4,11 +4,17 @@
 
 use super::Tokenizer;
 use super::token::{Token, TokenKind};
+use crate::parse_error::ParseError;
 
 impl Tokenizer<'_> {
     /// Read a symbolic operator starting at byte `ch`. `ch` has been peeked
     /// but not consumed.
-    pub(super) fn read_symbol(&mut self, ch: u8, line: usize, col: usize) -> Result<Token, String> {
+    pub(super) fn read_symbol(
+        &mut self,
+        ch: u8,
+        line: usize,
+        col: usize,
+    ) -> Result<Token, ParseError> {
         let kind = match ch {
             b':' => self.sym_colon(line, col)?,
             b'?' => self.sym_question(line, col)?,
@@ -33,7 +39,7 @@ impl Tokenizer<'_> {
         Ok(Token::new(kind, line, col))
     }
 
-    fn sym_colon(&mut self, _line: usize, _col: usize) -> Result<TokenKind, String> {
+    fn sym_colon(&mut self, _line: usize, _col: usize) -> Result<TokenKind, ParseError> {
         self.advance();
         if self.peek() == Some(b'-') {
             self.advance();
@@ -44,17 +50,17 @@ impl Tokenizer<'_> {
         }
     }
 
-    fn sym_question(&mut self, line: usize, col: usize) -> Result<TokenKind, String> {
+    fn sym_question(&mut self, _line: usize, _col: usize) -> Result<TokenKind, ParseError> {
         self.advance();
         if self.peek() == Some(b'-') {
             self.advance();
             Ok(TokenKind::QueryOp)
         } else {
-            Err(format!("Unexpected '?' at line {line} col {col}"))
+            Err(self.lex_error("Unexpected '?'"))
         }
     }
 
-    fn sym_equals(&mut self, _line: usize, _col: usize) -> Result<TokenKind, String> {
+    fn sym_equals(&mut self, _line: usize, _col: usize) -> Result<TokenKind, ParseError> {
         self.advance();
         let kind = match self.peek() {
             Some(b'=') => {
@@ -139,7 +145,7 @@ impl Tokenizer<'_> {
         }
     }
 
-    fn sym_at(&mut self, line: usize, col: usize) -> Result<Token, String> {
+    fn sym_at(&mut self, line: usize, col: usize) -> Result<Token, ParseError> {
         self.advance();
         let kind = match self.peek() {
             Some(b'<') => {
@@ -160,7 +166,7 @@ impl Tokenizer<'_> {
                 self.advance();
                 TokenKind::Atom("@=<".into())
             }
-            _ => return Err(format!("Unexpected '@' at line {line} col {col}")),
+            _ => return Err(self.lex_error("Unexpected '@'")),
         };
         Ok(Token::new(kind, line, col))
     }

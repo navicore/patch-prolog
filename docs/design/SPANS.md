@@ -10,6 +10,11 @@ single-buffer. The remaining work is Layer 3 below. The lint call-site
 squiggle is realized via parser-recorded atom-functor occurrences
 (`CallSite`) rather than a fully spanned AST — same user-visible result
 (squiggles on real calls, never on comment text), no codegen ripple.
+`CallSite` over-records broadly: every atom/compound term in
+`parse_primary`, including atoms as constants, atoms inside data terms,
+and functors in operator/directive specs. The LSP narrows this to real
+calls by intersecting with the lint's undefined `(name, arity)` set,
+which keeps the false-positive surface small in practice.
 
 ## Intent
 
