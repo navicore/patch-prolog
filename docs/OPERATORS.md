@@ -1,7 +1,7 @@
 # Operators
 
-`prlg` supports the standard **prefix** and **infix** operators of ISO Prolog.
-**Postfix is not supported** — see [Postfix is unsupported, by design](#postfix-is-unsupported-by-design) below.
+patch-prolog supports the standard **prefix** and **infix** operators of ISO
+Prolog. **Postfix is not supported** — see [Postfix is unsupported, by design](#postfix-is-unsupported-by-design) below.
 
 `op/3` (user-defined operators) is also not supported. The operator table below
 is the complete fixed set the engine recognizes.
@@ -87,7 +87,7 @@ left-associative).
 
 ## Postfix is unsupported, by design
 
-`prlg` recognizes no postfix operators and none are planned.
+patch-prolog recognizes no postfix operators and none are planned.
 
 Three reasons:
 
@@ -124,5 +124,8 @@ deliberate subset.
 
 ## See also
 
-- [docs/ARCHITECTURE.md](ARCHITECTURE.md) — overall engine structure.
+- [Language Guide](language-guide.md) — how these operators are used (terms,
+  arithmetic, control, unification).
+- [Builtin & Stdlib Reference](builtin-reference.md) — the predicates the
+  comparison, arithmetic, and term-order operators name.
 - ISO/IEC 13211-1:1995, §6.3.4 (operator notation) and §8.7 (arithmetic).

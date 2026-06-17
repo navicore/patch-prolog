@@ -10,7 +10,7 @@
 # Language
 
 - [Language Guide](language-guide.md)
-- [Grammar & Operators]()
+- [Operators](OPERATORS.md)
 - [Builtin & Stdlib Reference](builtin-reference.md)
 - [Semantics & ISO Conformance]()
 

@@ -7,8 +7,8 @@ builtin table (`plg-shared::BUILTINS`) verbatim — a test fails the build if
 this page and the table disagree.
 
 Evaluable arithmetic *functions* (`+`, `*`, `mod`, `abs`, …) are not
-predicates; see the **Language Guide** and the **Grammar & Operators**
-reference for those and for operator precedence.
+predicates; see the [Language Guide](language-guide.md) and the
+[Operators](OPERATORS.md) reference for those and for operator precedence.
 
 ## Type checks
 

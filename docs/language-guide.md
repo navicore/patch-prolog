@@ -4,9 +4,9 @@ patch-prolog implements an **ISO subset of Prolog**. A program is a set of
 *facts* and *rules*; you pose *queries* and the engine searches for proofs,
 binding variables along the way. This guide teaches the language as this
 engine implements it — including the places where it makes a deliberate,
-documented choice. For the complete operator table see the **Grammar &
-Operators** reference; for every builtin and stdlib predicate, the **Builtin
-& Stdlib Reference**.
+documented choice. For the complete operator table see the
+[Operators](OPERATORS.md) reference; for every builtin and stdlib predicate,
+the [Builtin & Stdlib Reference](builtin-reference.md).
 
 One thing to keep in mind throughout: this is a *compiler*. Your whole
 program is known at build time, so there is no `assert`/`retract` — the
@@ -221,7 +221,7 @@ These are deliberate omissions, not gaps to be filled:
   build time. `:- dynamic(F/A)` only makes an *undefined* predicate
   fail silently instead of raising `existence_error`; it does **not** enable
   runtime clause mutation.
-- **No `op/3`.** The operator table is fixed (see Grammar & Operators).
+- **No `op/3`.** The operator table is fixed (see [Operators](OPERATORS.md)).
 - **No postfix operators**, **no module system**, **no DCG**, **no
   `bagof`/`setof`**.
 
