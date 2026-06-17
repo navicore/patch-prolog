@@ -150,6 +150,8 @@ Gate results:
 - WAM-style instruction-level codegen; inline head-unification and
   integer-arithmetic fast paths (performance escape hatches)
 - Copying GC for long-running determinate queries
+- REPL (`plgr`) enhancements: an LLVM-IR visualization pane, LSP-client-backed
+  completion, and cross-session caching of compiled binaries (all optional)
 - `assert/retract` beyond the silent-fail dynamic contract
 - Cross-compilation (`--target`)
 - bagof/setof, DCG, modules, `op/3` (v1 scope decisions — the language

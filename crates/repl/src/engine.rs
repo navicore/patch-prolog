@@ -1,11 +1,11 @@
 //! Compile the session buffer to a temporary native binary.
 //!
-//! Scaffold strategy: shell out to the `plgc` binary (`$PLGC` or PATH).
-//! The design target (docs/design/REPL.md) is to link `plg-compiler`
-//! in-process — for instant parse/codegen errors and the phase-2 IR
-//! panel — but that couples the build to the embedded runtime archive.
-//! Shelling keeps the scaffold simple and is a drop-in to replace later;
-//! either way the REPL only ever *compiles and execs*, never interprets.
+//! `plgr` shells out to the `plgc` binary (`$PLGC` or PATH) rather than
+//! linking `plg-compiler` in-process: linking would pull plgc's ~22M
+//! embedded runtime archive into the `plgr` binary, so shelling keeps it a
+//! thin driver (the LSP stays a frontend-only consumer for the same
+//! reason). Either way the REPL only ever *compiles and execs*, never
+//! interprets.
 
 use std::path::PathBuf;
 use std::process::Command;

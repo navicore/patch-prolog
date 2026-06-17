@@ -3,7 +3,7 @@
 //! The buffer is the program-so-far. Adding a clause validates it by
 //! parsing the *whole* buffer with `plg-frontend` (instant feedback,
 //! no compile) and, on success, marks the session dirty so the next run
-//! recompiles. Queries never touch the buffer — see `docs/design/REPL.md`.
+//! recompiles. Queries never touch the buffer.
 
 use plg_frontend::{Parser, TokenKind, Tokenizer};
 use plg_shared::StringInterner;

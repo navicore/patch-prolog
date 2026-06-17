@@ -1,9 +1,12 @@
 # REPL (`plgr`) — design note
 
-**Status: proposed (2026-06-14).** Brings v1's REPL back (ROADMAP
-"Future"), modelled on patch-seq's `seqr`, which already solved the
-"compiler-not-interpreter" problem we share. Crate `crates/repl`
-(`plg-repl`), binary **`plgr`** — the third of `plgc`/`plgl`/`plgr`.
+**Status: implemented (2026-06-16).** Records the REPL as built. The
+compile step **shells out to `plgc`** (in-process `plg-compiler` linking
+was considered and declined — see Approach); phase-2 ideas now live in
+ROADMAP "Future". Brought v1's REPL back, modelled on patch-seq's `seqr`,
+which already solved the "compiler-not-interpreter" problem we share.
+Crate `crates/repl` (`plg-repl`), binary **`plgr`** — the third of
+`plgc`/`plgl`/`plgr`.
 
 ## Intent
 
@@ -20,8 +23,9 @@ binaries as bounded subprocesses** for actual runs.
 - **Rule 3 (LESSONS_FROM_V1) is the whole game: the REPL compiles, never
   interprets.** No `solve()` loop, no clause walk in `plg-repl`. v1's
   `prlg-repl` rode an in-process `Solver` — we copy seqr's
-  compile-and-exec path instead. CI guard: the crate links `plg-compiler`
-  + spawns binaries and contains no solver/clause-walk symbol.
+  compile-and-exec path instead. CI guard: the crate links **no solver
+  runtime** (no `plg-runtime` dependency) and spawns `plgc`/the compiled
+  binaries; a test asserts no `solve`/clause-walk symbol in the crate.
 - **No new runtime semantics.** Interactive "assert" is **not** `assert/1`
   (still unimplemented) — it is *append-to-session-buffer + recompile*,
   producing a fresh immutable binary each time. The KB is never mutated
@@ -35,9 +39,13 @@ binaries as bounded subprocesses** for actual runs.
 
 TUI via `ratatui`/`crossterm` with **`vim-line`** (patch-seq's zero-dep
 vim-motion line crate) for editing — the stack the user picked. `plgr`
-links `plg-compiler` directly (as seqr links `seq-compiler`) for
-in-process parse/codegen and reuses its clang driver to build the temp
-binary; runs exec that binary as a subprocess.
+**shells out to the `plgc` binary** (on `PATH` or via `$PLGC`) to build
+the temp binary, then execs that binary as a subprocess. In-process
+linking of `plg-compiler` (as seqr links `seq-compiler`) was the original
+target but was **declined**: it would pull `plgc`'s ~22M embedded runtime
+archive into the `plgr` binary — the same reason the LSP stays a
+frontend-only consumer. Shelling keeps `plgr` a thin driver; its only cost
+is that `plgc` must be installed.
 
 `plgr` keeps an **ordered session source buffer** (clauses + directives)
 and splits input into two classes — this split is the design's core,
@@ -76,9 +84,9 @@ their own `?-`, echoed as `plg> ?- goal.`. Multi-line clauses continue
 under `|  `. The vi-mode shows dimly bottom-right only when not in insert
 mode.
 
-Phase-2 candidates (not blocking): an LLVM-IR visualization pane (seqr
-has one — on-brand for the correctness ethos), LSP-client completions,
-and cross-session caching of compiled binaries.
+Phase-2 enhancements (an LLVM-IR visualization pane, LSP-client
+completion, cross-session binary caching) are tracked in ROADMAP
+"Future" — all optional, none blocking.
 
 ## Domain Events
 
