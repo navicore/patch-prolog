@@ -11,7 +11,7 @@
 
 - [Language Guide](language-guide.md)
 - [Grammar & Operators]()
-- [Builtin & Stdlib Reference]()
+- [Builtin & Stdlib Reference](builtin-reference.md)
 - [Semantics & ISO Conformance]()
 
 # Tooling

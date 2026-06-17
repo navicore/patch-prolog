@@ -197,6 +197,23 @@ mod tests {
         }
     }
 
+    /// The user-facing reference must enumerate every builtin — drift guard
+    /// so `docs/builtin-reference.md` can't silently fall behind the table.
+    #[test]
+    fn reference_doc_covers_every_builtin() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/builtin-reference.md");
+        let doc = std::fs::read_to_string(&path).expect("docs/builtin-reference.md must exist");
+        for s in BUILTINS {
+            let entry = format!("{}/{}", s.name, s.arity);
+            assert!(
+                doc.contains(&entry),
+                "{entry} is missing from {}",
+                path.display()
+            );
+        }
+    }
+
     #[test]
     fn completable_tracks_identifier_not_kind() {
         // alphabetic-leading names complete, regardless of kind...
