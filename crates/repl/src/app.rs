@@ -31,6 +31,9 @@ pub struct App {
     /// Partial multi-line clause accumulated until a terminating `.`.
     pub pending: String,
     pub should_quit: bool,
+    /// Set by `:edit`; `main` performs the terminal-suspend → `$EDITOR`
+    /// dance (it owns the `Terminal`) and clears this.
+    pub should_edit: bool,
     compiled: Option<Compiled>,
     /// Shared command-history store (vim-line): ring + dedup + draft stash.
     /// Drives `k`/`j` and arrow recall; persisted across sessions.
@@ -47,6 +50,36 @@ impl App {
 
     fn log(&mut self, msg: impl Into<String>) {
         self.output.push(msg.into());
+    }
+
+    /// Append a transcript line on behalf of the host (e.g. `:edit` status
+    /// from `main`, which owns the terminal but not the scrollback).
+    pub fn note(&mut self, msg: impl Into<String>) {
+        self.log(msg);
+    }
+
+    /// Replace the whole session with edited source (from `:edit`) and
+    /// recompile. Atomic: a syntactically bad edit is rejected and the
+    /// existing buffer is left intact.
+    pub fn apply_edit(&mut self, content: &str) {
+        match self.replace_session(content) {
+            Ok(n) => {
+                self.log(format!("  edited.  ({n} clause(s))"));
+                self.recompile();
+            }
+            Err(e) => self.log(format!("  edit rejected (buffer unchanged): {e}")),
+        }
+    }
+
+    /// Pure core of the `:edit` reload: parse `content` as a whole program
+    /// on a *scratch* session and swap it in only on success (the buffer is
+    /// untouched on a parse error). No recompile here, so the atomic-reject
+    /// guarantee is unit-testable without invoking the compiler.
+    fn replace_session(&mut self, content: &str) -> Result<usize, String> {
+        let mut next = Session::default();
+        let n = next.load_source(content)?;
+        self.session = next;
+        Ok(n)
     }
 
     fn log_block(&mut self, text: &str) {
@@ -291,7 +324,7 @@ impl App {
             }
             MetaCmd::Load(path) => self.load_file(Path::new(&path)),
             MetaCmd::Save(path) => self.save(path.as_deref()),
-            MetaCmd::Edit => self.log("  :edit is not wired yet (TODO: $EDITOR via shlex)"),
+            MetaCmd::Edit => self.should_edit = true,
             MetaCmd::Help => self.log_block(HELP),
             MetaCmd::Unknown(c) => self.log(format!("  unknown command: {c} (try :help)")),
         }
@@ -351,7 +384,34 @@ const HELP: &str = "\
     ?- goal.                  run a query against the current program
     :load FILE                consult a .pl file into the session
     :list                     show the session buffer
+    :edit                     edit the whole session in $EDITOR, recompile
     :save FILE                write the session buffer to FILE
     :reset                    clear the session
     :help / :quit             this help / exit
   multi-line clauses continue until a line ends with `.`";
+
+#[cfg(test)]
+mod tests {
+    use super::App;
+
+    #[test]
+    fn replace_session_rejects_bad_source_and_keeps_buffer() {
+        let mut app = App::default();
+        app.replace_session("ok(1).").unwrap();
+        let before = app.session.clauses.clone();
+        let err = app.replace_session("garbage(").unwrap_err();
+        assert!(!err.is_empty());
+        assert_eq!(
+            app.session.clauses, before,
+            "a bad edit must leave the buffer untouched"
+        );
+    }
+
+    #[test]
+    fn replace_session_swaps_in_split_clauses() {
+        let mut app = App::default();
+        let n = app.replace_session("foo. bar(X) :- foo.").unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(app.session.clauses, ["foo.", "bar(X) :- foo."]);
+    }
+}
