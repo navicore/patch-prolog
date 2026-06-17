@@ -154,10 +154,14 @@ impl CodeGen<'_> {
                 | LGoal::Is(..)
                 | LGoal::ArithCmp(..)
                 | LGoal::RtDet { .. }) => self.emit_inline_builtin(b, g, vars)?,
-                LGoal::Call { functor, args } => {
+                LGoal::Call {
+                    functor,
+                    args,
+                    span,
+                } => {
                     let rest_after = self.rest_after(rest, after, ctx, cut_slot);
                     self.emit_set_k(b, &rest_after, &bf);
-                    return self.emit_call_tail(b, *functor, args, vars);
+                    return self.emit_call_tail(b, *functor, args, vars, *span);
                 }
                 LGoal::Metacall(t) => {
                     // Runtime goal walker; the installed k is the

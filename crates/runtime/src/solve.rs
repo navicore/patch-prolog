@@ -155,7 +155,8 @@ pub fn call_goal(m: &mut Machine, goal: Word) -> i32 {
 fn dispatch(m: &mut Machine, functor: u32, arity: u32, args_idx: usize) -> i32 {
     let Some(f) = m.registry_lookup(functor, arity) else {
         let name = m.atoms.resolve(functor).to_string();
-        crate::errors::existence_procedure(m, &name, arity);
+        // Query-side / metacall undefined goals have no compiled call site.
+        crate::errors::existence_procedure(m, &name, arity, crate::machine::NO_SITE);
         return 0;
     };
     debug_assert!(arity as usize <= MAX_ARGS);

@@ -142,10 +142,15 @@ pub extern "C" fn plg_rt_pred_fail(_m: *mut Machine, _env: u64) -> i32 {
 /// goals that reference a predicate with no clauses (and the runtime
 /// path for unknown query goals shares the message shape).
 #[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_existence_error(m: *mut Machine, functor: u32, arity: u32) -> i32 {
+pub extern "C" fn plg_rt_existence_error(
+    m: *mut Machine,
+    functor: u32,
+    arity: u32,
+    site_id: u32,
+) -> i32 {
     let m = mref(m);
     let name = m.atoms.resolve(functor).to_string();
-    crate::errors::existence_procedure(m, &name, arity);
+    crate::errors::existence_procedure(m, &name, arity, site_id);
     0
 }
 

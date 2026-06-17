@@ -9,8 +9,9 @@ use super::body::{After, ClauseCtx};
 use super::lower::{self, LGoal};
 use super::term_emit::collect_vars;
 use super::{CodeGen, GoalTarget};
+use plg_frontend::CgClause;
 use plg_shared::term::VarId;
-use plg_shared::{AtomId, Clause, Term};
+use plg_shared::{AtomId, Span, Term};
 use std::collections::HashMap;
 use std::fmt::Write;
 
@@ -22,7 +23,7 @@ impl CodeGen<'_> {
         functor: AtomId,
         arity: u32,
         j: usize,
-        clause: &Clause,
+        clause: &CgClause,
     ) -> Result<(), String> {
         let base = format!("plg_p{functor}_{arity}_c{j}");
         let goals = lower::lower_body(&clause.body, self.interner)?;
@@ -266,6 +267,7 @@ impl CodeGen<'_> {
         functor: AtomId,
         args: &[Term],
         vars: &HashMap<VarId, String>,
+        span: Span,
     ) -> Result<(), String> {
         let arity = args.len() as u32;
         if arity as usize > crate::MAX_GOAL_ARITY {
@@ -348,10 +350,16 @@ impl CodeGen<'_> {
         match self.how_to_call(functor, arity) {
             GoalTarget::Undefined => {
                 // v1 contract: existence_error raised when the goal runs.
+                // The site_id carries source provenance (SPANS.md Layer 3).
+                // It is emitted as an `i32` (the runtime ABI is `u32`); the
+                // two's-complement bit pattern matches, so `NO_SITE`
+                // (`u32::MAX`) reads as `i32 -1` here and back to `u32::MAX`
+                // in the runtime.
+                let site = self.site_id(span);
                 let r = self.fresh();
                 writeln!(
                     b,
-                    "  {r} = call i32 @plg_rt_existence_error(ptr %m, i32 {functor}, i32 {arity})"
+                    "  {r} = call i32 @plg_rt_existence_error(ptr %m, i32 {functor}, i32 {arity}, i32 {site})"
                 )
                 .unwrap();
                 writeln!(b, "  ret i32 {r}").unwrap();

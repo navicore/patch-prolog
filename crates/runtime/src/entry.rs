@@ -5,7 +5,7 @@
 //!   0 = no solutions, 1 = solutions found,
 //!   2 = query parse error, 3 = runtime error
 
-use crate::machine::{Machine, RegistryEntry};
+use crate::machine::{Machine, RegistryEntry, SrcLoc};
 use crate::{query, render, solve};
 use plg_shared::StringInterner;
 use std::ffi::CStr;
@@ -24,6 +24,10 @@ pub unsafe extern "C" fn plg_rt_init(
     atom_count: u32,
     registry: *const RegistryEntry,
     registry_len: u32,
+    srcmap: *const SrcLoc,
+    srcmap_len: u32,
+    files: *const *const c_char,
+    files_len: u32,
 ) -> *mut Machine {
     let mut atoms = StringInterner::new();
     for i in 0..atom_count as usize {
@@ -38,7 +42,23 @@ pub unsafe extern "C" fn plg_rt_init(
         registry.is_sorted_by_key(|e| (e.functor, e.arity)),
         "registry must be sorted for binary search"
     );
-    Box::into_raw(Machine::new(atoms, registry))
+    // Source-location side-table (SPANS.md Layer 3). Both tables are empty
+    // (`len == 0`) for binaries built without provenance.
+    let srcmap: Vec<SrcLoc> = if srcmap_len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(srcmap, srcmap_len as usize) }.to_vec()
+    };
+    let files: Vec<String> = (0..files_len as usize)
+        .map(|i| {
+            unsafe { CStr::from_ptr(*files.add(i)) }
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    let mut m = Machine::new(atoms, registry);
+    m.set_provenance(srcmap, files);
+    Box::into_raw(m)
 }
 
 struct Args {

@@ -139,6 +139,50 @@ fn undefined_in_rule_body_raises_when_reached() {
 }
 
 #[test]
+fn existence_error_carries_source_location() {
+    // SPANS.md Layer 3 checkpoint 3: an undefined call in a clause body
+    // names file:line:col. `missing(X)` is on line 2, indented 4 spaces, so
+    // the call site is col 5.
+    let c = compile("go(X) :-\n    missing(X).\n");
+    let (out, code) = c.query("go(a)", &[]);
+    assert_eq!(code, 3);
+    // ISO term shape unchanged, plus the provenance suffix.
+    assert!(out.contains("Undefined procedure: missing/1) at "), "{out}");
+    assert!(out.contains("prog.pl:2:5"), "{out}");
+}
+
+#[test]
+fn existence_error_in_disjunctive_body_carries_coarse_span() {
+    // A top-level `;` collapses the whole body to one span
+    // (parse_body_conjuncts), so an undefined call inside a disjunction
+    // branch reports the BODY's start column, not the call's. Here the body
+    // `fail ; missing` starts at line 2 col 5 (4-space indent), and that — not
+    // `missing`'s own column — is what the suffix names. Pinned so a future
+    // granularity refactor knows it's changing this behavior.
+    let c = compile("go :-\n    fail ; missing.\n");
+    let (out, code) = c.query("go", &[]);
+    assert_eq!(code, 3);
+    assert!(out.contains("Undefined procedure: missing/0) at "), "{out}");
+    assert!(
+        out.contains("prog.pl:2:5"),
+        "coarse: body start, not `missing`: {out}"
+    );
+}
+
+#[test]
+fn query_side_existence_error_has_no_location_suffix() {
+    // A directly-queried undefined predicate has no compiled call site;
+    // its message must stay byte-identical to v1 (no ` at ...` suffix).
+    let c = compile("ok(yes).\n");
+    let (out, code) = c.query("nope(X)", &[]);
+    assert_eq!(code, 3);
+    assert!(
+        !out.contains(" at "),
+        "no provenance suffix expected: {out}"
+    );
+}
+
+#[test]
 fn step_limit_is_uncatchable_resource_error() {
     let c = compile("loop :- loop.\n");
     let (out, code) = c.query("loop", &[]);

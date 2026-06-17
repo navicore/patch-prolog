@@ -13,6 +13,6 @@ pub mod tokenizer;
 
 pub use error::{PrologError, ThrownError, format_term};
 pub use parse_error::ParseError;
-pub use parser::{CallSite, Parser, ProgramDirectives};
+pub use parser::{CallSite, CgClause, Parser, ProgramDirectives};
 pub use source_map::SourceMap;
 pub use tokenizer::{Token, TokenKind, Tokenizer};

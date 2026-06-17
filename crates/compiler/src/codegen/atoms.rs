@@ -62,6 +62,49 @@ impl CodeGen<'_> {
         .unwrap();
         rows.len()
     }
+
+    /// Source-location side-table (SPANS.md Layer 3). Emitted AFTER the
+    /// predicates, since `site_id` accumulates the rows during clause
+    /// emission. Returns `(srcmap_len, files_len)` for the `plg_rt_init`
+    /// handoff. Both are `0` when nothing raises with provenance — the empty
+    /// tables cost ~0 bytes.
+    pub fn emit_provenance(&mut self) -> (usize, usize) {
+        for i in 0..self.files.len() {
+            let bytes = self.files[i].as_bytes();
+            writeln!(
+                self.out,
+                "@plg_file_{i} = private unnamed_addr constant [{} x i8] c\"{}\\00\"",
+                bytes.len() + 1,
+                escape_ir_string(bytes)
+            )
+            .unwrap();
+        }
+        let frefs: Vec<String> = (0..self.files.len())
+            .map(|i| format!("ptr @plg_file_{i}"))
+            .collect();
+        writeln!(
+            self.out,
+            "@plg_files = internal constant [{} x ptr] [{}]",
+            self.files.len(),
+            frefs.join(", ")
+        )
+        .unwrap();
+
+        writeln!(self.out, "%SrcLoc = type {{ i32, i32, i32 }}").unwrap();
+        let rows: Vec<String> = self
+            .srcmap
+            .iter()
+            .map(|(f, l, c)| format!("%SrcLoc {{ i32 {f}, i32 {l}, i32 {c} }}"))
+            .collect();
+        writeln!(
+            self.out,
+            "@plg_srcmap = internal constant [{} x %SrcLoc] [{}]",
+            rows.len(),
+            rows.join(", ")
+        )
+        .unwrap();
+        (self.srcmap.len(), self.files.len())
+    }
 }
 
 /// LLVM IR c"..." escaping: printable ASCII except `"` and `\` stays
