@@ -3,9 +3,10 @@
 
 use super::Tokenizer;
 use super::token::{Token, TokenKind};
+use crate::parse_error::ParseError;
 
 impl Tokenizer<'_> {
-    pub(super) fn read_atom(&mut self, line: usize, col: usize) -> Result<Token, String> {
+    pub(super) fn read_atom(&mut self, line: usize, col: usize) -> Result<Token, ParseError> {
         let mut s = String::new();
         while let Some(ch) = self.peek() {
             if ch.is_ascii_alphanumeric() || ch == b'_' {
@@ -24,10 +25,10 @@ impl Tokenizer<'_> {
             "xor" => TokenKind::Xor,
             _ => TokenKind::Atom(s),
         };
-        Ok(Token { kind, line, col })
+        Ok(Token::new(kind, line, col))
     }
 
-    pub(super) fn read_variable(&mut self, line: usize, col: usize) -> Result<Token, String> {
+    pub(super) fn read_variable(&mut self, line: usize, col: usize) -> Result<Token, ParseError> {
         let mut s = String::new();
         while let Some(ch) = self.peek() {
             if ch.is_ascii_alphanumeric() || ch == b'_' {
@@ -36,10 +37,6 @@ impl Tokenizer<'_> {
                 break;
             }
         }
-        Ok(Token {
-            kind: TokenKind::Variable(s),
-            line,
-            col,
-        })
+        Ok(Token::new(TokenKind::Variable(s), line, col))
     }
 }

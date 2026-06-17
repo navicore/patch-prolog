@@ -2,11 +2,12 @@
 //! handling (`dynamic/1`). Ported from patch-prolog's `parser.rs`.
 
 use super::{Parser, ProgramDirectives};
+use crate::parse_error::ParseError;
 use crate::tokenizer::TokenKind;
 use plg_shared::{Clause, StringInterner, Term};
 
 impl Parser<'_> {
-    pub(super) fn parse_clause(&mut self) -> Result<Clause, String> {
+    pub(super) fn parse_clause(&mut self) -> Result<Clause, ParseError> {
         let head = self.parse_term()?;
         match self.current_kind() {
             Some(TokenKind::Dot) => {
@@ -20,14 +21,10 @@ impl Parser<'_> {
                 Ok(Clause { head, body })
             }
             Some(tok) => {
-                let tok = tok.clone();
-                let pos = self.current().unwrap();
-                Err(format!(
-                    "expected `.` or `:-`, got {} at line {} col {}",
-                    tok, pos.line, pos.col
-                ))
+                let msg = format!("expected `.` or `:-`, got {tok}");
+                Err(self.error_here(msg))
             }
-            None => Err("Unexpected end of input in clause".to_string()),
+            None => Err(self.error_here("Unexpected end of input in clause")),
         }
     }
 
@@ -36,7 +33,7 @@ impl Parser<'_> {
         &self,
         body: Term,
         directives: &mut ProgramDirectives,
-    ) -> Result<(), String> {
+    ) -> Result<(), ParseError> {
         match body {
             Term::Compound { functor, args } if self.interner.resolve(functor) == "dynamic" => {
                 for arg in args {
@@ -44,10 +41,10 @@ impl Parser<'_> {
                 }
                 Ok(())
             }
-            _ => Err(format!(
+            _ => Err(self.error_here(format!(
                 "Unknown directive: {}",
                 format_directive_term(&body, self.interner)
-            )),
+            ))),
         }
     }
 
@@ -59,7 +56,7 @@ impl Parser<'_> {
         &self,
         spec: Term,
         directives: &mut ProgramDirectives,
-    ) -> Result<(), String> {
+    ) -> Result<(), ParseError> {
         match spec {
             Term::Compound { functor, args }
                 if self.interner.resolve(functor) == "," && args.len() == 2 =>
@@ -74,28 +71,28 @@ impl Parser<'_> {
                 let f = match &args[0] {
                     Term::Atom(id) => *id,
                     other => {
-                        return Err(format!(
+                        return Err(self.error_here(format!(
                             "dynamic spec functor must be an atom, got {}",
                             format_directive_term(other, self.interner)
-                        ));
+                        )));
                     }
                 };
                 let arity = match &args[1] {
                     Term::Integer(n) if *n >= 0 => *n as usize,
                     other => {
-                        return Err(format!(
+                        return Err(self.error_here(format!(
                             "dynamic spec arity must be a non-negative integer, got {}",
                             format_directive_term(other, self.interner)
-                        ));
+                        )));
                     }
                 };
                 directives.dynamic.push((f, arity));
                 Ok(())
             }
-            other => Err(format!(
+            other => Err(self.error_here(format!(
                 "Invalid dynamic spec (expected F/A): {}",
                 format_directive_term(&other, self.interner)
-            )),
+            ))),
         }
     }
 }

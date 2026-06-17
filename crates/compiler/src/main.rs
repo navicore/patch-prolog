@@ -111,6 +111,26 @@ fn lint_undefined(sources: &[&std::path::Path], deny: bool) -> Result<(), u8> {
     Ok(())
 }
 
+/// `compile_files` renders program parse errors as `path:line:col: message`
+/// (via the frontend `Span` + `SourceMap`); every other failure it returns
+/// (cannot-read-file, codegen, link) lacks that `:line:col:` shape. Detecting
+/// it maps parse errors to exit 2 (bad input) vs 3 (environment/internal).
+fn is_parse_error(msg: &str) -> bool {
+    msg.match_indices(": ").any(|(end, _)| {
+        let head = &msg[..end];
+        let Some((rest, col)) = head.rsplit_once(':') else {
+            return false;
+        };
+        let Some((_, line)) = rest.rsplit_once(':') else {
+            return false;
+        };
+        !col.is_empty()
+            && col.bytes().all(|b| b.is_ascii_digit())
+            && !line.is_empty()
+            && line.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
 fn main() -> ExitCode {
     // Script mode (`#!/usr/bin/env plgc`): `plgc prog.pl [binary args…]`
     // compiles to a temp binary and execs it — same path as `plgc run`,
@@ -182,11 +202,7 @@ fn main() -> ExitCode {
             if let Err(e) = plgc::compile_files(&sources, &bin, false, plgc::OptLevel::O0) {
                 eprintln!("error: {e}");
                 // Parse errors carry file:line:col; map them to exit 2.
-                let code = if e.contains(": expected") || e.contains("at line") {
-                    2
-                } else {
-                    3
-                };
+                let code = if is_parse_error(&e) { 2 } else { 3 };
                 return ExitCode::from(code);
             }
             let mut cmd = std::process::Command::new(&bin);

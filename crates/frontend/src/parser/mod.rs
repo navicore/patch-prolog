@@ -15,8 +15,9 @@ pub mod operators;
 mod query;
 mod term;
 
+use crate::parse_error::ParseError;
 use crate::tokenizer::{Token, TokenKind};
-use plg_shared::{AtomId, StringInterner, VarId};
+use plg_shared::{AtomId, Span, StringInterner, VarId};
 use std::collections::HashMap;
 
 /// Directives extracted from a program (`:- dynamic(f/1).` etc).
@@ -31,6 +32,22 @@ pub struct ProgramDirectives {
     pub dynamic: Vec<(AtomId, usize)>,
 }
 
+/// A source occurrence of an atom-functor term (`name` or `name(...)`),
+/// captured in `parse_primary`. This is a broad over-approximation of "call
+/// sites": it records *every* such term regardless of position — goals, but
+/// also atoms as constants (`X = foo`), atoms inside data (`p(foo, bar)`),
+/// functors in operator specs (`dynamic(foo/1)` records `dynamic`, `foo`,
+/// and `/`), and `[]` as `[]/0`. It never matches text in comments (those
+/// aren't parsed). The LSP narrows this to real calls by intersecting with
+/// the lint's undefined `(name, arity)` set, which keeps the false-positive
+/// surface small in practice.
+#[derive(Debug, Clone)]
+pub struct CallSite {
+    pub functor: AtomId,
+    pub arity: usize,
+    pub span: Span,
+}
+
 /// Parser for Edinburgh Prolog syntax.
 /// Parses tokens into Terms and Clauses, with variable scoping per clause.
 pub struct Parser<'a> {
@@ -39,6 +56,9 @@ pub struct Parser<'a> {
     interner: &'a mut StringInterner,
     var_map: HashMap<String, VarId>,
     next_var: VarId,
+    /// Atom-functor term occurrences, accumulated across the whole program
+    /// (not reset per clause — the LSP wants every buffer occurrence).
+    call_sites: Vec<CallSite>,
 }
 
 impl<'a> Parser<'a> {
@@ -50,7 +70,17 @@ impl<'a> Parser<'a> {
             interner,
             var_map: HashMap::new(),
             next_var: 0,
+            call_sites: Vec::new(),
         }
+    }
+
+    /// Record an atom-functor term occurrence (see [`CallSite`]).
+    fn record_call_site(&mut self, functor: AtomId, arity: usize, span: Span) {
+        self.call_sites.push(CallSite {
+            functor,
+            arity,
+            span,
+        });
     }
 
     fn reset_vars(&mut self) {
@@ -76,17 +106,37 @@ impl<'a> Parser<'a> {
         tok
     }
 
-    fn expect(&mut self, kind: &TokenKind) -> Result<(), String> {
+    /// Span of the current token, or a point at end-of-input if exhausted.
+    /// All parser errors point "here" — the position the parser stalled at.
+    fn here_span(&self) -> Span {
+        match self.current() {
+            Some(t) => Span::new(0, t.lo, t.hi),
+            None => self.eof_span(),
+        }
+    }
+
+    /// A point span at end of input (the `Eof` token's offset).
+    fn eof_span(&self) -> Span {
+        let off = self.tokens.last().map(|t| t.hi).unwrap_or(0);
+        Span::point(0, off)
+    }
+
+    /// Build a `ParseError` pointing at the current token.
+    fn error_here(&self, message: impl Into<String>) -> ParseError {
+        ParseError::new(message, self.here_span())
+    }
+
+    fn expect(&mut self, kind: &TokenKind) -> Result<(), ParseError> {
         match self.current() {
             Some(tok) if &tok.kind == kind => {
                 self.advance();
                 Ok(())
             }
-            Some(tok) => Err(format!(
-                "expected {}, got {} at line {} col {}",
-                kind, tok.kind, tok.line, tok.col
-            )),
-            None => Err(format!("expected {kind}, got end of input")),
+            Some(tok) => {
+                let msg = format!("expected {}, got {}", kind, tok.kind);
+                Err(self.error_here(msg))
+            }
+            None => Err(self.error_here(format!("expected {kind}, got end of input"))),
         }
     }
 

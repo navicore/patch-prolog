@@ -18,6 +18,9 @@ mod token;
 
 pub use token::{Token, TokenKind};
 
+use crate::parse_error::ParseError;
+use plg_shared::Span;
+
 pub struct Tokenizer<'a> {
     input: &'a [u8],
     pos: usize,
@@ -35,7 +38,7 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
+    pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
         let mut tok = Tokenizer::new(input);
         let mut tokens = Vec::new();
         loop {
@@ -116,20 +119,23 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    fn next_token(&mut self) -> Result<Token, String> {
+    fn next_token(&mut self) -> Result<Token, ParseError> {
         self.skip_whitespace();
+        let lo = self.pos as u32;
+        let mut token = self.next_token_inner()?;
+        // Stamp byte offsets once, at the single dispatch point, so the
+        // per-kind helpers don't each have to track them.
+        token.lo = lo;
+        token.hi = self.pos as u32;
+        Ok(token)
+    }
 
+    fn next_token_inner(&mut self) -> Result<Token, ParseError> {
         let line = self.line;
         let col = self.col;
 
         let ch = match self.peek() {
-            None => {
-                return Ok(Token {
-                    kind: TokenKind::Eof,
-                    line,
-                    col,
-                });
-            }
+            None => return Ok(Token::new(TokenKind::Eof, line, col)),
             Some(ch) => ch,
         };
 
@@ -141,17 +147,9 @@ impl<'a> Tokenizer<'a> {
                 // Check for []
                 if self.peek() == Some(b']') {
                     self.advance();
-                    Ok(Token {
-                        kind: TokenKind::Atom("[]".into()),
-                        line,
-                        col,
-                    })
+                    Ok(Token::new(TokenKind::Atom("[]".into()), line, col))
                 } else {
-                    Ok(Token {
-                        kind: TokenKind::LBracket,
-                        line,
-                        col,
-                    })
+                    Ok(Token::new(TokenKind::LBracket, line, col))
                 }
             }
             b']' => self.single(TokenKind::RBracket, line, col),
@@ -178,19 +176,26 @@ impl<'a> Tokenizer<'a> {
             b'A'..=b'Z' | b'_' => self.read_variable(line, col),
 
             _ => {
+                let lo = self.pos as u32;
                 self.advance();
-                Err(format!(
-                    "Unexpected character '{}' at line {} col {}",
-                    ch as char, line, col
+                Err(ParseError::new(
+                    format!("Unexpected character '{}'", ch as char),
+                    Span::new(0, lo, self.pos as u32),
                 ))
             }
         }
     }
 
+    /// Build a lexer error pointing at the current byte position (where the
+    /// scanner stalled). Used for end-of-input and bad-token cases.
+    fn lex_error(&self, message: impl Into<String>) -> ParseError {
+        ParseError::new(message, Span::point(0, self.pos as u32))
+    }
+
     /// Consume one byte and emit a fixed single-character token.
-    fn single(&mut self, kind: TokenKind, line: usize, col: usize) -> Result<Token, String> {
+    fn single(&mut self, kind: TokenKind, line: usize, col: usize) -> Result<Token, ParseError> {
         self.advance();
-        Ok(Token { kind, line, col })
+        Ok(Token::new(kind, line, col))
     }
 }
 

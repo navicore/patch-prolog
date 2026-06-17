@@ -17,6 +17,24 @@ fn test_atoms() {
 }
 
 #[test]
+fn lexer_error_carries_span_not_a_trailer() {
+    // Invalid byte at offset 4 ("abc ~"): the error pins the offending byte
+    // via a Span, and the message has no "at line N col M" trailer.
+    let err = Tokenizer::tokenize("abc ~").unwrap_err();
+    assert_eq!((err.span.lo, err.span.hi), (4, 5), "got: {err}");
+    assert!(!err.message.contains("at line"), "got: {}", err.message);
+    assert!(err.message.contains('~'), "got: {}", err.message);
+}
+
+#[test]
+fn unterminated_quote_points_at_end_of_input() {
+    let err = Tokenizer::tokenize("'oops").unwrap_err();
+    // Scanner stalls at EOF (offset 5).
+    assert_eq!(err.span.lo, 5, "got: {err}");
+    assert!(!err.message.contains("at line"), "got: {}", err.message);
+}
+
+#[test]
 fn test_quoted_atoms() {
     assert_eq!(
         tok("'hello world'"),

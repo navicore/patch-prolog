@@ -124,4 +124,23 @@ pub struct Token {
     pub kind: TokenKind,
     pub line: usize,
     pub col: usize,
+    /// Byte offset of the token's first byte into the source.
+    pub lo: u32,
+    /// Byte offset one past the token's last byte.
+    pub hi: u32,
+}
+
+impl Token {
+    /// Construct with `lo`/`hi` left as `0`; `Tokenizer::next_token` stamps
+    /// the real byte offsets after the token is read (a single point, so the
+    /// per-kind helpers don't each need to track offsets).
+    pub fn new(kind: TokenKind, line: usize, col: usize) -> Self {
+        Token {
+            kind,
+            line,
+            col,
+            lo: 0,
+            hi: 0,
+        }
+    }
 }
