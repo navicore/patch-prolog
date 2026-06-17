@@ -37,23 +37,31 @@ plgc completions zsh > ~/.zfunc/_plgc      # or: bash | fish | elvish | powershe
 
 ## Your first program
 
-Create `family.pl`:
+Create `deps.pl` — a small build-dependency graph:
 
 ```prolog
-parent(tom, bob).
-parent(bob, ann).
+depends_on(app, auth).
+depends_on(app, ui).
+depends_on(auth, crypto).
+depends_on(ui, render).
+depends_on(render, crypto).
 
-ancestor(X, Y) :- parent(X, Y).
-ancestor(X, Y) :- parent(X, Z), ancestor(Z, Y).
+% needs/2 is the transitive closure of depends_on.
+needs(X, Y) :- depends_on(X, Y).
+needs(X, Y) :- depends_on(X, Z), needs(Z, Y).
 ```
 
-Compile it to a native binary and query it:
+Compile it to a native binary and query it — `needs/2` walks the graph
+transitively:
 
 ```sh
-plgc build family.pl -o family
-./family --query "ancestor(tom, X)" --format text
-# X = bob
-# X = ann
+plgc build deps.pl -o deps
+./deps --query "needs(app, X)" --format text
+# X = auth
+# X = ui
+# X = crypto
+# X = render
+# X = crypto
 ```
 
 Or skip the explicit build during development — `plgc run` compiles to a
@@ -61,9 +69,7 @@ temporary binary and executes it in one step (it still compiles; it never
 interprets):
 
 ```sh
-plgc run family.pl --query "ancestor(tom, X)"
-# X = bob
-# X = ann
+plgc run deps.pl --query "needs(app, X)"
 ```
 
 To explore interactively, start the REPL:
@@ -73,13 +79,17 @@ plgr
 ```
 
 ```
-plg> parent(tom, bob).
+plg> depends_on(app, auth).
   defined.  (1 in session)
-plg> parent(bob, ann).
+plg> depends_on(app, ui).
   defined.  (2 in session)
-plg> ?- parent(tom, X).
-  X = bob .
+plg> ?- depends_on(app, X).
+  X = auth ;
+  X = ui .
 ```
+
+(At the `;` prompt, press `;` for the next solution or any other key to
+stop.)
 
 From here, see **[Compiler Usage](compiler-usage.md)** for the full `plgc`
 surface and the query wire-contract.

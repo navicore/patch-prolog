@@ -13,7 +13,7 @@ ported. The build.rs runtime-embed chain works end to end.
 Ported v1's tokenizer/parser/term/error into `plg-shared` +
 `plg-frontend`, split into focused modules, with all 48 v1 frontend
 unit tests (15 tokenizer + 27 parser + 6 error).
-`plgc check examples/family.pl` parses and reports `file:line:col`.
+`plgc check examples/deps.pl` parses and reports `file:line:col`.
 
 ## M2 — Minimal end-to-end compilation ✅ (2026-06-04)
 
@@ -128,7 +128,7 @@ Gates (planned):
 - A fact entry triggers a recompile; a subsequent query does NOT shell
   clang (the core efficiency claim, instrumented).
 - `parent(tom,bob).` then `?- parent(tom,X).` → `X = bob`; multi-line
-  rule entry until `.`; `:load examples/family.pl` then query it.
+  rule entry until `.`; `:load examples/deps.pl` then query it.
 - Divergent query killed by `PLG_REPL_TIMEOUT`; REPL stays alive.
 - Rule-3 guard: `plg-repl` links `plg-compiler` + execs binaries; no
   `solve`/clause-walk symbol in the crate.

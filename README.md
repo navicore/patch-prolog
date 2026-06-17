@@ -32,9 +32,9 @@ compiler binary.
 
 ```sh
 just build                 # builds libplg_runtime.a then plgc
-target/release/plgc build examples/family.pl -o family
-./family --query "grandparent(tom, X)"
-./family --query "findall(K, ancestor(tom, K), L)" --format text
+target/release/plgc build examples/deps.pl -o deps
+./deps --query "needs(app, X)"
+./deps --query "findall(D, needs(app, D), Ds)" --format text
 ```
 
 Scripts work too:
@@ -76,7 +76,7 @@ list stdlib (`member`, `append`, `length`, `reverse`, `nth0/1`,
 `last`). See [docs/ISO_COMPLIANCE.md](docs/ISO_COMPLIANCE.md).
 
 Deep recursion is safe: all control transfers are guaranteed tail
-calls (`musttail`), so a million-deep `ancestor/2` chain runs in
+calls (`musttail`), so a million-deep recursive chain runs in
 constant C stack.
 
 ## Documentation

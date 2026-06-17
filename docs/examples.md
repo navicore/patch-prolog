@@ -1,68 +1,71 @@
 # Examples
 
 The `examples/` directory has runnable programs. Two are walked through
-here: a classic genealogy database that shows the language basics, and a
-schema linter that shows the headline use case — compiling a rule set into
-a standalone checker.
+here: a dependency graph that shows the language basics, and a schema linter
+that shows the headline use case — compiling a rule set into a standalone
+checker.
 
 Build any example and query it:
 
 ```sh
-plgc build examples/family.pl -o family
-./family --query "grandparent(tom, X)" --format text
+plgc build examples/deps.pl -o deps
+./deps --query "needs(app, X)" --format text
 ```
 
-## `family.pl` — facts, rules, and recursion
+## `deps.pl` — facts, rules, and recursion
 
 ```prolog
-parent(tom, mary).
-parent(tom, james).
-parent(tom, ann).
-parent(mary, bob).
-parent(james, carol).
+depends_on(app, auth).
+depends_on(app, ui).
+depends_on(auth, crypto).
+depends_on(ui, render).
+depends_on(render, crypto).
 
-grandparent(X, Z) :- parent(X, Y), parent(Y, Z).
+% needs/2 — the transitive closure of depends_on.
+needs(X, Y) :- depends_on(X, Y).
+needs(X, Y) :- depends_on(X, Z), needs(Z, Y).
 
-ancestor(X, Y) :- parent(X, Y).
-ancestor(X, Y) :- parent(X, Z), ancestor(Z, Y).
-
-sibling(X, Y) :- parent(Z, X), parent(Z, Y), X \= Y.
+% two components that share a direct dependency.
+shares_dep(A, B) :- depends_on(A, D), depends_on(B, D), A \= B.
 ```
 
-A handful of `parent/2` **facts**, then **rules** that derive new relations.
-`grandparent/2` is one rule (a parent of a parent); `ancestor/2` is
-**recursive** (a parent, or a parent of an ancestor); `sibling/2` uses
-`\=/2` to exclude a person being their own sibling.
+A handful of `depends_on/2` **facts** describing a build graph, then **rules**
+that derive new relations. `needs/2` is **recursive** — what a component
+depends on, transitively (a direct dependency, or a dependency of one). And
+`shares_dep/2` uses `\=/2` to exclude a component matching itself.
 
 Querying derives answers from the rules — and **backtracking** yields every
 solution:
 
 ```sh
-./family --query "grandparent(tom, X)" --format text
-# X = bob
-# X = carol
+./deps --query "depends_on(app, X)" --format text   # direct dependencies
+# X = auth
+# X = ui
 
-./family --query "ancestor(tom, X)" --format text
-# X = mary
-# X = james
-# X = ann
-# X = bob
-# X = carol
+./deps --query "needs(app, X)" --format text         # transitive
+# X = auth
+# X = ui
+# X = crypto
+# X = render
+# X = crypto
 
-./family --query "sibling(mary, X)" --format text
-# X = james
-# X = ann
+./deps --query "shares_dep(auth, render)" --format text
+# true.
 ```
+
+`needs(app, X)` reaches `crypto` twice — once through `auth`, once through
+`ui → render` — because there are two paths to it; backtracking finds both.
+`shares_dep(auth, render)` holds because both depend on `crypto`.
 
 Use `findall/3` to collect every solution into a list:
 
 ```sh
-./family --query "findall(G, grandparent(tom, G), Gs)" --format text
-# G = _0
-# Gs = [bob, carol]
+./deps --query "findall(D, needs(app, D), Ds)" --format text
+# D = _0
+# Ds = [auth, ui, crypto, render, crypto]
 ```
 
-(`G` is the template — left unbound; `Gs` is the collected result.)
+(`D` is the template — left unbound; `Ds` is the collected result.)
 
 ## `linting.pl` — compiling a checker into a binary
 

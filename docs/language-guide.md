@@ -21,12 +21,12 @@ Everything is a **term**. There are only a few kinds:
 |---|---|
 | **Atom** | `tom`, `[]`, `'a quoted atom'`, `+` |
 | **Number** | `42`, `-7`, `3.14` |
-| **Variable** | `X`, `Parent`, `_`, `_Rest` |
-| **Compound** | `parent(tom, bob)`, `point(1, 2)`, `-(3)` |
+| **Variable** | `X`, `Dep`, `_`, `_Rest` |
+| **Compound** | `depends_on(app, auth)`, `point(1, 2)`, `-(3)` |
 
 A **variable** starts with an uppercase letter or `_`; everything else
 starting lowercase (or quoted) is an atom. This is the single most common
-beginner trip-up: `Parent` is a variable, `parent` is a predicate name.
+beginner trip-up: `Dep` is a variable, `depends_on` is a predicate name.
 
 A **list** is sugar for nested compounds: `[a, b, c]` is `'.'(a, '.'(b,
 '.'(c, [])))`, and `[]` is the empty-list atom. The `[H|T]` notation splits
@@ -40,20 +40,21 @@ Operators are sugar too: `2 + 3` is the compound `+(2, 3)`, `H = [X|T]` is
 A **fact** asserts something true:
 
 ```prolog
-parent(tom, bob).
-parent(bob, ann).
+depends_on(app, auth).
+depends_on(auth, crypto).
 ```
 
 A **rule** says a head is true *if* its body is:
 
 ```prolog
-ancestor(X, Y) :- parent(X, Y).
-ancestor(X, Y) :- parent(X, Z), ancestor(Z, Y).
+needs(X, Y) :- depends_on(X, Y).
+needs(X, Y) :- depends_on(X, Z), needs(Z, Y).
 ```
 
 Read `:-` as "if" and `,` as "and." A predicate is identified by name and
-arity (`ancestor/2`), and its clauses are tried top to bottom. Multiple
-clauses are *alternatives*.
+arity (`needs/2`), and its clauses are tried top to bottom. Multiple
+clauses are *alternatives* — here, `needs` is a direct dependency *or* a
+dependency reached through another.
 
 A **directive** runs at load/build time:
 
@@ -66,12 +67,12 @@ A **directive** runs at load/build time:
 A query asks the engine to prove a goal:
 
 ```sh
-./family --query "ancestor(tom, X)"
+./deps --query "needs(app, X)"
 ```
 
 The engine searches for variable bindings that make the goal true, yielding
-solutions one at a time. With `parent/2` and `ancestor/2` above,
-`ancestor(tom, X)` yields `X = bob` then `X = ann`. If a goal can be proved
+solutions one at a time. With `depends_on/2` and `needs/2` above,
+`needs(app, X)` yields `X = auth` then `X = crypto`. If a goal can be proved
 more than one way, **backtracking** explores each alternative; if it can't
 be proved at all, the query fails (no solutions).
 
@@ -178,7 +179,7 @@ every solution of a goal into a list, use `findall/3`; to **enumerate** a
 range of integers, `between/3`:
 
 ```prolog
-?- findall(C, ancestor(tom, C), Kids).   % Kids = [bob, ann]
+?- findall(D, needs(app, D), Ds).        % Ds = [auth, crypto]
 ?- between(1, 3, X).                      % X = 1 ; X = 2 ; X = 3
 ```
 

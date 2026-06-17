@@ -44,14 +44,14 @@ interpreter, so what you test is what you ship.
 
 | Flag | Effect |
 |---|---|
-| `--query <GOAL>` | The goal to solve, e.g. `"ancestor(tom, X)"`. Required. |
+| `--query <GOAL>` | The goal to solve, e.g. `"needs(app, X)"`. Required. |
 | `--limit <N>` | Maximum number of solutions to report. |
 | `--format <json\|text>` | Output format. **Default: `text`** (human-readable). |
 | `--deny-undefined` | As for `build`. |
 
 ```sh
-plgc run family.pl --query "ancestor(tom, X)"
-plgc run family.pl --query "ancestor(tom, X)" --limit 1 --format json
+plgc run deps.pl --query "needs(app, X)"
+plgc run deps.pl --query "needs(app, X)" --limit 1 --format json
 ```
 
 ## `plgc check`

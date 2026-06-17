@@ -32,12 +32,10 @@ You type the `?-` yourself; that's what tells the REPL "run this" rather
 than "remember this."
 
 ```
-plg> parent(tom, bob).
-plg> parent(tom, bob).
+plg> depends_on(app, auth).
   defined.  (1 in session)
-plg> ?- parent(tom, X).
-plg> ?- parent(tom, X).
-  X = bob .
+plg> ?- depends_on(app, X).
+  X = auth .
 ```
 
 (Plus `:`-prefixed [commands](#commands), covered below.)
@@ -47,9 +45,9 @@ plg> ?- parent(tom, X).
 Type facts, rules, and directives as you would write them in a file:
 
 ```
-plg> parent(bob, ann).
+plg> depends_on(app, ui).
   defined.  (2 in session)
-plg> ancestor(X, Y) :- parent(X, Y).
+plg> needs(X, Y) :- depends_on(X, Y).
   defined.  (3 in session)
 plg> :- dynamic(extra/1).
   defined.  (4 in session)
@@ -60,9 +58,9 @@ clause count. A **rule spanning several lines** continues under the `|  `
 prompt until a line ends in `.`:
 
 ```
-plg> ancestor(X, Y) :-
-|      parent(X, Z),
-|      ancestor(Z, Y).
+plg> needs(X, Y) :-
+|      depends_on(X, Z),
+|      needs(Z, Y).
   defined.  (5 in session)
 ```
 
@@ -71,8 +69,8 @@ knowledge base is immutable, so there is no in-place "redefine." To change
 or remove a clause, edit the whole session with [`:edit`](#commands).
 
 > **Capitalization matters.** A name starting with a capital letter is a
-> *variable*, so `Parent(tom, bob).` is not a clause — the REPL says so and
-> suggests `parent`. Predicate and atom names start lowercase.
+> *variable*, so `Needs(app, X) :- ...` is not a clause — the REPL says so
+> and suggests `needs`. Predicate and atom names start lowercase.
 
 ## Running queries
 
@@ -80,8 +78,8 @@ A `?- Goal.` query runs against the current program and reveals solutions
 **one at a time**, SWI-style:
 
 ```
-plg> ?- ancestor(tom, X).
-  X = bob ;
+plg> ?- depends_on(app, X).
+  X = auth ;
 ```
 
 The trailing `;` means "there may be more." Press **`;`** or **space** to
@@ -89,8 +87,8 @@ see the next solution; press **any other key** (Enter, `.`, …) to stop. The
 last solution ends with `.`:
 
 ```
-  X = bob ;
-  X = ann .
+  X = auth ;
+  X = ui .
 ```
 
 A goal with no solutions prints `false.`; a ground goal that succeeds

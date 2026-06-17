@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 
 fn family() -> &'static Compiled {
     static C: OnceLock<Compiled> = OnceLock::new();
-    C.get_or_init(|| compile(include_str!("../../../examples/family.pl")))
+    C.get_or_init(|| compile(include_str!("fixtures/family.pl")))
 }
 
 #[test]
