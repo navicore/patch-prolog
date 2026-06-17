@@ -46,9 +46,7 @@ impl<'a> Parser<'a> {
 
     /// Shared program-parsing loop. Clauses are collected; `:- ...` directives
     /// are interpreted into `directives`.
-    fn parse_program_body(
-        &mut self,
-    ) -> Result<(Vec<Clause>, ProgramDirectives), ParseError> {
+    fn parse_program_body(&mut self) -> Result<(Vec<Clause>, ProgramDirectives), ParseError> {
         let mut clauses = Vec::new();
         let mut directives = ProgramDirectives::default();
         while !self.at_eof() {
@@ -67,7 +65,10 @@ impl<'a> Parser<'a> {
 
     /// Parse a single query (goal list) from source text, e.g. "parent(tom, X)".
     /// Does NOT require a trailing dot.
-    pub fn parse_query(input: &str, interner: &mut StringInterner) -> Result<Vec<Term>, ParseError> {
+    pub fn parse_query(
+        input: &str,
+        interner: &mut StringInterner,
+    ) -> Result<Vec<Term>, ParseError> {
         let tokens = Tokenizer::tokenize(input)?;
         let mut parser = Parser::from_tokens(tokens, interner);
         // Skip optional ?- prefix

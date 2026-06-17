@@ -172,7 +172,10 @@ mod tests {
         let d = &diags[0];
         assert_eq!(d.severity, Some(DiagnosticSeverity::WARNING));
         // Line 2 (0-indexed) is the call; the comment is line 1.
-        assert_eq!(d.range.start.line, 2, "squiggle on the call, not the comment");
+        assert_eq!(
+            d.range.start.line, 2,
+            "squiggle on the call, not the comment"
+        );
         // `q :- ` is 5 chars, so `xarent` is 5..11.
         assert_eq!(d.range.start.character, 5);
         assert_eq!(d.range.end.character, 11);

@@ -148,10 +148,7 @@ impl Parser<'_> {
                 let name = name.clone();
                 // Capture the atom token's start/end for the call-site span
                 // before advancing past it.
-                let (lo, atom_hi) = self
-                    .current()
-                    .map(|t| (t.lo, t.hi))
-                    .unwrap_or((0, 0));
+                let (lo, atom_hi) = self.current().map(|t| (t.lo, t.hi)).unwrap_or((0, 0));
                 self.advance();
                 // Check if followed by '(' — compound term
                 // The call-site span underlines just the functor name (not
