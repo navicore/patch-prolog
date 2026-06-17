@@ -9,7 +9,7 @@
 
 # Language
 
-- [Language Guide]()
+- [Language Guide](language-guide.md)
 - [Grammar & Operators]()
 - [Builtin & Stdlib Reference]()
 - [Semantics & ISO Conformance]()
