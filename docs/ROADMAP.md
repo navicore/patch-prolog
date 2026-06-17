@@ -112,10 +112,10 @@ Footprint record (x86_64-linux, clang 19, 2026-06-04): hello-world
 676K default · 4.4M `--debug` · binary answers `--query` with only
 base system libraries loaded.
 
-## M6 — REPL (`plgr`) 🔜
+## M6 — REPL (`plgr`) ✅ (2026-06-16)
 
 Interactive loop that drives the compiler instead of interpreting —
-design in `docs/design/REPL.md`. TUI (`ratatui`/`crossterm` + patch-seq's
+user guide: [REPL Guide](repl-guide.md). TUI (`ratatui`/`crossterm` + patch-seq's
 `vim-line`), modelled on patch-seq's `seqr`. Keeps an ordered session
 source buffer; **clause/`:load` edits recompile the buffer to a temp
 native binary, `?-` queries re-invoke the current binary via `--query`
@@ -124,14 +124,16 @@ clang cost and nothing is ever interpreted (LESSONS_FROM_V1 rule 3).
 Reuses `plg-shared` (`BUILTINS`/`STDLIB_PL`) and `plg-frontend`
 (parse + undefined-pred lint) — the same sources the LSP uses.
 
-Gates (planned):
-- A fact entry triggers a recompile; a subsequent query does NOT shell
+Gate results:
+- A clause entry triggers a recompile; a subsequent query does NOT shell
   clang (the core efficiency claim, instrumented).
-- `parent(tom,bob).` then `?- parent(tom,X).` → `X = bob`; multi-line
-  rule entry until `.`; `:load examples/deps.pl` then query it.
+- `depends_on(app,auth).` then `?- depends_on(app,X).` → `X = auth`;
+  multi-line rule entry until `.`; `:load examples/deps.pl` then query it.
 - Divergent query killed by `PLG_REPL_TIMEOUT`; REPL stays alive.
-- Rule-3 guard: `plg-repl` links `plg-compiler` + execs binaries; no
-  `solve`/clause-walk symbol in the crate.
+- Rule-3 guard: `plg-repl` shells out to `plgc` and links no solver
+  runtime — a CI test asserts no `plg-runtime` dependency and no
+  `solve`/clause-walk symbol. (In-process `plg-compiler` linking remains
+  the design target.)
 
 ## Future (explicitly out of scope)
 
@@ -140,8 +142,7 @@ Gates (planned):
   clause function each — same semantics, same single immutable binary,
   near-instant rebuilds at 100k+ facts. Serves the production
   architecture (immutable binary as the ONLY prod artifact; fact churn
-  = deploy cadence) — see docs/design/TOOLCHAIN_DEPENDENCY.md
-  "Production threat model". Likely the first post-parity feature.
+  = deploy cadence). Likely the first post-parity feature.
 - Bundled backend ("the Zig route") only if compiles must happen ON
   hardened machines — same ADR. (Runtime `--facts` loading was
   considered and REJECTED for the prod shape: it reopens the
