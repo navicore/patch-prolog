@@ -1,6 +1,6 @@
 # Builtin Vocabulary Table (LSP port, delta-1)
 
-**Status: proposed (2026-06-09). First step of `docs/design/LSP_PORT.md`.**
+**Status: landed (2026-06-09). First step of `docs/design/done/LSP_PORT.md`.**
 
 ## Intent
 

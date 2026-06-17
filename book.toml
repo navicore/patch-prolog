@@ -1,0 +1,8 @@
+[book]
+title = "patch-prolog"
+description = "A standalone ISO-subset Prolog compiler (plgc / plgr / plgl)"
+authors = ["Ed Sweeney"]
+src = "docs"
+
+[output.html]
+git-repository-url = "https://git.navicore.tech/navicore/patch-prolog"

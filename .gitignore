@@ -31,3 +31,6 @@ libplg_runtime.a
 
 # Temporary artifacts
 /tmp/
+
+# mdbook generated output
+/book/
