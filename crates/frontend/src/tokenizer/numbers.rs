@@ -44,20 +44,12 @@ impl Tokenizer<'_> {
                     "Float literal '{s}' overflows f64 at line {line} col {col}"
                 ));
             }
-            Ok(Token {
-                kind: TokenKind::Float(val),
-                line,
-                col,
-            })
+            Ok(Token::new(TokenKind::Float(val), line, col))
         } else {
             let val: i64 = s
                 .parse()
                 .map_err(|e| format!("Invalid integer '{s}': {e}"))?;
-            Ok(Token {
-                kind: TokenKind::Integer(val),
-                line,
-                col,
-            })
+            Ok(Token::new(TokenKind::Integer(val), line, col))
         }
     }
 }

@@ -5,17 +5,18 @@
 
 use super::Parser;
 use super::operators;
+use crate::parse_error::ParseError;
 use crate::tokenizer::TokenKind;
-use plg_shared::Term;
+use plg_shared::{Span, Term};
 
 impl Parser<'_> {
     /// Parse a term at the top level (precedence 700 — non-associative comparison/is level).
-    pub(super) fn parse_term(&mut self) -> Result<Term, String> {
+    pub(super) fn parse_term(&mut self) -> Result<Term, ParseError> {
         self.parse_expr_700()
     }
 
     /// Precedence 700: non-associative operators (is, =, \=, <, >, =<, >=, =:=, =\=)
-    fn parse_expr_700(&mut self) -> Result<Term, String> {
+    fn parse_expr_700(&mut self) -> Result<Term, ParseError> {
         let left = self.parse_expr_500()?;
         if let Some(op) = self.match_op_700() {
             let right = self.parse_expr_500()?;
@@ -41,7 +42,7 @@ impl Parser<'_> {
     }
 
     /// Precedence 500: left-associative (+, -, /\, \/, xor — all yfx).
-    fn parse_expr_500(&mut self) -> Result<Term, String> {
+    fn parse_expr_500(&mut self) -> Result<Term, ParseError> {
         let mut left = self.parse_expr_400()?;
         while let Some(op) = self.current_kind().and_then(operators::op_500) {
             let op = op.to_string();
@@ -53,7 +54,7 @@ impl Parser<'_> {
     }
 
     /// Precedence 400: left-associative (*, /, //, mod, rem, div, <<, >> — all yfx).
-    fn parse_expr_400(&mut self) -> Result<Term, String> {
+    fn parse_expr_400(&mut self) -> Result<Term, ParseError> {
         let mut left = self.parse_expr_200()?;
         while let Some(op) = self.current_kind().and_then(operators::op_400) {
             let op = op.to_string();
@@ -66,7 +67,7 @@ impl Parser<'_> {
 
     /// Precedence 200: `**` (xfx, non-associative), `^` (xfy, right-assoc),
     /// `:` (xfy, right-assoc). Issue #29.
-    fn parse_expr_200(&mut self) -> Result<Term, String> {
+    fn parse_expr_200(&mut self) -> Result<Term, ParseError> {
         let left = self.parse_primary()?;
         match self.current_kind() {
             // xfx — no chaining: RHS is just a primary, not parse_expr_200.
@@ -118,7 +119,7 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_primary(&mut self) -> Result<Term, String> {
+    fn parse_primary(&mut self) -> Result<Term, ParseError> {
         // Issue #19: an operator token at the start of a primary, immediately
         // followed by a "closing context" token, reads as the atom for that
         // operator. Handles `p(+)`, `[<, >]`, `X = (mod)`, `=..` round-trips,
@@ -145,16 +146,28 @@ impl Parser<'_> {
             }
             Some(TokenKind::Atom(ref name)) => {
                 let name = name.clone();
+                // Capture the atom token's start/end for the call-site span
+                // before advancing past it.
+                let (lo, atom_hi) = self
+                    .current()
+                    .map(|t| (t.lo, t.hi))
+                    .unwrap_or((0, 0));
                 self.advance();
                 // Check if followed by '(' — compound term
+                // The call-site span underlines just the functor name (not
+                // its args), so squiggles land tightly on the predicate name.
+                let span = Span::new(0, lo, atom_hi);
                 if self.current_kind() == Some(&TokenKind::LParen) {
                     self.advance(); // skip (
                     let args = self.parse_arg_list()?;
                     self.expect(&TokenKind::RParen)?;
                     let functor = self.interner.intern(&name);
+                    let arity = args.len();
+                    self.record_call_site(functor, arity, span);
                     Ok(Term::Compound { functor, args })
                 } else {
                     let id = self.interner.intern(&name);
+                    self.record_call_site(id, 0, span);
                     Ok(Term::Atom(id))
                 }
             }
@@ -226,13 +239,10 @@ impl Parser<'_> {
                 })
             }
             Some(ref tok) => {
-                let pos = self.current().unwrap();
-                Err(format!(
-                    "unexpected {} at line {} col {}",
-                    tok, pos.line, pos.col
-                ))
+                let msg = format!("unexpected {tok}");
+                Err(self.error_here(msg))
             }
-            None => Err("unexpected end of input".to_string()),
+            None => Err(self.error_here("unexpected end of input")),
         }
     }
 
@@ -256,7 +266,7 @@ impl Parser<'_> {
 
     /// Parse the body of a parenthesized expression, handling ; and ->.
     /// Supports: (A ; B), (Cond -> Then), (Cond -> Then ; Else)
-    fn parse_paren_body(&mut self) -> Result<Term, String> {
+    fn parse_paren_body(&mut self) -> Result<Term, ParseError> {
         let first = self.parse_paren_comma_list()?;
 
         if self.current_kind() == Some(&TokenKind::Arrow) {
@@ -294,7 +304,7 @@ impl Parser<'_> {
     }
 
     /// Parse a comma-separated goal conjunction within parens, building ','(A,B) terms.
-    fn parse_paren_comma_list(&mut self) -> Result<Term, String> {
+    fn parse_paren_comma_list(&mut self) -> Result<Term, ParseError> {
         let first = self.parse_term()?;
         if self.current_kind() == Some(&TokenKind::Comma) {
             // Check that the next comma isn't just the end of an arg list —
@@ -311,7 +321,7 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_arg_list(&mut self) -> Result<Vec<Term>, String> {
+    fn parse_arg_list(&mut self) -> Result<Vec<Term>, ParseError> {
         let mut args = vec![self.parse_term()?];
         while self.current_kind() == Some(&TokenKind::Comma) {
             self.advance();
@@ -320,7 +330,7 @@ impl Parser<'_> {
         Ok(args)
     }
 
-    fn parse_list_body(&mut self) -> Result<Term, String> {
+    fn parse_list_body(&mut self) -> Result<Term, ParseError> {
         // We're right after '['. Parse list elements.
         if self.current_kind() == Some(&TokenKind::RBracket) {
             self.advance();
@@ -332,7 +342,7 @@ impl Parser<'_> {
         self.parse_list_tail(first)
     }
 
-    fn parse_list_tail(&mut self, head: Term) -> Result<Term, String> {
+    fn parse_list_tail(&mut self, head: Term) -> Result<Term, ParseError> {
         match self.current_kind() {
             Some(TokenKind::Comma) => {
                 self.advance();
@@ -360,7 +370,7 @@ impl Parser<'_> {
                     tail: Box::new(Term::Atom(nil)),
                 })
             }
-            _ => Err("Expected ',', '|', or ']' in list".to_string()),
+            _ => Err(self.error_here("Expected ',', '|', or ']' in list")),
         }
     }
 }

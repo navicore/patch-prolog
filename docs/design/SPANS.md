@@ -1,7 +1,15 @@
 ## Spans (frontend → LSP → runtime errors)
 
-**Status: design.** Replaces the buffer-scan / string-trailer hacks
-the diagnostics path leans on today.
+**Status: Layers 1–2 implemented; Layer 3 (runtime provenance) pending.**
+Replaces the buffer-scan / string-trailer hacks the diagnostics path
+leaned on. Layer 1 (frontend `Span`/`Spanned`/`SourceMap`, structured
+`ParseError`, tokenizer byte offsets) and Layer 2 (LSP consumes spans
+directly — both `parse_at_line_col` and `call_site_ranges` deleted;
+`plgc`'s `format_parse_error` resolves position from the span) are done,
+single-buffer. The remaining work is Layer 3 below. The lint call-site
+squiggle is realized via parser-recorded atom-functor occurrences
+(`CallSite`) rather than a fully spanned AST — same user-visible result
+(squiggles on real calls, never on comment text), no codegen ripple.
 
 ## Intent
 
@@ -91,14 +99,14 @@ machine cells are unchanged.
 
 ## Checkpoints
 
-1. **Frontend**: every parser unit test that asserts on the old "at
-   line N col M" string is updated to assert on the structured
-   `ParseError.span`. New tests pin the span byte range for
-   representative cases (unexpected token, EOF, bad operator).
-2. **LSP**: `diagnostics::compute` no longer calls `parse_at_line_col`
-   or `call_site_ranges` (both deleted). New test: a buffer with
-   `xarent` in a comment plus a real `xarent` call produces exactly
-   one squiggle, on the call.
+1. **Frontend** ✅ — parser tests assert on the structured
+   `ParseError`/`.span` (no "at line N col M" string left); span byte
+   ranges are pinned for the unexpected-token and EOF cases
+   (`parse_error_span_*` in `parser/query/tests.rs`).
+2. **LSP** ✅ — `diagnostics::compute` no longer calls
+   `parse_at_line_col` or `call_site_ranges` (both deleted). The
+   comment-vs-call test (`comment_mention_does_not_squiggle_only_the_real_call`)
+   confirms exactly one squiggle, on the call.
 3. **Runtime**: `existence_error` on `family.pl:12` (an undefined call
    in a clause body, deliberately introduced) prints
    `... Undefined procedure: foo/1 at examples/family.pl:12:7` on

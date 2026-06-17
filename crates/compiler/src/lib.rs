@@ -9,7 +9,7 @@
 pub mod codegen;
 pub mod link;
 
-use plg_frontend::{Parser, ProgramDirectives};
+use plg_frontend::{ParseError, Parser, ProgramDirectives, SourceMap};
 use plg_shared::{Clause, StringInterner};
 use std::path::Path;
 
@@ -55,7 +55,7 @@ fn parse_sources(
             src.replace_range(..eol, "");
         }
         let (mut cs, ds) = Parser::parse_program_with_directives(&src, &mut interner)
-            .map_err(|msg| format_parse_error(path, &msg))?;
+            .map_err(|e| format_parse_error(path, &src, &e))?;
         clauses.append(&mut cs);
         directives.dynamic.extend(ds.dynamic);
     }
@@ -112,26 +112,10 @@ pub fn undefined_predicate_lints(sources: &[&Path]) -> Result<Vec<String>, Strin
         .collect())
 }
 
-/// Render a frontend parse error as `path:line:col: message`. The
-/// frontend embeds source coordinates as `... at line N col M`; lift
-/// them into the conventional prefix so editors and CI can jump to the
-/// offending token.
-fn format_parse_error(path: &Path, msg: &str) -> String {
-    if let Some((line, col)) = extract_line_col(msg) {
-        format!("{}:{}:{}: {}", path.display(), line, col, msg)
-    } else {
-        format!("{}: {}", path.display(), msg)
-    }
-}
-
-/// Pull `(line, col)` out of a frontend error message of the form
-/// `... at line N col M`. Returns `None` if the pattern is absent.
-fn extract_line_col(msg: &str) -> Option<(usize, usize)> {
-    let rest = msg.rsplit_once("at line ")?.1;
-    let (line_str, after) = rest.split_once(" col ")?;
-    // `col` may be followed by trailing prose; take the leading digits.
-    let col_str: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
-    let line = line_str.trim().parse().ok()?;
-    let col = col_str.parse().ok()?;
-    Some((line, col))
+/// Render a frontend parse error as `path:line:col: message`, resolving the
+/// error's byte span against the source via `SourceMap` so editors and CI
+/// can jump to the offending token.
+fn format_parse_error(path: &Path, src: &str, err: &ParseError) -> String {
+    let (line, col) = SourceMap::new(src).line_col(err.span.lo);
+    format!("{}:{}:{}: {}", path.display(), line, col, err.message)
 }

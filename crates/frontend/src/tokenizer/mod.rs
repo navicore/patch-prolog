@@ -118,18 +118,21 @@ impl<'a> Tokenizer<'a> {
 
     fn next_token(&mut self) -> Result<Token, String> {
         self.skip_whitespace();
+        let lo = self.pos as u32;
+        let mut token = self.next_token_inner()?;
+        // Stamp byte offsets once, at the single dispatch point, so the
+        // per-kind helpers don't each have to track them.
+        token.lo = lo;
+        token.hi = self.pos as u32;
+        Ok(token)
+    }
 
+    fn next_token_inner(&mut self) -> Result<Token, String> {
         let line = self.line;
         let col = self.col;
 
         let ch = match self.peek() {
-            None => {
-                return Ok(Token {
-                    kind: TokenKind::Eof,
-                    line,
-                    col,
-                });
-            }
+            None => return Ok(Token::new(TokenKind::Eof, line, col)),
             Some(ch) => ch,
         };
 
@@ -141,17 +144,9 @@ impl<'a> Tokenizer<'a> {
                 // Check for []
                 if self.peek() == Some(b']') {
                     self.advance();
-                    Ok(Token {
-                        kind: TokenKind::Atom("[]".into()),
-                        line,
-                        col,
-                    })
+                    Ok(Token::new(TokenKind::Atom("[]".into()), line, col))
                 } else {
-                    Ok(Token {
-                        kind: TokenKind::LBracket,
-                        line,
-                        col,
-                    })
+                    Ok(Token::new(TokenKind::LBracket, line, col))
                 }
             }
             b']' => self.single(TokenKind::RBracket, line, col),
@@ -190,7 +185,7 @@ impl<'a> Tokenizer<'a> {
     /// Consume one byte and emit a fixed single-character token.
     fn single(&mut self, kind: TokenKind, line: usize, col: usize) -> Result<Token, String> {
         self.advance();
-        Ok(Token { kind, line, col })
+        Ok(Token::new(kind, line, col))
     }
 }
 

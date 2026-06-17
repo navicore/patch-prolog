@@ -24,7 +24,7 @@ impl Tokenizer<'_> {
             "xor" => TokenKind::Xor,
             _ => TokenKind::Atom(s),
         };
-        Ok(Token { kind, line, col })
+        Ok(Token::new(kind, line, col))
     }
 
     pub(super) fn read_variable(&mut self, line: usize, col: usize) -> Result<Token, String> {
@@ -36,10 +36,6 @@ impl Tokenizer<'_> {
                 break;
             }
         }
-        Ok(Token {
-            kind: TokenKind::Variable(s),
-            line,
-            col,
-        })
+        Ok(Token::new(TokenKind::Variable(s), line, col))
     }
 }

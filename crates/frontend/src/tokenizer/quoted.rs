@@ -58,10 +58,6 @@ impl Tokenizer<'_> {
                 }
             }
         }
-        Ok(Token {
-            kind: TokenKind::Atom(s),
-            line,
-            col,
-        })
+        Ok(Token::new(TokenKind::Atom(s), line, col))
     }
 }

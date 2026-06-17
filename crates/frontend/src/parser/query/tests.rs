@@ -350,7 +350,24 @@ fn test_unknown_directive_errors() {
     let result = Parser::parse_program_with_directives(":- unknown_thing(foo).", &mut interner);
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.contains("Unknown directive"), "got: {err}");
+    assert!(err.message.contains("Unknown directive"), "got: {err}");
+}
+
+#[test]
+fn parse_error_span_covers_unexpected_token() {
+    let mut interner = StringInterner::new();
+    // `]` sits where a term is expected: "go :- bar(" is 10 bytes, `]` at 10.
+    let err = Parser::parse_program_with_directives("go :- bar(]).\n", &mut interner).unwrap_err();
+    assert_eq!((err.span.lo, err.span.hi), (10, 11), "got: {err}");
+    assert!(err.message.contains(']'), "got: {err}");
+}
+
+#[test]
+fn parse_error_span_points_at_end_of_input() {
+    let mut interner = StringInterner::new();
+    // Missing clause terminator: parser hits the Eof token at offset 3.
+    let err = Parser::parse_program_with_directives("foo", &mut interner).unwrap_err();
+    assert_eq!(err.span.lo, 3, "got: {err}");
 }
 
 #[test]

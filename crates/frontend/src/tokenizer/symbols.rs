@@ -30,7 +30,7 @@ impl Tokenizer<'_> {
             b'-' => self.sym_minus(),
             _ => unreachable!("read_symbol called with non-symbol byte"),
         };
-        Ok(Token { kind, line, col })
+        Ok(Token::new(kind, line, col))
     }
 
     fn sym_colon(&mut self, _line: usize, _col: usize) -> Result<TokenKind, String> {
@@ -162,7 +162,7 @@ impl Tokenizer<'_> {
             }
             _ => return Err(format!("Unexpected '@' at line {line} col {col}")),
         };
-        Ok(Token { kind, line, col })
+        Ok(Token::new(kind, line, col))
     }
 
     fn sym_star(&mut self) -> TokenKind {

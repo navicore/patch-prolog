@@ -2,6 +2,7 @@
 //! parsing. Ported from patch-prolog's `parser.rs`.
 
 use super::{Parser, ProgramDirectives};
+use crate::parse_error::ParseError;
 use crate::tokenizer::{TokenKind, Tokenizer};
 use plg_shared::{Clause, StringInterner, Term, VarId};
 use std::collections::HashMap;
@@ -13,7 +14,7 @@ impl<'a> Parser<'a> {
     pub fn parse_program(
         input: &str,
         interner: &mut StringInterner,
-    ) -> Result<Vec<Clause>, String> {
+    ) -> Result<Vec<Clause>, ParseError> {
         let (clauses, _) = Self::parse_program_with_directives(input, interner)?;
         Ok(clauses)
     }
@@ -24,20 +25,41 @@ impl<'a> Parser<'a> {
     pub fn parse_program_with_directives(
         input: &str,
         interner: &mut StringInterner,
-    ) -> Result<(Vec<Clause>, ProgramDirectives), String> {
+    ) -> Result<(Vec<Clause>, ProgramDirectives), ParseError> {
         let tokens = Tokenizer::tokenize(input)?;
         let mut parser = Parser::from_tokens(tokens, interner);
+        parser.parse_program_body()
+    }
+
+    /// Like `parse_program_with_directives`, but also returns the atom-functor
+    /// call-site occurrences (see [`super::CallSite`]) for the LSP to map
+    /// undefined-predicate warnings onto precise source ranges.
+    pub fn parse_program_with_spans(
+        input: &str,
+        interner: &mut StringInterner,
+    ) -> Result<(Vec<Clause>, ProgramDirectives, Vec<super::CallSite>), ParseError> {
+        let tokens = Tokenizer::tokenize(input)?;
+        let mut parser = Parser::from_tokens(tokens, interner);
+        let (clauses, directives) = parser.parse_program_body()?;
+        Ok((clauses, directives, parser.call_sites))
+    }
+
+    /// Shared program-parsing loop. Clauses are collected; `:- ...` directives
+    /// are interpreted into `directives`.
+    fn parse_program_body(
+        &mut self,
+    ) -> Result<(Vec<Clause>, ProgramDirectives), ParseError> {
         let mut clauses = Vec::new();
         let mut directives = ProgramDirectives::default();
-        while !parser.at_eof() {
-            parser.reset_vars();
-            if parser.current_kind() == Some(&TokenKind::Neck) {
-                parser.advance();
-                let body = parser.parse_term()?;
-                parser.expect(&TokenKind::Dot)?;
-                parser.process_directive(body, &mut directives)?;
+        while !self.at_eof() {
+            self.reset_vars();
+            if self.current_kind() == Some(&TokenKind::Neck) {
+                self.advance();
+                let body = self.parse_term()?;
+                self.expect(&TokenKind::Dot)?;
+                self.process_directive(body, &mut directives)?;
             } else {
-                clauses.push(parser.parse_clause()?);
+                clauses.push(self.parse_clause()?);
             }
         }
         Ok((clauses, directives))
@@ -45,7 +67,7 @@ impl<'a> Parser<'a> {
 
     /// Parse a single query (goal list) from source text, e.g. "parent(tom, X)".
     /// Does NOT require a trailing dot.
-    pub fn parse_query(input: &str, interner: &mut StringInterner) -> Result<Vec<Term>, String> {
+    pub fn parse_query(input: &str, interner: &mut StringInterner) -> Result<Vec<Term>, ParseError> {
         let tokens = Tokenizer::tokenize(input)?;
         let mut parser = Parser::from_tokens(tokens, interner);
         // Skip optional ?- prefix
@@ -63,10 +85,8 @@ impl<'a> Parser<'a> {
         // from mid-expression parse errors.
         if !parser.at_eof() {
             let pos = parser.current().unwrap();
-            return Err(format!(
-                "unexpected {} after query at line {} col {}",
-                pos.kind, pos.line, pos.col
-            ));
+            let msg = format!("unexpected {} after query", pos.kind);
+            return Err(parser.error_here(msg));
         }
         Ok(goals)
     }
@@ -75,7 +95,7 @@ impl<'a> Parser<'a> {
     pub fn parse_query_with_vars(
         input: &str,
         interner: &mut StringInterner,
-    ) -> Result<(Vec<Term>, HashMap<String, VarId>), String> {
+    ) -> Result<(Vec<Term>, HashMap<String, VarId>), ParseError> {
         let tokens = Tokenizer::tokenize(input)?;
         let mut parser = Parser::from_tokens(tokens, interner);
         if parser.current_kind() == Some(&TokenKind::QueryOp) {
@@ -88,16 +108,14 @@ impl<'a> Parser<'a> {
         // Issue #30 — see `parse_query` for rationale.
         if !parser.at_eof() {
             let pos = parser.current().unwrap();
-            return Err(format!(
-                "unexpected {} after query at line {} col {}",
-                pos.kind, pos.line, pos.col
-            ));
+            let msg = format!("unexpected {} after query", pos.kind);
+            return Err(parser.error_here(msg));
         }
         let vars = parser.var_map;
         Ok((goals, vars))
     }
 
-    pub(super) fn parse_goal_list(&mut self) -> Result<Vec<Term>, String> {
+    pub(super) fn parse_goal_list(&mut self) -> Result<Vec<Term>, ParseError> {
         // Parse the entire body as a conjunction/disjunction tree.
         // The solver flattens ','(a, b) via BuiltinResult::Conjunction.
         let body = self.parse_goal_disjunction()?;
@@ -105,7 +123,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse disjunction (;) — ISO precedence 1100, looser than comma (1000).
-    fn parse_goal_disjunction(&mut self) -> Result<Term, String> {
+    fn parse_goal_disjunction(&mut self) -> Result<Term, ParseError> {
         let left = self.parse_goal_conjunction()?;
         if self.current_kind() == Some(&TokenKind::Semicolon) {
             self.advance();
@@ -121,7 +139,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse conjunction (,) — ISO precedence 1000, tighter than semicolon.
-    fn parse_goal_conjunction(&mut self) -> Result<Term, String> {
+    fn parse_goal_conjunction(&mut self) -> Result<Term, ParseError> {
         let first = self.parse_term()?;
         if self.current_kind() == Some(&TokenKind::Comma) {
             let mut goals = vec![first];

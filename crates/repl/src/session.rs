@@ -5,7 +5,7 @@
 //! no compile) and, on success, marks the session dirty so the next run
 //! recompiles. Queries never touch the buffer.
 
-use plg_frontend::{Parser, TokenKind, Tokenizer};
+use plg_frontend::{Parser, SourceMap, TokenKind, Tokenizer};
 use plg_shared::StringInterner;
 
 /// One line of REPL input, classified.
@@ -96,7 +96,10 @@ impl Session {
     /// consulted file.
     pub fn load_source(&mut self, text: &str) -> Result<usize, String> {
         let mut interner = StringInterner::new();
-        Parser::parse_program_with_directives(text, &mut interner)?;
+        Parser::parse_program_with_directives(text, &mut interner).map_err(|e| {
+            let (line, col) = SourceMap::new(text).line_col(e.span.lo);
+            format!("line {line} col {col}: {}", e.message)
+        })?;
         let clauses = split_clauses(text);
         let n = clauses.len();
         self.clauses.extend(clauses);
