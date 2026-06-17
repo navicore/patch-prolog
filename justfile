@@ -141,3 +141,13 @@ clean:
 
 # Development: quick format + build + test
 dev: fmt build test
+
+# Build the mdbook documentation site into ./book/ (what CI publishes)
+docs:
+    @echo "Building documentation..."
+    mdbook build
+    @echo "✅ Documentation built in book/"
+
+# Serve the docs locally with live reload
+docs-serve:
+    mdbook serve --open

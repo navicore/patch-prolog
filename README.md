@@ -12,8 +12,7 @@ echo $?   # 0 = no solutions (clean), 1 = solutions found
 ```
 
 This project supersedes [patch-prolog](https://git.navicore.tech/navicore/patch-prolog),
-which shipped an excellent Prolog *engine* but never a compiler — see
-[docs/design/LESSONS_FROM_V1.md](docs/design/LESSONS_FROM_V1.md). The
+which shipped an excellent Prolog *engine* but never a compiler. The
 language semantics (ISO subset, v1's full builtin vocabulary, the
 embedded list stdlib, safety guarantees) carry over at byte-level wire
 parity, verified by a ported 200-assertion corpus and a differential
@@ -80,13 +79,21 @@ Deep recursion is safe: all control transfers are guaranteed tail
 calls (`musttail`), so a million-deep `ancestor/2` chain runs in
 constant C stack.
 
-## Docs
+## Documentation
 
-Project context lives in `docs/` (myspec convention):
-[ARCHITECTURE](docs/ARCHITECTURE.md) ·
-[ROADMAP](docs/ROADMAP.md) ·
-[ISO compliance](docs/ISO_COMPLIANCE.md) ·
-[Testing guide](docs/TESTING_GUIDE.md) ·
-[Compilation model](docs/design/COMPILATION_MODEL.md) ·
-[Runtime ABI](docs/design/RUNTIME_ABI.md) ·
-[Lessons from v1](docs/design/LESSONS_FROM_V1.md)
+The full documentation site is published at
+**<https://docs.navicore.tech/patch-prolog/>** — built from `docs/` with
+mdBook. Source pages:
+[Getting Started](docs/getting-started.md) ·
+[Compiler Usage](docs/compiler-usage.md) ·
+[Language Guide](docs/language-guide.md) ·
+[Operators](docs/OPERATORS.md) ·
+[Builtin & Stdlib Reference](docs/builtin-reference.md) ·
+[Semantics & ISO Conformance](docs/ISO_COMPLIANCE.md) ·
+[REPL Guide](docs/repl-guide.md) ·
+[LSP & Editor Guide](docs/lsp-guide.md) ·
+[Examples](docs/examples.md) ·
+[Architecture](docs/ARCHITECTURE.md)
+
+Build the site locally with `just docs-serve` (live reload) or `just docs`
+(one-shot into `book/`).

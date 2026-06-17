@@ -1,6 +1,6 @@
 # Architecture
 
-patch-prolog2 compiles an ISO-subset Prolog program to a standalone
+patch-prolog compiles an ISO-subset Prolog program to a standalone
 native binary. The compiled binary contains **no clause interpreter**:
 predicates are native functions generated as LLVM IR; only primitive
 services (heap, trail, unification, builtins, query parsing, output)
@@ -34,9 +34,11 @@ rules.pl ──parse──▶ AST ──analyze──▶ codegen ──▶ rules
   runtime code the program can't reach, keeping binaries small.
 - Users of `plgc` need clang. Users of compiled binaries need nothing.
 
-This is the architecture proven by patch-seq; see
-`design/LESSONS_FROM_V1.md` for why the alternative (embedding data in
-an interpreter) is rejected.
+This is the architecture proven by patch-seq: a compiled binary contains
+no clause interpreter. The rejected alternative — embedding a serialized
+clause database inside a shipped interpreter — would put the whole
+interpreter (and a Rust runtime) into every "compiled" program, and is why
+this engine generates native code per predicate instead.
 
 ## Crates
 
@@ -46,22 +48,18 @@ an interpreter) is rejected.
 | `plg-frontend` | rlib | Tokenizer + operator-precedence parser + ISO error types (ported from v1). Compiler-side only. |
 | `plg-runtime` | **staticlib** + rlib | The machine substrate compiled code calls into: heap/trail/choice points, generic unify, ~60 builtins, the minimal goal-only `--query` parser, JSON/text output, process entry. Ships inside every compiled binary. |
 | `plg-compiler` | bin `plgc` + rlib | CLI, codegen (IR text emission), clang driver, runtime embedding. |
+| `plg-lsp` | bin `plgl` | Language server (diagnostics, completion, hover, goto-definition). A frontend consumer — never links the runtime. |
+| `plg-repl` | bin `plgr` | Interactive REPL that drives the compiler; never interprets. |
 
 Dependency rule: nothing heavy (clap, serde, …) may enter `plg-runtime`
-or `plg-shared`; every byte there lands in every user binary.
-
-> **Future-work note (negotiable, case-by-case).** The zero-dep rule is a
-> strong default, not an absolute. A dependency that pays for its bytes —
-> measured against the footprint gate, not assumed — is on the table. In
-> particular, `iddqd` (multi-index maps) would be **considered** for the
-> fact-table compilation feature; see
-> `design/UNSAFE_POC_CANDIDATES.md`. The bar for any such exception:
-> demonstrate the footprint/`ldd` contract still holds, or scope the dep
-> to compiler-side crates only.
+or `plg-shared`; every byte there lands in every user binary. (The
+compiler-side crates — `plg-frontend`, `plg-compiler`, `plg-lsp`,
+`plg-repl` — are dev tooling and carry no such constraint.) This is a
+strong default, not an absolute: a dependency that demonstrably pays for
+its bytes against the footprint gate, or is scoped to compiler-side crates,
+can be considered.
 
 ## Execution model (summary)
-
-Full detail: `design/COMPILATION_MODEL.md` and `design/RUNTIME_ABI.md`.
 
 - Each predicate compiles to one LLVM function in continuation-passing
   style: it receives the Machine pointer, its arguments as tagged 64-bit

@@ -21,5 +21,5 @@
 
 # Appendix
 
-- [Examples]()
-- [Architecture]()
+- [Examples](examples.md)
+- [Architecture](ARCHITECTURE.md)
