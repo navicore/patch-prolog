@@ -1,9 +1,17 @@
 # Unsafe-Rust PoC Candidates (learning study)
 
-**Status: exploratory note (2026-06-14).** Educational, not a committed
-work item. Frames where `unsafe` *could* earn its keep in this engine,
-which candidate best mirrors the `iddqd` pattern, and the guardrails any
-PoC must carry to stay true to the project's correctness ethos.
+**Status: active learning study (2026-06-14, revived 2026-06-17).** A
+deliberately-scoped `unsafe` PoC we *intend* to pursue for education —
+kept active (not retired) because we mean to do it; the production-viability
+bar below is the gate, not a reason to shelve it. Frames where `unsafe`
+*could* earn its keep in this engine, which candidate best mirrors the
+`iddqd` pattern, and the guardrails any PoC must carry.
+
+> **Relationship to SPANS.** None — they were briefly conflated. The
+> error-span design (`SPANS.md`) is byte-offset value types (`Span { file,
+> lo, hi }`) plus a `SourceMap`; positions are `u32` offsets, not borrowed
+> slices, so spans need **no `unsafe`** and have no candidate here. This
+> doc is the sole home of the `unsafe` exploration.
 
 ## Intent
 
