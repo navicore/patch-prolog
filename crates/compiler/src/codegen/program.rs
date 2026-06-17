@@ -2,15 +2,15 @@
 //! declarations, the atom table, the registry, every predicate's
 //! functions, and the thin `main`.
 
-use super::CodeGen;
-use plg_frontend::ProgramDirectives;
-use plg_shared::{Clause, StringInterner};
+use super::{CgSource, CodeGen};
+use plg_frontend::{CgClause, ProgramDirectives};
+use plg_shared::StringInterner;
 use std::fmt::Write;
 
 /// Runtime functions generated code calls (the plg_rt_* ABI — see
 /// docs/design/RUNTIME_ABI.md; signatures mirror crates/runtime/src/abi.rs).
 const RUNTIME_DECLS: &str = "\
-declare ptr @plg_rt_init(ptr, i32, ptr, i32)
+declare ptr @plg_rt_init(ptr, i32, ptr, i32, ptr, i32, ptr, i32)
 declare i32 @plg_rt_main(ptr, i32, ptr)
 declare i32 @plg_rt_step(ptr)
 declare i64 @plg_rt_new_var(ptr)
@@ -29,7 +29,7 @@ declare i64 @plg_rt_k_fn(ptr)
 declare i64 @plg_rt_k_env(ptr)
 declare void @plg_rt_push_cp(ptr, i64, i64)
 declare i32 @plg_rt_pred_fail(ptr, i64)
-declare i32 @plg_rt_existence_error(ptr, i32, i32)
+declare i32 @plg_rt_existence_error(ptr, i32, i32, i32)
 declare i64 @plg_rt_cp_top(ptr)
 declare void @plg_rt_cut(ptr, i64)
 declare i64 @plg_rt_deref(ptr, i64)
@@ -63,11 +63,12 @@ fn target_triple() -> &'static str {
 }
 
 pub fn codegen_program(
-    clauses: &[Clause],
+    clauses: &[CgClause],
     directives: &ProgramDirectives,
     interner: &StringInterner,
+    sources: &[CgSource],
 ) -> Result<String, String> {
-    let mut cg = CodeGen::new(interner);
+    let mut cg = CodeGen::new(interner, sources);
 
     // Group clauses by (functor, arity), preserving program order.
     for clause in clauses {
@@ -121,12 +122,17 @@ pub fn codegen_program(
         cg.out.push('\n');
     }
 
+    // --- Source-location side-table (SPANS.md Layer 3), emitted after the
+    // predicates have populated it via `site_id`.
+    let (srcmap_len, files_len) = cg.emit_provenance();
+    cg.out.push('\n');
+
     // --- Thin main: everything else lives in the runtime.
     writeln!(cg.out, "define i32 @main(i32 %argc, ptr %argv) {{").unwrap();
     writeln!(cg.out, "entry:").unwrap();
     writeln!(
         cg.out,
-        "  %m = call ptr @plg_rt_init(ptr @plg_atom_strs, i32 {}, ptr @plg_registry, i32 {registry_len})",
+        "  %m = call ptr @plg_rt_init(ptr @plg_atom_strs, i32 {}, ptr @plg_registry, i32 {registry_len}, ptr @plg_srcmap, i32 {srcmap_len}, ptr @plg_files, i32 {files_len})",
         interner.len()
     )
     .unwrap();

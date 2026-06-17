@@ -10,10 +10,13 @@
 //! derives dropped, and `Term`/`Clause`/`StringInterner`/`VarId`/`AtomId`
 //! sourced from `plg_shared`.
 
+mod cg;
 mod clause;
 pub mod operators;
 mod query;
 mod term;
+
+pub use cg::CgClause;
 
 use crate::parse_error::ParseError;
 use crate::tokenizer::{Token, TokenKind};
@@ -59,6 +62,9 @@ pub struct Parser<'a> {
     /// Atom-functor term occurrences, accumulated across the whole program
     /// (not reset per clause — the LSP wants every buffer occurrence).
     call_sites: Vec<CallSite>,
+    /// File id stamped on spans produced for the codegen path (SPANS.md
+    /// Layer 3). Default `0`; set per source by `parse_program_cg`.
+    file_id: plg_shared::FileId,
 }
 
 impl<'a> Parser<'a> {
@@ -71,6 +77,7 @@ impl<'a> Parser<'a> {
             var_map: HashMap::new(),
             next_var: 0,
             call_sites: Vec::new(),
+            file_id: 0,
         }
     }
 

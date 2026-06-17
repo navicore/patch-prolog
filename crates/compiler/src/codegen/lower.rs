@@ -2,7 +2,7 @@
 //! consumes. Control constructs and deterministic builtins are
 //! recognized here by functor name; everything else is a `Call`.
 
-use plg_shared::{AtomId, StringInterner, Term};
+use plg_shared::{AtomId, Span, Spanned, StringInterner, Term};
 
 /// Arithmetic comparison op codes — ABI contract with
 /// `plg_rt_b_arith_cmp` (docs/design/RUNTIME_ABI.md).
@@ -64,10 +64,12 @@ pub const DET_BUILTINS: &[(&str, u32, &str)] = &[
 #[derive(Clone)]
 pub enum LGoal {
     /// User predicate (or dynamic / undefined / control builtin routed
-    /// through emit_call_tail).
+    /// through emit_call_tail). `span` is the call site (SPANS.md Layer 3):
+    /// codegen turns it into a `site_id` for existence_error provenance.
     Call {
         functor: AtomId,
         args: Vec<Term>,
+        span: Span,
     },
     /// A variable goal (`p :- X.`) — runtime metacall.
     Metacall(Term),
@@ -97,7 +99,7 @@ pub enum LGoal {
     Conj(Vec<LGoal>),
 }
 
-pub fn lower_goal(t: &Term, interner: &StringInterner) -> Result<LGoal, String> {
+pub fn lower_goal(t: &Term, span: Span, interner: &StringInterner) -> Result<LGoal, String> {
     let (name, args): (&str, &[Term]) = match t {
         Term::Atom(id) => (interner.resolve(*id), &[]),
         Term::Compound { functor, args } => (interner.resolve(*functor), args),
@@ -110,7 +112,7 @@ pub fn lower_goal(t: &Term, interner: &StringInterner) -> Result<LGoal, String> 
         ("!", 0) => LGoal::Cut,
         (",", 2) => {
             let mut goals = Vec::new();
-            flatten_conj(t, interner, &mut goals)?;
+            flatten_conj(t, span, interner, &mut goals)?;
             LGoal::Conj(goals)
         }
         (";", 2) => {
@@ -123,24 +125,24 @@ pub fn lower_goal(t: &Term, interner: &StringInterner) -> Result<LGoal, String> 
                 && ite_args.len() == 2
             {
                 LGoal::IfThenElse(
-                    Box::new(lower_goal(&ite_args[0], interner)?),
-                    Box::new(lower_goal(&ite_args[1], interner)?),
-                    Box::new(lower_goal(&args[1], interner)?),
+                    Box::new(lower_goal(&ite_args[0], span, interner)?),
+                    Box::new(lower_goal(&ite_args[1], span, interner)?),
+                    Box::new(lower_goal(&args[1], span, interner)?),
                 )
             } else {
                 LGoal::Disj(
-                    Box::new(lower_goal(&args[0], interner)?),
-                    Box::new(lower_goal(&args[1], interner)?),
+                    Box::new(lower_goal(&args[0], span, interner)?),
+                    Box::new(lower_goal(&args[1], span, interner)?),
                 )
             }
         }
         ("->", 2) => LGoal::IfThen(
-            Box::new(lower_goal(&args[0], interner)?),
-            Box::new(lower_goal(&args[1], interner)?),
+            Box::new(lower_goal(&args[0], span, interner)?),
+            Box::new(lower_goal(&args[1], span, interner)?),
         ),
-        ("\\+", 1) => LGoal::Naf(Box::new(lower_goal(&args[0], interner)?)),
+        ("\\+", 1) => LGoal::Naf(Box::new(lower_goal(&args[0], span, interner)?)),
         ("once", 1) if !matches!(args[0], Term::Var(_)) => {
-            LGoal::Once(Box::new(lower_goal(&args[0], interner)?))
+            LGoal::Once(Box::new(lower_goal(&args[0], span, interner)?))
         }
         // once(Var): route through the runtime metacall (the goal walker
         // implements once over runtime-built goals).
@@ -175,6 +177,7 @@ pub fn lower_goal(t: &Term, interner: &StringInterner) -> Result<LGoal, String> 
                 LGoal::Call {
                     functor,
                     args: args.to_vec(),
+                    span,
                 }
             }
         }
@@ -183,16 +186,23 @@ pub fn lower_goal(t: &Term, interner: &StringInterner) -> Result<LGoal, String> 
 }
 
 /// Flatten a `,`-tree into a goal list (right-associated per the parser).
-fn flatten_conj(t: &Term, interner: &StringInterner, out: &mut Vec<LGoal>) -> Result<(), String> {
+/// All leaves inherit the enclosing conjunct's `span` (SPANS.md Layer 3:
+/// nested goals get coarser-but-present provenance).
+fn flatten_conj(
+    t: &Term,
+    span: Span,
+    interner: &StringInterner,
+    out: &mut Vec<LGoal>,
+) -> Result<(), String> {
     if let Term::Compound { functor, args } = t
         && args.len() == 2
         && interner.resolve(*functor) == ","
     {
-        flatten_conj(&args[0], interner, out)?;
-        flatten_conj(&args[1], interner, out)?;
+        flatten_conj(&args[0], span, interner, out)?;
+        flatten_conj(&args[1], span, interner, out)?;
         return Ok(());
     }
-    match lower_goal(t, interner)? {
+    match lower_goal(t, span, interner)? {
         LGoal::True => {}                                 // drop bare true
         LGoal::Conj(mut inner) => out.append(&mut inner), // shouldn't occur, but flatten
         g => out.push(g),
@@ -200,11 +210,18 @@ fn flatten_conj(t: &Term, interner: &StringInterner, out: &mut Vec<LGoal>) -> Re
     Ok(())
 }
 
-/// Lower a clause body (the parser yields a single `,`-tree per body).
-pub fn lower_body(body: &[Term], interner: &StringInterner) -> Result<Vec<LGoal>, String> {
+/// Lower a clause body: the codegen parser yields top-level conjuncts, each
+/// carrying its source span. A conjunct that is itself a `,`-tree (e.g. a
+/// parenthesized `(b, c)`) lowers to a `Conj`; splicing it preserves the flat
+/// goal sequence the old single-`,`-tree path produced (IR unchanged).
+pub fn lower_body(body: &[Spanned<Term>], interner: &StringInterner) -> Result<Vec<LGoal>, String> {
     let mut goals = Vec::new();
-    for t in body {
-        flatten_conj(t, interner, &mut goals)?;
+    for sp in body {
+        match lower_goal(&sp.node, sp.span, interner)? {
+            LGoal::True => {}
+            LGoal::Conj(mut inner) => goals.append(&mut inner),
+            g => goals.push(g),
+        }
     }
     Ok(goals)
 }

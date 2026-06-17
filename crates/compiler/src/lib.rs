@@ -9,8 +9,9 @@
 pub mod codegen;
 pub mod link;
 
-use plg_frontend::{ParseError, Parser, ProgramDirectives, SourceMap};
-use plg_shared::{Clause, StringInterner};
+use codegen::CgSource;
+use plg_frontend::{CgClause, ParseError, Parser, ProgramDirectives, SourceMap};
+use plg_shared::{Clause, Span, Spanned, StringInterner};
 use std::path::Path;
 
 /// Embedded runtime library (built by build.rs from plg-runtime).
@@ -62,6 +63,59 @@ fn parse_sources(
     Ok((clauses, directives, interner))
 }
 
+/// Codegen variant of [`parse_sources`]: clause bodies carry per-goal source
+/// spans (SPANS.md Layer 3) and each user file becomes a `CgSource` (indexed
+/// by `FileId`) so codegen can resolve call-site spans to `file:line:col`.
+/// Stdlib clauses carry no provenance (their calls are all defined).
+fn parse_sources_cg(
+    sources: &[&Path],
+) -> Result<
+    (
+        Vec<CgClause>,
+        ProgramDirectives,
+        StringInterner,
+        Vec<CgSource>,
+    ),
+    String,
+> {
+    if sources.is_empty() {
+        return Err("no input files".to_string());
+    }
+    let mut interner = StringInterner::new();
+    let (stdlib, mut directives) = Parser::parse_program_with_directives(STDLIB_PL, &mut interner)
+        .map_err(|e| format!("internal: stdlib parse error: {e}"))?;
+    let mut clauses: Vec<CgClause> = stdlib.into_iter().map(clause_without_provenance).collect();
+    let mut cg_sources: Vec<CgSource> = Vec::new();
+    for path in sources {
+        let mut src = std::fs::read_to_string(path)
+            .map_err(|e| format!("{}: cannot read file: {e}", path.display()))?;
+        if src.starts_with("#!") {
+            let eol = src.find('\n').unwrap_or(src.len());
+            src.replace_range(..eol, "");
+        }
+        let file_id = cg_sources.len() as u32;
+        let (mut cs, ds) = Parser::parse_program_cg(&src, &mut interner, file_id)
+            .map_err(|e| format_parse_error(path, &src, &e))?;
+        clauses.append(&mut cs);
+        directives.dynamic.extend(ds.dynamic);
+        cg_sources.push(CgSource {
+            path: path.display().to_string(),
+            text: src,
+        });
+    }
+    Ok((clauses, directives, interner, cg_sources))
+}
+
+/// Wrap a plain clause as a `CgClause` with no usable provenance: file id
+/// `u32::MAX` is never a valid source index, so codegen emits `NO_SITE`.
+fn clause_without_provenance(c: Clause) -> CgClause {
+    let dummy = Span::point(u32::MAX, 0);
+    CgClause {
+        head: c.head,
+        body: c.body.into_iter().map(|t| Spanned::new(t, dummy)).collect(),
+    }
+}
+
 /// Compile one or more .pl source files to a standalone executable.
 pub fn compile_files(
     sources: &[&Path],
@@ -69,8 +123,8 @@ pub fn compile_files(
     keep_ir: bool,
     opt: OptLevel,
 ) -> Result<(), String> {
-    let (clauses, directives, interner) = parse_sources(sources)?;
-    let ir = codegen::codegen_program(&clauses, &directives, &interner)?;
+    let (clauses, directives, interner, cg_sources) = parse_sources_cg(sources)?;
+    let ir = codegen::codegen_program(&clauses, &directives, &interner, &cg_sources)?;
 
     let ir_path = output_path.with_extension("ll");
     std::fs::write(&ir_path, &ir).map_err(|e| format!("Failed to write IR file: {e}"))?;
@@ -85,9 +139,13 @@ pub fn compile_files(
 /// Compile source text to LLVM IR (golden-IR tests; no clang needed).
 pub fn compile_to_ir(source: &str) -> Result<String, String> {
     let mut interner = StringInterner::new();
-    let (clauses, directives) = Parser::parse_program_with_directives(source, &mut interner)
+    let (clauses, directives) = Parser::parse_program_cg(source, &mut interner, 0)
         .map_err(|e| format!("parse error: {e}"))?;
-    codegen::codegen_program(&clauses, &directives, &interner)
+    let cg_sources = vec![CgSource {
+        path: "<source>".to_string(),
+        text: source.to_string(),
+    }];
+    codegen::codegen_program(&clauses, &directives, &interner, &cg_sources)
 }
 
 /// Parse and statically check .pl sources without producing a binary.

@@ -16,7 +16,8 @@
 
 use super::CodeGen;
 use super::term_emit::{atom_word, int_word};
-use plg_shared::{AtomId, Clause, FirstArgKey};
+use plg_frontend::CgClause;
+use plg_shared::{AtomId, FirstArgKey};
 use std::collections::HashMap;
 use std::fmt::Write;
 
@@ -25,7 +26,7 @@ impl CodeGen<'_> {
         &mut self,
         functor: AtomId,
         arity: u32,
-        clauses: &[Clause],
+        clauses: &[CgClause],
     ) -> Result<(), String> {
         let name = self.pred_symbol(functor, arity);
         let base = format!("plg_p{functor}_{arity}");

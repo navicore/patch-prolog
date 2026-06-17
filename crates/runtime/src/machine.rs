@@ -27,6 +27,23 @@ pub struct RegistryEntry {
     pub f: ContFn,
 }
 
+/// One source-location row of the codegen-emitted `@plg_srcmap` side-table
+/// (SPANS.md Layer 3). A raising call site passes its index (`site_id`) and
+/// the error path resolves it to `file:line:col`. Layout mirrors the IR's
+/// `{i32, i32, i32}`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SrcLoc {
+    pub file: u32,
+    pub line: u32,
+    pub col: u32,
+}
+
+/// `site_id` sentinel meaning "no source location" — runtime-internal
+/// raises (query-side undefined goals) and any binary built without
+/// provenance. The error message gets no `at file:line:col` suffix.
+pub const NO_SITE: u32 = u32::MAX;
+
 /// Catch frames participate in error unwinding (drive() in solve.rs)
 /// and stop cut truncation (v1 rule: catch is opaque to cut).
 #[derive(Clone, Copy, PartialEq)]
@@ -67,6 +84,11 @@ pub struct Machine {
     pub error: Option<RtError>,
     pub atoms: StringInterner,
     pub registry: Vec<RegistryEntry>,
+    /// Source-location side-table (SPANS.md Layer 3), handed over by codegen
+    /// at init. Empty for binaries built without provenance.
+    pub srcmap: Vec<SrcLoc>,
+    /// `file_id` → filename, parallel to `srcmap`'s `file` field.
+    pub files: Vec<String>,
     /// Query variables in source order: (name, heap index of the cell).
     pub query_vars: Vec<(String, usize)>,
     /// findall/3 collector stack (a stack because findall can nest):
@@ -103,6 +125,8 @@ impl Machine {
             error: None,
             atoms,
             registry,
+            srcmap: Vec::new(),
+            files: Vec::new(),
             query_vars: Vec::new(),
             findall_stack: Vec::new(),
             qbarrier: 0,
@@ -211,6 +235,25 @@ impl Machine {
             .binary_search_by_key(&(functor, arity), |e| (e.functor, e.arity))
             .ok()
             .map(|i| self.registry[i].f)
+    }
+
+    /// Install the codegen-emitted source-location side-table (SPANS.md
+    /// Layer 3). Called once from `plg_rt_init`.
+    pub fn set_provenance(&mut self, srcmap: Vec<SrcLoc>, files: Vec<String>) {
+        self.srcmap = srcmap;
+        self.files = files;
+    }
+
+    /// Resolve a `site_id` to `(filename, line, col)`, or `None` for the
+    /// `NO_SITE` sentinel / a binary built without provenance. Owned so the
+    /// (cold) error path can mutate `self.error` without a borrow conflict.
+    pub fn site_location(&self, site_id: u32) -> Option<(String, u32, u32)> {
+        if site_id == NO_SITE {
+            return None;
+        }
+        let loc = self.srcmap.get(site_id as usize)?;
+        let file = self.files.get(loc.file as usize)?;
+        Some((file.clone(), loc.line, loc.col))
     }
 }
 

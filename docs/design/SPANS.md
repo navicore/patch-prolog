@@ -1,12 +1,29 @@
 ## Spans (frontend → LSP → runtime errors)
 
-**Status: Layers 1–2 implemented; Layer 3 (runtime provenance) pending.**
-Replaces the buffer-scan / string-trailer hacks the diagnostics path
-leaned on. Layer 1 (frontend `Span`/`Spanned`/`SourceMap`, structured
-`ParseError`, tokenizer byte offsets) and Layer 2 (LSP consumes spans
-directly — both `parse_at_line_col` and `call_site_ranges` deleted;
-`plgc`'s `format_parse_error` resolves position from the span) are done,
-single-buffer. The remaining work is Layer 3 below. The lint call-site
+**Status: Layers 1–2 done; Layer 3 landed for `existence_error`,
+remaining error classes are fast-follow.** Replaces the buffer-scan /
+string-trailer hacks the diagnostics path leaned on. Layer 1 (frontend
+`Span`/`Spanned`/`SourceMap`, structured `ParseError`, tokenizer byte
+offsets) and Layer 2 (LSP consumes spans directly — both
+`parse_at_line_col` and `call_site_ranges` deleted; `plgc`'s
+`format_parse_error` resolves position from the span) are done,
+single-buffer.
+
+Layer 3 transport is **built and wired for undefined-procedure errors**:
+the chosen shape is a side-table the Machine owns via a `plg_rt_init`
+handoff (NOT the extern-global variant the sketch below assumed), with a
+`u32 site_id` passed as an arg to each raising call. Codegen emits
+`@plg_srcmap`/`@plg_files` (resolving each call-site span to
+`file:line:col` against the source) and passes the `site_id` to
+`plg_rt_existence_error`; the runtime appends ` at file:line:col` to the
+rendered message only when the id resolves (`NO_SITE = u32::MAX` =
+no provenance, so query-side raises and stdlib stay byte-identical to
+v1). The compile path parses bodies into spanned top-level conjuncts
+(`CgClause`/`parse_program_cg`); nested goals inherit the conjunct span.
+**Remaining (fast-follow, zero new architecture):** thread `site_id`
+into the other raising builtins (`is/2`, comparisons, type-checks,
+`throw/1`) — each is "pass `site_id` to that call + read it in the error
+constructor"; and the diff-helper suffix-stripping for checkpoint 5. The lint call-site
 squiggle is realized via parser-recorded atom-functor occurrences
 (`CallSite`) rather than a fully spanned AST — same user-visible result
 (squiggles on real calls, never on comment text), no codegen ripple.
@@ -112,16 +129,16 @@ machine cells are unchanged.
    `parse_at_line_col` or `call_site_ranges` (both deleted). The
    comment-vs-call test (`comment_mention_does_not_squiggle_only_the_real_call`)
    confirms exactly one squiggle, on the call.
-3. **Runtime**: `existence_error` on `family.pl:12` (an undefined call
-   in a clause body, deliberately introduced) prints
-   `... Undefined procedure: foo/1 at examples/family.pl:12:7` on
-   stderr. Existing oracle-bytes tests still pass — the ISO `error/2`
-   term rendering is unchanged; only the post-term context line
-   gains the suffix.
-4. **Footprint**: hello-world default-build (no source loc errors
-   reachable) stays under the 1.3M ceiling enforced by
-   `tests/binary_size.rs` — `--gc-sections` proves the side-table is
-   pay-for-what-you-use.
+3. **Runtime** ✅ — a compiled binary with an undefined call in a clause
+   body prints `... Undefined procedure: missing/1) at <path>:2:5`
+   (`existence_error_carries_source_location` in `tests/integration.rs`).
+   The ISO `error/2` ball is unchanged; only `RtError.message` gains the
+   suffix. Query-side raises keep the v1 bytes
+   (`query_side_existence_error_has_no_location_suffix`), and the
+   byte-exact runtime unit tests pass via `NO_SITE`.
+4. **Footprint** ✅ — hello-world stays under the ceiling
+   (`tests/binary_size.rs`); empty `@plg_srcmap`/`@plg_files` cost ~0
+   bytes, so provenance is pay-for-what-you-use.
 5. **Differential**: `just diff-test` continues to match the v1 oracle
    modulo the new `at file:line:col` suffix (the oracle never emitted
    it). Diff helper learns to strip the suffix when comparing.

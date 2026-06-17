@@ -124,7 +124,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse disjunction (;) — ISO precedence 1100, looser than comma (1000).
-    fn parse_goal_disjunction(&mut self) -> Result<Term, ParseError> {
+    pub(super) fn parse_goal_disjunction(&mut self) -> Result<Term, ParseError> {
         let left = self.parse_goal_conjunction()?;
         if self.current_kind() == Some(&TokenKind::Semicolon) {
             self.advance();
