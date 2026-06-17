@@ -14,13 +14,28 @@ use ratatui::widgets::Paragraph;
 
 pub fn render(f: &mut Frame, app: &App) {
     let area = f.area();
+    let paging = app.is_paging();
 
-    // Transcript + the live input line behind a prompt (continuation
-    // prompt while a multi-line clause is still open).
-    let prompt = if app.pending.is_empty() { PROMPT } else { CONT };
-    let input_line = format!("{prompt}{}", app.input.text());
+    // The live line: while paging, a `;`/stop hint replaces the input behind
+    // a prompt (continuation prompt while a multi-line clause is still open).
+    let (live, cursor_col) = if paging {
+        (
+            "    ;  next solution    ·    any other key  stop".to_string(),
+            0,
+        )
+    } else {
+        let prompt = if app.pending.is_empty() { PROMPT } else { CONT };
+        (
+            format!("{prompt}{}", app.input.text()),
+            prompt.chars().count() + app.input.cursor_col(),
+        )
+    };
     let mut lines: Vec<Line> = app.output.iter().map(|l| Line::raw(l.clone())).collect();
-    lines.push(Line::raw(input_line));
+    lines.push(if paging {
+        Line::raw(live).dim()
+    } else {
+        Line::raw(live)
+    });
 
     // Flow from the top; once the transcript is taller than the screen,
     // drop the oldest lines so the newest (and the prompt) stay visible.
@@ -30,17 +45,20 @@ pub fn render(f: &mut Frame, app: &App) {
     let cursor_row = (visible.len() - 1) as u16;
     f.render_widget(Paragraph::new(visible), area);
 
-    let col = (prompt.chars().count() + app.input.cursor_col()) as u16;
-    f.set_cursor_position(Position::new(area.x + col, area.y + cursor_row));
-
-    // vi-mode indicator — only when not in insert mode.
-    let mode = app.input.status();
-    if !mode.eq_ignore_ascii_case("insert") {
-        let label = format!(" -- {} -- ", mode.to_uppercase());
-        let w = label.chars().count() as u16;
-        if area.width > w {
-            let rect = Rect::new(area.right() - w, area.bottom() - 1, w, 1);
-            f.render_widget(Paragraph::new(label).dim(), rect);
+    // No editor cursor or mode indicator while paging — we're not editing.
+    if !paging {
+        f.set_cursor_position(Position::new(
+            area.x + cursor_col as u16,
+            area.y + cursor_row,
+        ));
+        let mode = app.input.status();
+        if !mode.eq_ignore_ascii_case("insert") {
+            let label = format!(" -- {} -- ", mode.to_uppercase());
+            let w = label.chars().count() as u16;
+            if area.width > w {
+                let rect = Rect::new(area.right() - w, area.bottom() - 1, w, 1);
+                f.render_widget(Paragraph::new(label).dim(), rect);
+            }
         }
     }
 }
