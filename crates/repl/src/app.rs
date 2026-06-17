@@ -7,14 +7,16 @@
 use crate::completion;
 use crate::engine::{self, Compiled};
 use crate::input::{Editor, Outcome};
-use crate::run::{self, RunResult};
+use crate::run::{self, Fetch};
 use crate::session::{Input, MetaCmd, Session, classify};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::{Path, PathBuf};
 use vim_line::history::{Recall, Store};
 
-/// Solutions fetched per query batch (paging for `;` is a phase-2 TODO).
-const QUERY_LIMIT: usize = 100;
+/// Solutions fetched per query batch. Small so we don't over-compute when
+/// the user only wants the first answer; doubled on demand as they page
+/// past it (the stateless-binary re-fetch the design notes).
+const PAGE_BATCH: usize = 25;
 
 /// The input prompt. Neutral (not `?-`): the same prompt accepts clause
 /// definitions and `?-` queries, so it must not imply query context —
@@ -22,6 +24,19 @@ const QUERY_LIMIT: usize = 100;
 pub const PROMPT: &str = "plg> ";
 /// Continuation prompt for multi-line clause entry (SWI-style).
 pub const CONT: &str = "|  ";
+
+/// Active `;`-paging over a query's solutions.
+struct Paging {
+    goal: String,
+    /// The fetched batch (rendered solution strings).
+    solutions: Vec<String>,
+    /// Index of the next unrevealed solution.
+    pos: usize,
+    /// Limit used to fetch `solutions` (doubles on refetch).
+    limit: usize,
+    /// Engine reported the search exhausted at `limit` (no more beyond).
+    exhausted: bool,
+}
 
 #[derive(Default)]
 pub struct App {
@@ -38,6 +53,8 @@ pub struct App {
     /// Shared command-history store (vim-line): ring + dedup + draft stash.
     /// Drives `k`/`j` and arrow recall; persisted across sessions.
     store: Store,
+    /// `Some` while paging a query's solutions with `;`.
+    paging: Option<Paging>,
 }
 
 impl App {
@@ -88,7 +105,18 @@ impl App {
         }
     }
 
+    /// True while paging a query's solutions (the input line is replaced by
+    /// a `;`/stop hint — see `ui`).
+    pub fn is_paging(&self) -> bool {
+        self.paging.is_some()
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) {
+        // While paging, keys drive solution navigation, not the editor.
+        if self.paging.is_some() {
+            self.page_key(key);
+            return;
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Char('c' | 'd') if ctrl => self.should_quit = true,
@@ -281,19 +309,100 @@ impl App {
             self.log("  no compiled program (fix the errors above)");
             return;
         };
-        match run::query(&compiled.binary, goal, QUERY_LIMIT) {
-            RunResult::Ok(out) => self.log_block_owned(out),
-            RunResult::Failed(err) => self.log_block_owned(err),
-            RunResult::Timeout(secs) => self.log(format!("  timed out after {secs}s")),
-            RunResult::Error(e) => self.log(format!("  {e}")),
+        match run::fetch(&compiled.binary, goal, PAGE_BATCH) {
+            Fetch::NoSolutions => self.log("  false."),
+            Fetch::Failed(e) => self.log(format!("  {e}")),
+            Fetch::Timeout(secs) => self.log(format!("  timed out after {secs}s")),
+            Fetch::Error(e) => self.log(format!("  {e}")),
+            Fetch::Found {
+                solutions,
+                exhausted,
+            } => {
+                self.paging = Some(Paging {
+                    goal: goal.to_string(),
+                    solutions,
+                    pos: 0,
+                    limit: PAGE_BATCH,
+                    exhausted,
+                });
+                self.page_next();
+            }
         }
     }
 
-    fn log_block_owned(&mut self, text: String) {
-        if text.trim().is_empty() {
-            self.log("  false.");
-        } else {
-            self.log_block(&text);
+    /// A key while paging: `;`/space reveals the next solution; anything else
+    /// stops (Ctrl-C/D still quits).
+    fn page_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if ctrl && matches!(key.code, KeyCode::Char('c' | 'd')) {
+            self.should_quit = true;
+            return;
+        }
+        match key.code {
+            KeyCode::Char(';' | ' ') => self.page_next(),
+            _ => self.paging = None,
+        }
+    }
+
+    /// Reveal the next solution, re-fetching a bigger batch first if we've
+    /// run past the current one and the engine wasn't exhausted. Ends paging
+    /// after the last solution. Each line gets a trailing ` ;` (more) or ` .`
+    /// (last), mirroring SWI.
+    fn page_next(&mut self) {
+        if self.paging.is_none() {
+            return;
+        }
+        let need_more = {
+            let p = self.paging.as_ref().unwrap();
+            p.pos >= p.solutions.len() && !p.exhausted
+        };
+        if need_more {
+            let (goal, new_limit) = {
+                let p = self.paging.as_ref().unwrap();
+                (p.goal.clone(), p.limit.saturating_mul(2))
+            };
+            let Some(binary) = self.compiled.as_ref().map(|c| c.binary.clone()) else {
+                self.paging = None;
+                return;
+            };
+            match run::fetch(&binary, &goal, new_limit) {
+                Fetch::Found {
+                    solutions,
+                    exhausted,
+                } => {
+                    let p = self.paging.as_mut().unwrap();
+                    p.solutions = solutions;
+                    p.limit = new_limit;
+                    p.exhausted = exhausted;
+                }
+                _ => {
+                    self.paging = None;
+                    return;
+                }
+            }
+        }
+        let revealed = {
+            let p = self.paging.as_mut().unwrap();
+            if p.pos >= p.solutions.len() {
+                None
+            } else {
+                let sol = p.solutions[p.pos].clone();
+                p.pos += 1;
+                let more = p.pos < p.solutions.len() || !p.exhausted;
+                Some((sol, more))
+            }
+        };
+        match revealed {
+            Some((sol, more)) => {
+                self.log(format!("  {sol}{}", if more { " ;" } else { " ." }));
+                if !more {
+                    self.paging = None;
+                }
+            }
+            None => {
+                self.log("  no more solutions.");
+                self.paging = None;
+            }
         }
     }
 
