@@ -106,6 +106,26 @@ fn recursive_rule_over_a_fact_table() {
 }
 
 #[test]
+fn indexed_lookup_gathers_nonadjacent_rows_in_program_order() {
+    // The same first-arg key (`tom`) appears at non-adjacent program positions
+    // (rows 0, 3, 4). Stage B's first-arg index must binary-search to that key
+    // and visit its rows in program order, skipping the interleaved `bob`/`cat`
+    // rows — byte-identical to a Stage-A full scan.
+    let c = compile("rel(tom, a).\nrel(bob, b).\nrel(cat, c).\nrel(tom, d).\nrel(tom, e).\n");
+    let (out, code) = c.query("rel(tom, X)", &[]);
+    assert_eq!(
+        out,
+        "{\"count\":3,\"exhausted\":true,\"solutions\":[{\"X\":\"a\"},{\"X\":\"d\"},{\"X\":\"e\"}]}\n"
+    );
+    assert_eq!(code, 1);
+
+    // A bound key absent from the table fast-fails (empty binary-search range).
+    let (out, code) = c.query("rel(zzz, X)", &[]);
+    assert_eq!(out, "{\"count\":0,\"exhausted\":true,\"solutions\":[]}\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn limit_caps_table_enumeration() {
     // The choice-point shape honors `--limit` exactly like per-clause facts.
     let (out, code) = facts().query("parent(tom, X)", &["--limit", "1"]);

@@ -43,8 +43,14 @@ fn fact_predicate_compiles_to_rodata_table() {
         ir.contains("private unnamed_addr constant [6 x i64]"),
         "{ir}"
     );
+    // Plus a first-argument index (Stage B): one row index per fact.
+    assert!(
+        ir.contains("_idx = private unnamed_addr constant [3 x i64]"),
+        "{ir}"
+    );
     // Entry finds the first matching row; the retry continuation resumes the
-    // scan on backtracking (the choice point itself lives in the runtime).
+    // scan on backtracking (the choice point itself lives in the runtime). The
+    // table and index pointers are both passed to the lookup.
     assert!(ir.contains("call i32 @plg_rt_fact_first(ptr %m"), "{ir}");
     assert!(ir.contains("call i32 @plg_rt_fact_next(ptr %m"), "{ir}");
     assert!(ir.contains("_ftr(ptr %m, i64 %f)"), "{ir}");
@@ -158,8 +164,8 @@ fn m3_control_compiles_natively() {
 fn first_arg_indexing_emits_switch() {
     // Compound second columns keep these on the per-clause path; distinct
     // atom first arguments then drive first-argument indexing as an IR
-    // `switch`. (All-immediate facts compile to a table, which Stage A does
-    // not index yet.)
+    // `switch`. (All-immediate facts compile to a table whose first-arg index
+    // is a runtime `.rodata` array + binary search, not an IR `switch`.)
     let ir =
         plgc::compile_to_ir("color(red, c(warm)).\ncolor(blue, c(cool)).\ncolor(green, c(cool)).")
             .unwrap();

@@ -51,6 +51,13 @@ Fact-table is a **safe feature**; it does not justify new `unsafe`:
   rejects it), multi-argument indexing (first-arg only for v1 — the
   `iddqd`/multi-index question is a *later* compiler-side optimization),
   runtime `--facts` loading (rejected), the deferred `unsafe` seam.
+- **Float-column indexing (Stage C caveat):** the Stage B index sorts and
+  searches column 0 by raw `u64` (Word) comparison, which is correct for the
+  atom/int domain. If Stage C admits float columns, the index must NOT reuse
+  the same `equal_range`: floats have no total order over `u64` bits (`NaN`
+  isn't ordered; `-0.0 == 0.0` but their bit patterns differ; quiet vs
+  signaling `NaN`). Float-keyed lookup needs a normalized bit representation
+  or a float-aware comparator, or those columns stay unindexed (full scan).
 
 ## Approach
 
@@ -92,10 +99,20 @@ Fact-table is a **safe feature**; it does not justify new `unsafe`:
    data-emission time; record IR size + `clang` time before/after.
    *Measured (Stage A, 2026-06-18):* 100k 2-column facts emit one `.rodata`
    table + two functions (not 100k functions) and compile in ~1.0s total
-   (`plgc` + `clang`), 4.5M binary. This is the **compile-time / footprint**
-   win. Query latency at scale is NOT covered here: Stage A full-scans the
-   table per solution (a worst-case bound-key query over 100k rows ~90ms);
-   bound-key queries become O(log n) only with Stage B's first-arg index.
+   (`plgc` + `clang`), 4.5M binary — the **compile-time / footprint** win.
+   *Stage B (2026-06-18):* a first-arg index (a `.rodata` array of row indices
+   sorted by column 0) gives bound-key queries an O(log n) binary search to
+   the matching row range; unbound or non-immediate first args still full-scan,
+   identical to Stage A. The index adds one word per row. *Measured (500k
+   rows):* a bound-first-arg query is flat at ~0.36s regardless of key
+   position (the binary-load/startup floor — the absent-key case matches it),
+   while a comparable full scan over the rows (binding a non-indexed column,
+   match in the last row) runs ~0.47s. The index removes the linear scan; its
+   absolute win is asymptotic — at single-query CLI scales the per-row compare
+   is cheap relative to process startup, so the win grows with N and with
+   query volume in a long-running process. Float columns are out of scope here
+   (Stage A excludes them); see the float note under Constraints before
+   extending the index in Stage C.
 3. **Footprint:** fact-table binary < per-clause equivalent; hello-world
    unchanged; `binary_size` + `ldd` gates green.
 4. **Mixed + re-entry:** a program mixing fact and rule predicates
