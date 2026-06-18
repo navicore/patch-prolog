@@ -1,11 +1,42 @@
-# Unsafe-Rust PoC Candidates (learning study)
+# Unsafe-Rust PoC Candidates — CLOSED (decision record)
 
-**Status: active learning study (2026-06-14, revived 2026-06-17).** A
-deliberately-scoped `unsafe` PoC we *intend* to pursue for education —
-kept active (not retired) because we mean to do it; the production-viability
-bar below is the gate, not a reason to shelve it. Frames where `unsafe`
-*could* earn its keep in this engine, which candidate best mirrors the
-`iddqd` pattern, and the guardrails any PoC must carry.
+**Status: closed, no `unsafe` introduced (2026-06-17).** Decision: the only
+legitimate reasons to add `unsafe` to this codebase are **runtime
+performance** or **enabling something otherwise impossible** (in the
+compiler or runtime). Compile-time micro-optimization does not qualify.
+None of those needs is currently identified or measured, so we are not
+adding `unsafe` now. The candidate analysis below is kept as the record;
+revisit only if a runtime hot-loop becomes a *measured* bottleneck.
+
+## Outcome (what we decided and why)
+
+- **#1 String interner — REJECTED.** It is a *compile-time* path
+  (interning runs at parse/codegen, not in the runtime's hot loop), so even
+  a proven-sound unsafe arena saves only a couple of `String` clones, once —
+  a marginal win that fails the "runtime-perf-or-otherwise-impossible" bar.
+  It was only ranked #1 here because it was the most *Miri-checkable* — i.e.
+  the best to *learn* from — which is exactly the "testing Rust / education"
+  motive we are not pursuing. A feature-gated PoC was built and reverted
+  (the safe `StringInterner` is unchanged; nothing feature-gated lingers).
+- **Miri does not rescue the real candidate.** Miri is the soundness proof
+  the bar below leans on, but it is nightly-only (UB detection needs MIR
+  interpretation; no stable equivalent), and this project is stable-only —
+  including for test jobs. More decisively: the candidate that *would*
+  justify unsafe (the runtime hot path) is **clang-linked native code, not
+  MIR, so Miri can't check it at all**. The Miri-able candidate isn't worth
+  it; the worth-it candidate isn't Miri-able.
+- **#2 Runtime cell heap / unify walk — the only legitimate shape, but
+  deferred.** This *is* a runtime hot path (`get_unchecked` on the
+  innermost `deref`/`heap[i]`), so a measured win could justify unsafe. But
+  the safe version currently clears every perf gate (no measured
+  bottleneck → no justification), and it needs a **non-Miri** verification
+  story (differential corpus + ASan/fuzzing on the native binary). Revisit
+  only when profiling shows the hot loop is the bottleneck.
+- **#3 Multi-index map — not now**, tied to the future fact-table feature
+  (see below); reconsider if/when that lands.
+
+The framing below is the original exploration, retained for that future
+revisit.
 
 > **Relationship to SPANS.** None — they were briefly conflated. The
 > error-span design (`SPANS.md`) is byte-offset value types (`Span { file,
