@@ -27,6 +27,8 @@ age(alice, 30). age(bob, 12).
 classify(X, neg) :- X < 0.
 classify(0, zero).
 classify(X, pos) :- X > 0.
+div_in_body :- _ is 1 // 0.
+type_in_body :- atom_length(123, _).
 ";
 
 const GOALS: &[&str] = &[
@@ -95,7 +97,39 @@ const GOALS: &[&str] = &[
     "nosuch(X)",
     "atom_length(123, N)",
     "succ(X, 0)",
+    // compiled-body raises: plgc adds a ` at file:line:col` provenance
+    // suffix the oracle lacks; `strip_provenance` must reconcile them.
+    "div_in_body",
+    "type_in_body",
 ];
+
+/// Strip a ` at <file>:<line>:<col>` provenance suffix (SPANS.md Layer 3).
+/// plgc appends it to a runtime error raised from a *compiled* clause body;
+/// the v1 oracle never emits it, so it's a deliberate, expected divergence we
+/// remove before comparing. The suffix runs to the end of the error string
+/// (the closing `"` of the JSON, or end of line).
+fn strip_provenance(s: &str) -> String {
+    let mut out = s.to_string();
+    while let Some(at) = out.rfind(" at ") {
+        let rest = &out[at + 4..];
+        let end = rest.find(['"', '\n']).unwrap_or(rest.len());
+        if is_file_line_col(&rest[..end]) {
+            out.replace_range(at..at + 4 + end, "");
+        } else {
+            break; // the rightmost ` at ` isn't a provenance suffix
+        }
+    }
+    out
+}
+
+/// Does `s` look like `<file>:<line>:<col>` (ends with `:digits:digits`)?
+fn is_file_line_col(s: &str) -> bool {
+    let mut parts = s.rsplitn(3, ':');
+    let (col, line) = (parts.next(), parts.next());
+    let digits =
+        |x: Option<&str>| x.is_some_and(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()));
+    parts.next().is_some() && digits(line) && digits(col)
+}
 
 /// Normalize variable numbering (`_12` → `_V`) — the only legitimate
 /// difference between the two implementations.
@@ -143,7 +177,11 @@ fn differential_corpus_matches_oracle() {
 
         let (new_out, new_code) = compiled.query(goal, &[]);
 
-        if norm(&old_out) != norm(&new_out) || old_code != new_code {
+        // Strip plgc's provenance suffix (the oracle never emits it) before
+        // comparing — see `strip_provenance`.
+        if norm(&strip_provenance(&old_out)) != norm(&strip_provenance(&new_out))
+            || old_code != new_code
+        {
             failures.push(format!(
                 "GOAL {goal}\n  oracle({old_code}): {old_out}  plgc({new_code}): {new_out}"
             ));
@@ -156,4 +194,22 @@ fn differential_corpus_matches_oracle() {
         GOALS.len(),
         failures.join("\n")
     );
+}
+
+#[test]
+fn strip_provenance_removes_suffix() {
+    // The provenance suffix is removed; everything else (including the ISO
+    // ball with its own digits/colons) is untouched, so a stripped plgc
+    // error equals the oracle's.
+    let plgc = "{\"error\":\"Runtime error: error(evaluation_error(zero_divisor), Division by zero) at /tmp/x/prog.pl:2:5\"}";
+    let oracle =
+        "{\"error\":\"Runtime error: error(evaluation_error(zero_divisor), Division by zero)\"}";
+    assert_eq!(strip_provenance(plgc), oracle);
+    // No suffix → unchanged (query-side errors, success output).
+    assert_eq!(strip_provenance(oracle), oracle);
+    let ok = "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":1}]}";
+    assert_eq!(strip_provenance(ok), ok);
+    // A bare ` at ` that isn't a file:line:col suffix is left alone.
+    let prose = "looked at the value";
+    assert_eq!(strip_provenance(prose), prose);
 }
