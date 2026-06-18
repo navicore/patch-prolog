@@ -3,7 +3,11 @@
 
 #[test]
 fn fact_compiles_to_unify_and_continuation_jump() {
-    let ir = plgc::compile_to_ir("parent(tom, mary).").unwrap();
+    // A ground fact with a non-immediate (compound) column does NOT qualify
+    // for fact-table compilation, so it exercises the per-clause path: head
+    // unification + a tail call to the continuation. (All-immediate facts
+    // take the table path — see `fact_predicate_compiles_to_rodata_table`.)
+    let ir = plgc::compile_to_ir("parent(tom, point(1, 2)).").unwrap();
     // Entry exists and is registered.
     assert!(ir.contains("define i32 @plg_pred_"), "{ir}");
     assert!(ir.contains("@plg_registry"), "{ir}");
@@ -16,11 +20,40 @@ fn fact_compiles_to_unify_and_continuation_jump() {
 
 #[test]
 fn multi_clause_predicate_pushes_choice_points() {
-    let ir = plgc::compile_to_ir("p(a).\np(b).\np(c).").unwrap();
+    // Compound columns keep this on the per-clause path; multiple clauses
+    // then lazily link choice points with chain retry functions. (The
+    // all-immediate variant compiles to a table instead.)
+    let ir = plgc::compile_to_ir("p(f(a)).\np(f(b)).\np(f(c)).").unwrap();
     assert!(ir.contains("call void @plg_rt_push_cp"), "{ir}");
     // Chain functions t1, t2 for clauses 2 and 3.
     assert!(ir.contains("_t1(ptr %m"), "{ir}");
     assert!(ir.contains("_t2(ptr %m"), "{ir}");
+}
+
+#[test]
+fn fact_predicate_compiles_to_rodata_table() {
+    // All clauses are bodyless facts with immediate (atom/int) columns →
+    // one `.rodata` table of words + a generic runtime lookup, NOT one
+    // function per clause (FACT_TABLE.md Stage A).
+    let ir =
+        plgc::compile_to_ir("parent(tom, bob).\nparent(tom, liz).\nparent(bob, ann).").unwrap();
+    // A private constant table: 3 facts × 2 columns = 6 immediate words.
+    assert!(ir.contains("@plg_facts_"), "{ir}");
+    assert!(
+        ir.contains("private unnamed_addr constant [6 x i64]"),
+        "{ir}"
+    );
+    // Entry finds the first matching row; the retry continuation resumes the
+    // scan on backtracking (the choice point itself lives in the runtime).
+    assert!(ir.contains("call i32 @plg_rt_fact_first(ptr %m"), "{ir}");
+    assert!(ir.contains("call i32 @plg_rt_fact_next(ptr %m"), "{ir}");
+    assert!(ir.contains("_ftr(ptr %m, i64 %f)"), "{ir}");
+    // Delivery is still a guaranteed tail call to the continuation.
+    assert!(ir.contains("musttail call i32"), "{ir}");
+    // `parent` took the fact-table path, not per-clause (whose header would
+    // read "(N clauses)"). The whole-IR no-unify check is confounded by the
+    // embedded stdlib rules, so we assert the predicate header instead.
+    assert!(ir.contains("parent/2 (3 facts \u{2192} table)"), "{ir}");
 }
 
 #[test]
@@ -123,8 +156,13 @@ fn m3_control_compiles_natively() {
 
 #[test]
 fn first_arg_indexing_emits_switch() {
+    // Compound second columns keep these on the per-clause path; distinct
+    // atom first arguments then drive first-argument indexing as an IR
+    // `switch`. (All-immediate facts compile to a table, which Stage A does
+    // not index yet.)
     let ir =
-        plgc::compile_to_ir("color(red, warm).\ncolor(blue, cool).\ncolor(green, cool).").unwrap();
+        plgc::compile_to_ir("color(red, c(warm)).\ncolor(blue, c(cool)).\ncolor(green, c(cool)).")
+            .unwrap();
     assert!(ir.contains("switch i64"), "{ir}");
     assert!(ir.contains(", indexed"), "{ir}");
     // Distinct keys + no var-keyed clauses: each key chain is a single

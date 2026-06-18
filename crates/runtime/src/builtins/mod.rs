@@ -14,6 +14,7 @@
 
 pub mod arith;
 pub mod atomops;
+pub mod facts;
 pub mod miscops;
 pub mod order;
 pub mod pred;

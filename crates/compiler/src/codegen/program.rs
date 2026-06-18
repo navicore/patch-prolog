@@ -45,6 +45,8 @@ declare i32 @plg_rt_b_throw_1(ptr, i64)
 declare i32 @plg_rt_b_catch_3(ptr, i64, i64, i64)
 declare i32 @plg_rt_b_findall_3(ptr, i64, i64, i64)
 declare i32 @plg_rt_pred_between_3(ptr, i64)
+declare i32 @plg_rt_fact_first(ptr, i64, i64, i64, i64)
+declare i32 @plg_rt_fact_next(ptr, i64)
 ";
 
 /// Host target triple (plgc compiles for the machine it runs on).
@@ -121,7 +123,11 @@ pub fn codegen_program(
     // --- Predicates.
     let preds: Vec<_> = cg.predicates.iter().map(|(&k, v)| (k, v.clone())).collect();
     for ((f, a), clauses) in preds {
-        cg.emit_predicate(f, a, &clauses)?;
+        if super::facts::is_fact_predicate(&clauses) {
+            cg.emit_fact_predicate(f, a, &clauses)?;
+        } else {
+            cg.emit_predicate(f, a, &clauses)?;
+        }
         cg.out.push('\n');
     }
 
