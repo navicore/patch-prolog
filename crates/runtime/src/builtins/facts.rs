@@ -25,8 +25,12 @@ use crate::unify::unify;
 const TBL: usize = 0; // table pointer (ptrtoint of the .rodata global)
 const NROWS: usize = 1;
 const ARITY: usize = 2;
-const IDX: usize = 3; // first-arg index pointer, or 0 for a full scan
-const CURSOR: usize = 4; // next position to try — mutated in place, untrailed
+const IDX: usize = 3; // first-arg index pointer, or 0 for a full scan (no
+// real `.rodata` global lives at address 0, so 0 is a safe sentinel — see
+// `fact_scan` for how a position maps to a row through this index, or to the
+// row directly when 0)
+const CURSOR: usize = 4; // next position in [.., END) to try (see fact_scan
+// for the position→row mapping); mutated in place, untrailed
 const END: usize = 5; // exclusive upper bound of the cursor's range
 const RETRY: usize = 6; // the predicate's generated `@..._ftr` (a ContFn)
 const KFN: usize = 7;
@@ -204,6 +208,10 @@ fn fact_scan(m: &mut Machine, frame: usize) -> i32 {
                 break;
             }
         }
+        // Advance both branches. The write is intentionally untrailed: the
+        // frame cell survives the choice point's heap truncation, so the
+        // cursor advances monotonically across a CP resume (the next solution
+        // continues from here, never re-tries `pos`).
         m.heap[frame + CURSOR] = (pos + 1) as u64;
         if matched {
             if pos + 1 < end {

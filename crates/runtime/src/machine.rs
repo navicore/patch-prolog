@@ -239,8 +239,13 @@ impl Machine {
     /// captured before the current alternative bound anything — rather than
     /// the live heap/trail top. Lets a nondeterministic builtin bind a
     /// solution and still record the pre-binding state for the next
-    /// alternative, without a rewind-then-rebind. Marks must be ≤ the current
-    /// trail/heap lengths.
+    /// alternative, without a rewind-then-rebind.
+    ///
+    /// **CALLER MUST GUARANTEE** `trail_mark <= self.trail.len()` and
+    /// `heap_mark <= self.heap.len()`. An out-of-range mark is caught only by
+    /// the debug assertion below; in release it silently no-ops the backtrack
+    /// truncation (`Vec::truncate(n)` with `n > len` does nothing), leaking
+    /// bindings from a supposedly-undone alternative into the next.
     pub fn push_cp_at(&mut self, retry: ContFn, env: u64, trail_mark: usize, heap_mark: usize) {
         debug_assert!(trail_mark <= self.trail.len() && heap_mark <= self.heap.len());
         self.cps.push(ChoicePoint {
