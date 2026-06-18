@@ -1,15 +1,19 @@
-//! Fact-table lookup (FACT_TABLE.md, Stages A–B): the generic enumerator for a
-//! predicate compiled to a `.rodata` immediate-word table instead of one
-//! function per clause. Same observable behavior as the per-clause facts —
-//! solution order = program order, choice-point backtracking — mirroring
-//! `between/3`'s nondeterministic shape.
+//! Fact-table lookup (FACT_TABLE.md, Stages A–C): the generic enumerator for a
+//! predicate compiled to a `.rodata` table instead of one function per clause.
+//! Same observable behavior as the per-clause facts — solution order = program
+//! order, choice-point backtracking — mirroring `between/3`'s shape.
 //!
-//! Stage B adds a first-argument index: a `.rodata` array of row indices
-//! sorted by column 0. When the first query argument is a bound atom/int, a
-//! binary search narrows the scan to the matching row range (O(log n) instead
-//! of O(n)); otherwise (unbound, or a non-immediate first arg) the scan covers
-//! all rows, exactly as Stage A. Either way the matching rows are visited in
-//! program order, so output is identical to the per-clause path.
+//! A table cell is one word. Immediate columns (atom / i61-int) are stored
+//! inline and unified directly. Non-immediate columns (compound, list, float,
+//! big-int — Stage C) are stored as a *blob reference*: a `STR`/`LST`/`FLT`/
+//! `BIG` word whose payload indexes a per-predicate `.rodata` serialized blob
+//! (the `copyterm`/`TermBuf` format). `fact_scan` restores such a cell onto the
+//! heap via `restore_cells` before unifying — so the cell tag (atom/int vs the
+//! pointer tags) tells the two cases apart with no extra metadata.
+//!
+//! Stage B's first-argument index applies only when column 0 is all-immediate;
+//! otherwise (or for an unbound/non-immediate query arg) the scan covers all
+//! rows. Either way matching rows are visited in program order.
 //!
 //! Delivery to the continuation is a `musttail` in the GENERATED entry/retry
 //! functions, not here: these helpers only find/bind a row and push the
@@ -18,6 +22,7 @@
 //! predicate (e.g. `edge` in a recursive `path/2`) keeps a constant C stack.
 
 use crate::cell::{TAG_ATOM, TAG_INT, Word, tag_of};
+use crate::copyterm::restore_cells;
 use crate::machine::{ContFn, Machine};
 use crate::unify::unify;
 
@@ -29,14 +34,16 @@ const IDX: usize = 3; // first-arg index pointer, or 0 for a full scan (no
 // real `.rodata` global lives at address 0, so 0 is a safe sentinel — see
 // `fact_scan` for how a position maps to a row through this index, or to the
 // row directly when 0)
-const CURSOR: usize = 4; // next position in [.., END) to try (see fact_scan
+const BLOB: usize = 4; // serialized-term blob pointer, or 0 if all-immediate
+const BLOBLEN: usize = 5; // blob length in words (for the slice bound)
+const CURSOR: usize = 6; // next position in [.., END) to try (see fact_scan
 // for the position→row mapping); mutated in place, untrailed
-const END: usize = 5; // exclusive upper bound of the cursor's range
-const RETRY: usize = 6; // the predicate's generated `@..._ftr` (a ContFn)
-const KFN: usize = 7;
-const KENV: usize = 8;
-const QBAR: usize = 9;
-const ARGS: usize = 10; // arg snapshots start here
+const END: usize = 7; // exclusive upper bound of the cursor's range
+const RETRY: usize = 8; // the predicate's generated `@..._ftr` (a ContFn)
+const KFN: usize = 9;
+const KENV: usize = 10;
+const QBAR: usize = 11;
+const ARGS: usize = 12; // arg snapshots start here
 
 /// Read a `ContFn` from a frame cell that the generated IR wrote via
 /// `ptrtoint` — the retry pointer (`@..._ftr`) or the saved continuation
@@ -50,13 +57,17 @@ unsafe fn read_contfn(word: u64) -> ContFn {
     unsafe { std::mem::transmute::<usize, ContFn>(word as usize) }
 }
 
-/// Borrow the `.rodata` table as `nrows * arity` immediate words.
+/// Borrow a `.rodata` array of `len` words.
 ///
 /// # Safety
 /// `ptr` is a generated `.rodata` global of exactly that length (FACT_TABLE.md)
 /// — the same kind of codegen-emitted, read-only table the runtime already
-/// reads for the atom table and predicate registry.
-unsafe fn table_slice<'a>(ptr: u64, len: usize) -> &'a [Word] {
+/// reads for the atom table and predicate registry. Returns an empty slice for
+/// a null pointer (a predicate with no blob).
+unsafe fn rodata_slice<'a>(ptr: u64, len: usize) -> &'a [Word] {
+    if ptr == 0 {
+        return &[];
+    }
     unsafe { std::slice::from_raw_parts(ptr as usize as *const Word, len) }
 }
 
@@ -68,14 +79,17 @@ unsafe fn table_slice<'a>(ptr: u64, len: usize) -> &'a [Word] {
 ///
 /// # Safety
 /// Called from generated code. `table_ptr` addresses a `.rodata` array of
-/// exactly `nrows * arity` immediate words; `idx_ptr` is either 0 or a
-/// `.rodata` array of `nrows` row indices sorted by column 0; `retry_ptr` is
-/// the predicate's `@..._ftr` function.
+/// `nrows * arity` words; `idx_ptr` is 0 or a `.rodata` array of `nrows` row
+/// indices sorted by column 0; `blob_ptr` is 0 or a `.rodata` array of
+/// `blob_len` serialized-term words; `retry_ptr` is the predicate's `@..._ftr`.
 #[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn plg_rt_fact_first(
     m: *mut Machine,
     table_ptr: i64,
     idx_ptr: i64,
+    blob_ptr: i64,
+    blob_len: i64,
     nrows: i64,
     arity: i64,
     retry_ptr: i64,
@@ -85,17 +99,18 @@ pub unsafe extern "C" fn plg_rt_fact_first(
     let arity = arity as usize;
 
     // Choose the iteration space. The index is consulted only when the first
-    // argument is a bound atom/int — the exact domain of column 0 — so that
+    // argument is a bound atom/int — the exact domain of an indexed column 0
+    // (the index is emitted only when column 0 is all-immediate) — so that
     // Word-equality (what the binary search tests) coincides with what `unify`
     // would accept. Unbound or non-immediate first args fall back to a full
-    // scan, identical to Stage A.
+    // scan.
     let (idx_for_frame, cursor0, end) = if arity == 0 {
         (0u64, 0usize, nrows)
     } else {
         let a0 = m.deref(m.areg[0]);
         if idx_ptr != 0 && matches!(tag_of(a0), TAG_ATOM | TAG_INT) {
-            let table = unsafe { table_slice(table_ptr as u64, nrows * arity) };
-            let idx = unsafe { table_slice(idx_ptr as u64, nrows) };
+            let table = unsafe { rodata_slice(table_ptr as u64, nrows * arity) };
+            let idx = unsafe { rodata_slice(idx_ptr as u64, nrows) };
             let (lo, hi) = equal_range(idx, table, arity, a0);
             (idx_ptr as u64, lo, hi)
         } else {
@@ -108,6 +123,8 @@ pub unsafe extern "C" fn plg_rt_fact_first(
     m.heap[frame + NROWS] = nrows as u64;
     m.heap[frame + ARITY] = arity as u64;
     m.heap[frame + IDX] = idx_for_frame;
+    m.heap[frame + BLOB] = blob_ptr as u64;
+    m.heap[frame + BLOBLEN] = blob_len as u64;
     m.heap[frame + CURSOR] = cursor0 as u64;
     m.heap[frame + END] = end as u64;
     m.heap[frame + RETRY] = retry_ptr as u64;
@@ -172,22 +189,26 @@ fn equal_range(idx: &[Word], table: &[Word], arity: usize, key: Word) -> (usize,
 
 /// Scan positions `[cursor, END)` for the first row that unifies with the
 /// snapshot args. A row's actual index is `IDX[cursor]` when an index is set,
-/// else `cursor` itself. On a match: advance the cursor, push a choice point
-/// for the rest of the range whose restore-point is the *pre-binding* state
-/// (so backtracking undoes exactly this row), and return 1 — binding the row
-/// only once. Returns 0 when no remaining position matches.
+/// else `cursor` itself. Each column unifies inline when it's an immediate
+/// (atom/int) word, or is first restored from the blob (compound/list/float/
+/// big-int — Stage C). On a match: advance the cursor, push a choice point for
+/// the rest of the range whose restore-point is the *pre-binding* state (so
+/// backtracking undoes exactly this row, including any restored cells), and
+/// return 1 — binding the row only once. Returns 0 when no position matches.
 fn fact_scan(m: &mut Machine, frame: usize) -> i32 {
     let nrows = m.heap[frame + NROWS] as usize;
     let arity = m.heap[frame + ARITY] as usize;
     let idx_ptr = m.heap[frame + IDX];
     let end = m.heap[frame + END] as usize;
     let retry = unsafe { read_contfn(m.heap[frame + RETRY]) };
-    let table = unsafe { table_slice(m.heap[frame + TBL], nrows * arity) };
-    let idx: Option<&[Word]> = (idx_ptr != 0).then(|| unsafe { table_slice(idx_ptr, nrows) });
+    let table = unsafe { rodata_slice(m.heap[frame + TBL], nrows * arity) };
+    let idx: Option<&[Word]> = (idx_ptr != 0).then(|| unsafe { rodata_slice(idx_ptr, nrows) });
+    let blob = unsafe { rodata_slice(m.heap[frame + BLOB], m.heap[frame + BLOBLEN] as usize) };
 
     // Restore-point for the next alternative: the state before any row here
-    // binds. A failed row rewinds to it and retries; a matched row leaves its
-    // bindings in place and hands this mark to the choice point.
+    // binds (or restores blob cells). A failed row rewinds to it and retries;
+    // a matched row leaves its bindings in place and hands this mark to the
+    // choice point.
     let clean_t = m.trail.len();
     let clean_h = m.heap.len();
     loop {
@@ -199,11 +220,17 @@ fn fact_scan(m: &mut Machine, frame: usize) -> i32 {
             Some(ix) => ix[pos] as usize,
             None => pos,
         };
-        let row = &table[row_idx * arity..row_idx * arity + arity];
         let mut matched = true;
-        for (c, &col) in row.iter().enumerate() {
+        for c in 0..arity {
+            let col = table[row_idx * arity + c];
+            // Immediate columns unify directly; blob references (STR/LST/FLT/
+            // BIG payloads index the blob) are materialized onto the heap first.
+            let w = match tag_of(col) {
+                TAG_ATOM | TAG_INT => col,
+                _ => restore_cells(m, blob, col),
+            };
             let a = m.heap[frame + ARGS + c];
-            if !unify(m, a, col) {
+            if !unify(m, a, w) {
                 matched = false;
                 break;
             }

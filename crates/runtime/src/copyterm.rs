@@ -98,19 +98,28 @@ fn xlate_out(
 
 /// Materialize a buffer back onto the machine heap; returns the root.
 pub fn restore_from_buf(m: &mut Machine, buf: &TermBuf) -> Word {
+    restore_cells(m, &buf.cells, buf.root)
+}
+
+/// Materialize a term whose `cells` use buffer-relative pointer payloads,
+/// rooted at `root`, onto the machine heap; returns the heap root. The
+/// slice-based core of `restore_from_buf` — also used by the fact-table to
+/// restore a non-immediate column from its read-only `.rodata` blob (those
+/// blobs are ground, so the `TAG_REF` arm never fires there).
+pub fn restore_cells(m: &mut Machine, cells: &[Word], root: Word) -> Word {
     let mut memo: HashMap<usize, usize> = HashMap::new();
     let mut work: Vec<(usize, usize)> = Vec::new();
-    let root = xlate_in(m, buf, buf.root, &mut memo, &mut work);
+    let root = xlate_in(m, cells, root, &mut memo, &mut work);
     while let Some((src, dst)) = work.pop() {
-        let w = buf.cells[src];
-        m.heap[dst] = xlate_in(m, buf, w, &mut memo, &mut work);
+        let w = cells[src];
+        m.heap[dst] = xlate_in(m, cells, w, &mut memo, &mut work);
     }
     root
 }
 
 fn xlate_in(
     m: &mut Machine,
-    buf: &TermBuf,
+    cells: &[Word],
     w: Word,
     memo: &mut HashMap<usize, usize>,
     work: &mut Vec<(usize, usize)>,
@@ -130,9 +139,9 @@ fn xlate_in(
             if let Some(&h) = memo.get(&idx) {
                 return make(TAG_STR, h as u64);
             }
-            let (_, arity) = unpack_functor(buf.cells[idx]);
+            let (_, arity) = unpack_functor(cells[idx]);
             let h = m.heap.len();
-            m.heap.push(buf.cells[idx]);
+            m.heap.push(cells[idx]);
             memo.insert(idx, h);
             for k in 0..arity as usize {
                 m.heap.push(0);
@@ -157,7 +166,7 @@ fn xlate_in(
                 return make(tag_of(w), h as u64);
             }
             let h = m.heap.len();
-            m.heap.push(buf.cells[idx]);
+            m.heap.push(cells[idx]);
             memo.insert(idx, h);
             make(tag_of(w), h as u64)
         }
