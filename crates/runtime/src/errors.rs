@@ -29,8 +29,14 @@ pub fn set_formal(m: &mut Machine, formal: Word, context: &str, uncatchable: boo
     // one is set. Centralized here so every error constructor gets it; the
     // ISO ball above is unchanged, so the suffix lives only in `message`.
     // `NO_SITE` (the default) resolves to `None` without allocating.
+    //
+    // CONTRACT: this reads `m.error_site`. Every caller must ensure it is
+    // either `NO_SITE` or the site of the raise in flight — a stale value is
+    // a wrong-provenance bug. Raising builtins enforce this with
+    // `ErrorSiteGuard` (set on entry, restore on drop).
     if let Some((file, line, col)) = m.site_location(m.error_site) {
-        message.push_str(&format!(" at {file}:{line}:{col}"));
+        use std::fmt::Write as _;
+        let _ = write!(message, " at {file}:{line}:{col}");
     }
     m.heap.truncate(mark.max(idx)); // drop the wrapper (and formal if transient)
     m.error = Some(RtError {

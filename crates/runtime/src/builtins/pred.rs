@@ -46,17 +46,15 @@ fn value_to_word(m: &mut Machine, v: ArithValue) -> Option<Word> {
 /// constructor it reaches appends ` at file:line:col` via `set_formal`.
 #[unsafe(no_mangle)]
 pub extern "C" fn plg_rt_b_is(m: *mut Machine, lhs: u64, expr: u64, site_id: u32) -> i32 {
+    let _site = crate::machine::ErrorSiteGuard::enter(m, site_id);
     let m = mref(m);
-    m.error_site = site_id;
-    let r = match arith::eval(m, expr) {
+    match arith::eval(m, expr) {
         Err(()) => 0,
         Ok(v) => match value_to_word(m, v) {
             None => 0,
             Some(w) => crate::unify::unify(m, lhs, w) as i32,
         },
-    };
-    m.error_site = crate::machine::NO_SITE;
-    r
+    }
 }
 
 /// Arithmetic comparison. op: 0:'<' 1:'>' 2:'=<' 3:'>=' 4:'=:=' 5:'=\\='.
@@ -69,30 +67,26 @@ pub extern "C" fn plg_rt_b_arith_cmp(
     b: u64,
     site_id: u32,
 ) -> i32 {
+    let _site = crate::machine::ErrorSiteGuard::enter(m, site_id);
     let m = mref(m);
-    m.error_site = site_id;
-    let r = 'cmp: {
-        let av = match arith::eval(m, a) {
-            Ok(v) => v,
-            Err(()) => break 'cmp 0,
-        };
-        let bv = match arith::eval(m, b) {
-            Ok(v) => v,
-            Err(()) => break 'cmp 0,
-        };
-        let holds = match op {
-            0 => arith::arith_lt(av, bv),
-            1 => arith::arith_gt(av, bv),
-            2 => !arith::arith_gt(av, bv), // =< : not greater
-            3 => !arith::arith_lt(av, bv), // >= : not less
-            4 => arith::arith_eq(av, bv),  // =:=
-            5 => !arith::arith_eq(av, bv), // =\=
-            _ => break 'cmp 0,
-        };
-        holds as i32
+    let av = match arith::eval(m, a) {
+        Ok(v) => v,
+        Err(()) => return 0,
     };
-    m.error_site = crate::machine::NO_SITE;
-    r
+    let bv = match arith::eval(m, b) {
+        Ok(v) => v,
+        Err(()) => return 0,
+    };
+    let holds = match op {
+        0 => arith::arith_lt(av, bv),
+        1 => arith::arith_gt(av, bv),
+        2 => !arith::arith_gt(av, bv), // =< : not greater
+        3 => !arith::arith_lt(av, bv), // >= : not less
+        4 => arith::arith_eq(av, bv),  // =:=
+        5 => !arith::arith_eq(av, bv), // =\=
+        _ => return 0,
+    };
+    holds as i32
 }
 
 /// `\=/2`: succeed iff `a` and `b` do NOT unify. Always undoes any bindings
