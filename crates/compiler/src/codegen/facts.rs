@@ -21,6 +21,9 @@ use std::fmt::Write;
 /// are all immediate (atom or i61-range integer). Empty predicates and any
 /// clause with a body or a non-immediate arg disqualify it.
 pub fn is_fact_predicate(clauses: &[CgClause]) -> bool {
+    // A 0-row table would scan fine, but a predicate with no clauses is
+    // already routed elsewhere (dynamic fail-stub / nothing to emit), so we
+    // don't duplicate that path here.
     !clauses.is_empty()
         && clauses
             .iter()

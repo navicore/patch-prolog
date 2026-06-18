@@ -25,6 +25,18 @@ const KENV: usize = 6;
 const QBAR: usize = 7;
 const ARGS: usize = 8; // arg snapshots start here
 
+/// Read a `ContFn` from a frame cell that the generated IR wrote via
+/// `ptrtoint` — the retry pointer (`@..._ftr`) or the saved continuation
+/// (`k_fn`). Centralizes the one invariant both sites share: the cell holds a
+/// function pointer to an `i32 (ptr, i64)` we ourselves emitted.
+///
+/// # Safety
+/// `word` must be such a `ptrtoint`-encoded function pointer; nothing else is
+/// ever stored in these cells.
+unsafe fn read_contfn(word: u64) -> ContFn {
+    unsafe { std::mem::transmute::<usize, ContFn>(word as usize) }
+}
+
 /// Compiled entry: snapshot the args + continuation into a control frame,
 /// then find the first matching row. Returns 1 if a solution was set up (the
 /// generated entry then musttails the continuation), 0 if no row matches.
@@ -69,7 +81,7 @@ pub unsafe extern "C" fn plg_rt_fact_first(
 pub unsafe extern "C" fn plg_rt_fact_next(m: *mut Machine, frame: u64) -> i32 {
     let m = unsafe { &mut *m };
     let frame = frame as usize;
-    m.k_fn = unsafe { std::mem::transmute::<usize, ContFn>(m.heap[frame + KFN] as usize) };
+    m.k_fn = unsafe { read_contfn(m.heap[frame + KFN]) };
     m.k_env = m.heap[frame + KENV];
     m.qbarrier = m.heap[frame + QBAR] as usize;
     fact_scan(m, frame)
@@ -82,8 +94,7 @@ pub unsafe extern "C" fn plg_rt_fact_next(m: *mut Machine, frame: u64) -> i32 {
 fn fact_scan(m: &mut Machine, frame: usize) -> i32 {
     let nrows = m.heap[frame + NROWS] as usize;
     let arity = m.heap[frame + ARITY] as usize;
-    let retry: ContFn =
-        unsafe { std::mem::transmute::<usize, ContFn>(m.heap[frame + RETRY] as usize) };
+    let retry = unsafe { read_contfn(m.heap[frame + RETRY]) };
     // SAFETY: the generated code passed a `.rodata` global of exactly
     // nrows*arity immediate words (FACT_TABLE.md) — the same kind of
     // codegen-emitted, read-only table the runtime already reads for the
