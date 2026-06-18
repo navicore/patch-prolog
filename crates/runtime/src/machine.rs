@@ -48,6 +48,34 @@ pub struct SrcLoc {
 /// each pins `== u32::MAX` in a unit test to flag a one-sided renumber.
 pub const NO_SITE: u32 = u32::MAX;
 
+/// RAII guard for the in-flight raise's site (SPANS.md Layer 3). A raising
+/// compiled builtin creates one at its ABI boundary; `Drop` **restores the
+/// previous value** (not `NO_SITE`), so the set/clear can't be forgotten and
+/// nested raises — an outer builtin whose work reaches an inner raising
+/// builtin — each see their own site without a save/restore stack. Use this
+/// instead of hand-writing `m.error_site = site; ...; m.error_site = NO_SITE`.
+pub(crate) struct ErrorSiteGuard {
+    m: *mut Machine,
+    saved: u32,
+}
+
+impl ErrorSiteGuard {
+    pub(crate) fn enter(m: *mut Machine, site_id: u32) -> Self {
+        // SAFETY: `m` is the valid Machine pointer the builtin was called
+        // with. We touch only `error_site`, and the `Drop` write runs after
+        // the builtin's `&mut Machine` borrows have ended.
+        let saved = unsafe { (*m).error_site };
+        unsafe { (*m).error_site = site_id };
+        ErrorSiteGuard { m, saved }
+    }
+}
+
+impl Drop for ErrorSiteGuard {
+    fn drop(&mut self) {
+        unsafe { (*self.m).error_site = self.saved };
+    }
+}
+
 /// Catch frames participate in error unwinding (drive() in solve.rs)
 /// and stop cut truncation (v1 rule: catch is opaque to cut).
 #[derive(Clone, Copy, PartialEq)]
@@ -93,6 +121,16 @@ pub struct Machine {
     pub srcmap: Vec<SrcLoc>,
     /// `file_id` → filename, parallel to `srcmap`'s `file` field.
     pub files: Vec<String>,
+    /// `site_id` of the raise currently in flight (SPANS.md Layer 3).
+    /// `set_formal` appends ` at file:line:col` from it. `NO_SITE` (the
+    /// default, and the value for runtime-internal/query-side raises) means no
+    /// suffix — keeping those messages byte-identical to v1.
+    ///
+    /// INVARIANT: a raising compiled builtin must set this to its site only
+    /// around its own work and restore it after — always via `ErrorSiteGuard`,
+    /// which makes the set/restore impossible to forget and keeps nested
+    /// raises correct (each restores the caller's site, not `NO_SITE`).
+    pub error_site: u32,
     /// Query variables in source order: (name, heap index of the cell).
     pub query_vars: Vec<(String, usize)>,
     /// findall/3 collector stack (a stack because findall can nest):
@@ -131,6 +169,7 @@ impl Machine {
             registry,
             srcmap: Vec::new(),
             files: Vec::new(),
+            error_site: NO_SITE,
             query_vars: Vec::new(),
             findall_stack: Vec::new(),
             qbarrier: 0,

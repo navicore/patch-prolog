@@ -371,3 +371,27 @@ mod vocab_invariant {
         );
     }
 }
+
+#[cfg(test)]
+mod span_invariant {
+    //! Every lowered top-level goal carries a real source span (PR #16
+    //! review #2). A construction path that forgot to set the span would
+    //! compile clean but yield a degenerate `Span::point`; this pins it so
+    //! Stage 2+ raising builtins reading `g.span` get a meaningful site.
+    use super::lower_body;
+    use plg_frontend::Parser;
+    use plg_shared::StringInterner;
+
+    #[test]
+    fn lowered_goals_have_non_degenerate_spans() {
+        let mut interner = StringInterner::new();
+        let (clauses, _) =
+            Parser::parse_program_cg("p :- a, b(X), X is 1 + 2.\n", &mut interner, 0).unwrap();
+        let goals = lower_body(&clauses[0].body, &interner).unwrap();
+        assert_eq!(goals.len(), 3);
+        for g in &goals {
+            assert!(g.span.hi > g.span.lo, "degenerate span: {:?}", g.span);
+            assert_eq!(g.span.file, 0);
+        }
+    }
+}

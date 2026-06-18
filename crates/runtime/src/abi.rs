@@ -148,9 +148,10 @@ pub extern "C" fn plg_rt_existence_error(
     arity: u32,
     site_id: u32,
 ) -> i32 {
+    let _site = crate::machine::ErrorSiteGuard::enter(m, site_id);
     let m = mref(m);
     let name = m.atoms.resolve(functor).to_string();
-    crate::errors::existence_procedure(m, &name, arity, site_id);
+    crate::errors::existence_procedure(m, &name, arity);
     0
 }
 

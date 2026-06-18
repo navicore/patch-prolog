@@ -1,40 +1,49 @@
 ## Spans (frontend → LSP → runtime errors)
 
-**Status: Layers 1–2 done; Layer 3 landed for `existence_error`,
-remaining error classes are fast-follow.** Replaces the buffer-scan /
-string-trailer hacks the diagnostics path leaned on. Layer 1 (frontend
+**Status: Layers 1–2 done; Layer 3 landed for `existence_error` and
+arithmetic (`is/2`, comparisons); type-checking builtins are the
+remaining fast-follow.** Replaces the buffer-scan / string-trailer hacks
+the diagnostics path leaned on. Layer 1 (frontend
 `Span`/`Spanned`/`SourceMap`, structured `ParseError`, tokenizer byte
 offsets) and Layer 2 (LSP consumes spans directly — both
 `parse_at_line_col` and `call_site_ranges` deleted; `plgc`'s
 `format_parse_error` resolves position from the span) are done,
 single-buffer.
 
-Layer 3 transport is **built and wired for undefined-procedure errors**:
-the chosen shape is a side-table the Machine owns via a `plg_rt_init`
-handoff (NOT the extern-global variant the sketch below assumed), with a
-`u32 site_id` passed as an arg to each raising call. Codegen emits
-`@plg_srcmap`/`@plg_files` (resolving each call-site span to
-`file:line:col` against the source) and passes the `site_id` to
-`plg_rt_existence_error`; the runtime appends ` at file:line:col` to the
-rendered message only when the id resolves (`NO_SITE = u32::MAX` =
-no provenance, so query-side raises and stdlib stay byte-identical to
-v1). The compile path parses bodies into spanned top-level conjuncts
-(`CgClause`/`parse_program_cg`); nested goals inherit the conjunct span.
-**Remaining (fast-follow, zero new architecture):** thread `site_id`
-into the other raising builtins (`is/2`, comparisons, type-checks,
-`throw/1`) — each is "pass `site_id` to that call + read it in the error
-constructor"; and the diff-helper suffix-stripping for checkpoint 5.
-One refactor remains to do *as part of* that fast-follow rather than
-after: `Machine::site_location` clones the filename per raise (fine for
-cold `existence_error`) — add an `append_to_error_msg(&mut self, &str)`
-helper before wiring tighter loops like arithmetic type errors.
+Layer 3 transport: a side-table the Machine owns via a `plg_rt_init`
+handoff (NOT the extern-global variant the sketch below assumed). Codegen
+emits `@plg_srcmap`/`@plg_files` (resolving each call-site span to
+`file:line:col` against the source) and passes a `u32 site_id` to each
+raising compiled builtin. The suffix ` at file:line:col` is appended only
+when the id resolves (`NO_SITE = u32::MAX` = no provenance, so query-side
+raises and stdlib stay byte-identical to v1). The compile path parses
+bodies into spanned top-level conjuncts (`CgClause`/`parse_program_cg`);
+nested goals inherit the conjunct span.
 
-**Done (Stage 1 of the fast-follow):** the goal IR is now
+**How the suffix is applied (Stage 2 evolution).** Rather than each error
+constructor taking a `site_id`, the raising builtin sets `m.error_site`
+at its ABI boundary (and clears it on exit), and `set_formal` — the one
+function every constructor routes through — appends the suffix from it.
+So `is/2`/comparison errors (`evaluation_error`, `type_error`,
+`instantiation`) get provenance with **zero** evaluator threading, and
+`existence_error` was migrated to the same field. This single append
+point supersedes the planned `append_to_error_msg` helper, and the
+`NO_SITE` default allocates nothing on the no-provenance path.
+
+**Remaining (fast-follow):** the type-checking det builtins (`functor/3`,
+`arg/3`, `=../2`, `atom_*`, `number_chars/codes`, `msort`/`sort`,
+`succ`/`plus`) — each just sets `m.error_site` at its ABI boundary like
+`plg_rt_b_is` does. `throw/1` is intentionally excluded (a user-thrown
+ball isn't a system error). Plus the diff-helper suffix-stripping for
+checkpoint 5.
+
+**Done (Stages 1–2 of the fast-follow):** the goal IR is now
 `type LGoal = Spanned<LGoalKind>` — every goal carries a span uniformly
 (reusing `plg_shared::Spanned`), so a raising kind reads `g.span` with no
-per-variant plumbing. This also structurally enables finer granularity
-later (per-leaf spans become a parser change, not an IR one). Behaviour
-unchanged; existence_error provenance and golden IR are byte-identical.
+per-variant plumbing (Stage 1); and arithmetic provenance is wired and
+tested (`arithmetic_*_carries_source_location` +
+`query_side_arith_error_has_no_location_suffix`, Stage 2). Byte-exact v1
+messages and golden IR are preserved.
 
 **Known coarseness:** a top-level `;` body collapses to one span, so an
 undefined call inside a disjunction branch reports the body's start
