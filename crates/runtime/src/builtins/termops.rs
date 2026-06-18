@@ -52,7 +52,14 @@ fn collect_list(m: &Machine, w: Word) -> Option<Vec<Word>> {
 
 /// `functor/3`: decompose or construct. 1 = success, 0 = failure/error.
 #[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_b_functor_3(m: *mut Machine, term: u64, name: u64, arity: u64) -> i32 {
+pub extern "C" fn plg_rt_b_functor_3(
+    m: *mut Machine,
+    term: u64,
+    name: u64,
+    arity: u64,
+    site_id: u32,
+) -> i32 {
+    let _site = crate::machine::ErrorSiteGuard::enter(m, site_id);
     let m = mref(m);
     let w = m.deref(term);
     match tag_of(w) {
@@ -148,7 +155,14 @@ fn functor_construct(m: &mut Machine, term: u64, name: u64, arity: u64) -> i32 {
 
 /// `arg/3`: the N-th argument of a compound. 1 = success, 0 = fail/error.
 #[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_b_arg_3(m: *mut Machine, n: u64, term: u64, result: u64) -> i32 {
+pub extern "C" fn plg_rt_b_arg_3(
+    m: *mut Machine,
+    n: u64,
+    term: u64,
+    result: u64,
+    site_id: u32,
+) -> i32 {
+    let _site = crate::machine::ErrorSiteGuard::enter(m, site_id);
     let m = mref(m);
     let wn = m.deref(n);
     let n_val = match tag_of(wn) {
@@ -188,7 +202,8 @@ pub extern "C" fn plg_rt_b_arg_3(m: *mut Machine, n: u64, term: u64, result: u64
 
 /// `=../2` (univ): decompose into / build from a list. 1 = success.
 #[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_b_univ_2(m: *mut Machine, term: u64, list: u64) -> i32 {
+pub extern "C" fn plg_rt_b_univ_2(m: *mut Machine, term: u64, list: u64, site_id: u32) -> i32 {
+    let _site = crate::machine::ErrorSiteGuard::enter(m, site_id);
     let m = mref(m);
     let w = m.deref(term);
     match tag_of(w) {
@@ -278,10 +293,23 @@ pub extern "C" fn plg_rt_b_copy_term_2(m: *mut Machine, orig: u64, copy: u64) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::machine::NO_SITE;
     use plg_shared::StringInterner;
 
     fn machine() -> Box<Machine> {
         Machine::new(StringInterner::new(), Vec::new())
+    }
+
+    // Thin wrappers so the existing tests need no site (they exercise
+    // behavior, not provenance).
+    fn functor3(m: *mut Machine, t: u64, n: u64, a: u64) -> i32 {
+        plg_rt_b_functor_3(m, t, n, a, NO_SITE)
+    }
+    fn arg3(m: *mut Machine, n: u64, t: u64, r: u64) -> i32 {
+        plg_rt_b_arg_3(m, n, t, r, NO_SITE)
+    }
+    fn univ2(m: *mut Machine, t: u64, l: u64) -> i32 {
+        plg_rt_b_univ_2(m, t, l, NO_SITE)
     }
 
     fn str_term(m: &mut Machine, name: &str, args: &[Word]) -> Word {
@@ -310,7 +338,7 @@ mod tests {
         let name = m.new_var();
         let ar = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_functor_3(mp, s, name, ar), 1);
+        assert_eq!(functor3(mp, s, name, ar), 1);
         let foo = m.atoms.lookup("foo").unwrap();
         assert_eq!(m.deref(name), make_atom(foo));
         assert_eq!(int_value(m.deref(ar)), 2);
@@ -320,7 +348,7 @@ mod tests {
         let name = m.new_var();
         let ar = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_functor_3(mp, a, name, ar), 1);
+        assert_eq!(functor3(mp, a, name, ar), 1);
         assert_eq!(int_value(m.deref(ar)), 0);
     }
 
@@ -332,7 +360,7 @@ mod tests {
         let name = m.new_var();
         let ar = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_functor_3(mp, l, name, ar), 1);
+        assert_eq!(functor3(mp, l, name, ar), 1);
         assert_eq!(m.deref(name), make_atom(ATOM_DOT));
         assert_eq!(int_value(m.deref(ar)), 2);
     }
@@ -344,7 +372,7 @@ mod tests {
         let t = m.new_var();
         let dot = make_atom(ATOM_DOT);
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_functor_3(mp, t, dot, make_int(2)), 1);
+        assert_eq!(functor3(mp, t, dot, make_int(2)), 1);
         let w = m.deref(t);
         assert_eq!(tag_of(w), TAG_STR);
         let (f, n) = unpack_functor(m.heap[payload(w) as usize]);
@@ -354,7 +382,7 @@ mod tests {
         let t = m.new_var();
         let foo = make_atom(m.atoms.intern("foo"));
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_functor_3(mp, t, foo, make_int(2)), 1);
+        assert_eq!(functor3(mp, t, foo, make_int(2)), 1);
         assert_eq!(tag_of(m.deref(t)), TAG_STR);
     }
 
@@ -366,7 +394,7 @@ mod tests {
         let n = m.new_var();
         let a = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_functor_3(mp, t, n, a), 0);
+        assert_eq!(functor3(mp, t, n, a), 0);
         assert_eq!(
             msg(&m),
             "error(instantiation_error, functor/3: insufficient arguments)"
@@ -377,7 +405,7 @@ mod tests {
         let t = m.new_var();
         let foo = make_atom(m.atoms.intern("foo"));
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_functor_3(mp, t, foo, make_int(-1)), 0);
+        assert_eq!(functor3(mp, t, foo, make_int(-1)), 0);
         assert_eq!(
             msg(&m),
             "error(domain_error(not_less_than_zero, -1), functor/3: arity must be non-negative)"
@@ -390,16 +418,16 @@ mod tests {
         let s = str_term(&mut m, "foo", &[make_atom(7), make_atom(8)]);
         let x = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_arg_3(mp, make_int(1), s, x), 1);
+        assert_eq!(arg3(mp, make_int(1), s, x), 1);
         assert_eq!(m.deref(x), make_atom(7));
         // out of range → fail (no error)
         let y = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_arg_3(mp, make_int(3), s, y), 0);
+        assert_eq!(arg3(mp, make_int(3), s, y), 0);
         assert!(m.error.is_none());
         // arg 0 → fail
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_arg_3(mp, make_int(0), s, y), 0);
+        assert_eq!(arg3(mp, make_int(0), s, y), 0);
         assert!(m.error.is_none());
     }
 
@@ -409,7 +437,7 @@ mod tests {
         let x = m.new_var();
         let a = make_atom(m.atoms.intern("a"));
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_arg_3(mp, make_int(1), a, x), 0);
+        assert_eq!(arg3(mp, make_int(1), a, x), 0);
         assert_eq!(
             msg(&m),
             "error(type_error(compound, a), arg/3: second argument must be compound)"
@@ -422,7 +450,7 @@ mod tests {
         let s = str_term(&mut m, "foo", &[make_atom(7), make_int(2)]);
         let l = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_univ_2(mp, s, l), 1);
+        assert_eq!(univ2(mp, s, l), 1);
         let elems = collect_list(&m, l).unwrap();
         let foo = m.atoms.lookup("foo").unwrap();
         assert_eq!(m.deref(elems[0]), make_atom(foo));
@@ -435,7 +463,7 @@ mod tests {
         let inlist = build_list(&mut m, &[dot, a, b]);
         let t = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_univ_2(mp, t, inlist), 1);
+        assert_eq!(univ2(mp, t, inlist), 1);
         let w = m.deref(t);
         assert_eq!(tag_of(w), TAG_STR);
         let (f, n) = unpack_functor(m.heap[payload(w) as usize]);
@@ -449,7 +477,7 @@ mod tests {
         let inlist = build_list(&mut m, &[make_int(42)]);
         let t = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_univ_2(mp, t, inlist), 1);
+        assert_eq!(univ2(mp, t, inlist), 1);
         assert_eq!(int_value(m.deref(t)), 42);
 
         // empty list → domain_error(non_empty_list)
@@ -457,7 +485,7 @@ mod tests {
         let nil = make_atom(plg_shared::atom::ATOM_NIL);
         let t = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_univ_2(mp, t, nil), 0);
+        assert_eq!(univ2(mp, t, nil), 0);
         assert_eq!(
             msg(&m),
             "error(domain_error(non_empty_list, []), =../2: list must not be empty)"

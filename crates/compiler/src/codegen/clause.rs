@@ -252,7 +252,12 @@ impl CodeGen<'_> {
                 for a in args {
                     words.push(self.emit_term(b, a, vars)?);
                 }
-                let arglist: Vec<String> = words.iter().map(|w| format!(", i64 {w}")).collect();
+                let mut arglist: Vec<String> = words.iter().map(|w| format!(", i64 {w}")).collect();
+                // Raising det builtins take a trailing site_id (SPANS Layer 3).
+                if lower::det_builtin_raises(sym) {
+                    let site = self.site_id(span);
+                    arglist.push(format!(", i32 {site}"));
+                }
                 let r = self.fresh();
                 writeln!(b, "  {r} = call i32 @{sym}(ptr %m{})", arglist.join("")).unwrap();
                 r

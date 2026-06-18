@@ -225,6 +225,36 @@ fn query_side_arith_error_has_no_location_suffix() {
 }
 
 #[test]
+fn type_check_builtin_error_carries_source_location() {
+    // SPANS.md Layer 3, Stage 3: a type-checking det builtin (atom_length/2)
+    // names file:line:col when it raises. `atom_length(123, _)` is line 2 col 5.
+    let c = compile("go :-\n    atom_length(123, _).\n");
+    let (out, code) = c.query("go", &[]);
+    assert_eq!(code, 3);
+    assert!(out.contains("type_error(atom, 123)"), "{out}");
+    assert!(out.contains("prog.pl:2:5"), "{out}");
+}
+
+#[test]
+fn sort_type_error_carries_source_location() {
+    let c = compile("go :-\n    sort(foo, _).\n");
+    let (out, code) = c.query("go", &[]);
+    assert_eq!(code, 3);
+    assert!(out.contains("type_error(list, foo)"), "{out}");
+    assert!(out.contains("prog.pl:2:5"), "{out}");
+}
+
+#[test]
+fn query_side_type_check_error_has_no_location_suffix() {
+    // Runtime-walked det builtin (a query): no compiled site, byte-identical v1.
+    let c = compile("ok(yes).\n");
+    let (out, code) = c.query("atom_length(123, _)", &[]);
+    assert_eq!(code, 3);
+    assert!(out.contains("type_error(atom, 123)"), "{out}");
+    assert!(!out.contains(" at "), "no suffix expected: {out}");
+}
+
+#[test]
 fn step_limit_is_uncatchable_resource_error() {
     let c = compile("loop :- loop.\n");
     let (out, code) = c.query("loop", &[]);
