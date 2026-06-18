@@ -135,6 +135,47 @@ Gate results:
   `solve`/clause-walk symbol. (In-process `plg-compiler` linking remains
   the design target.)
 
+## M7 — Language server (`plgl`) ✅ (2026-06-10)
+
+Editor support built on the same `plg-frontend`/`plg-shared` sources as
+the compiler and REPL — never links the runtime. Diagnostics (parse
+errors + undefined-predicate warnings), completion (stdlib/builtins/user
+predicates, prefix-filtered, user shadows stdlib), hover, and
+goto-definition. User guide: [LSP Guide](lsp-guide.md). (Built alongside
+the compiler, before the REPL; recorded here retroactively — the
+milestone numbers are a feature log, not a strict timeline.)
+
+Gate results:
+- Per-feature unit tests in `crates/lsp` (diagnostic positioning,
+  completion sourcing/filtering/shadowing, definition lookup).
+- The undefined-predicate lint shares `plg-shared::BUILTINS` and the
+  parser with `plgc` — one vocabulary, no shadow parser (the v1 rule).
+
+## M8 — Source spans & error provenance ✅ (2026-06-18)
+
+Source positions made a first-class property of the AST and carried
+through to both compile-time diagnostics and runtime error text, in
+three layers:
+- **Frontend**: `Span`/`Spanned`/`SourceMap` in `plg-shared`; structured
+  `ParseError { message, span }` (the `... at line N col M` trailer
+  dropped); the tokenizer carries byte offsets.
+- **LSP / `plgc check`**: diagnostics map spans → ranges — precise
+  parse-error underlines and call-site-precise undefined-predicate
+  squiggles (the buffer-scan / string-trailer hacks deleted); `plgc
+  check` renders `file:line:col` from the span + `SourceMap`.
+- **Runtime**: compiled errors (existence, arithmetic, and type-checking
+  builtins) append ` at file:line:col` from a `.rodata` side-table
+  handed over at init, set per-raise via an RAII `ErrorSiteGuard`.
+
+Gate results:
+- Integration tests pin the suffix per error class; the ISO `error/2`
+  ball and byte-exact v1 messages are unchanged (query-side / stdlib
+  raises use the `NO_SITE` sentinel → no suffix); golden IR unchanged.
+- `just diff-test` strips the suffix before comparing to the v1 oracle,
+  so the differential corpus still matches byte-for-byte.
+- `throw/1` intentionally excluded (a user-thrown ball isn't a system
+  error).
+
 ## Future (explicitly out of scope)
 
 - **Fact-table compilation**: compile ground-fact predicates to static
