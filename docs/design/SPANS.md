@@ -1,9 +1,12 @@
 ## Spans (frontend → LSP → runtime errors)
 
-**Status: Layers 1–2 done; Layer 3 provenance complete for all raising
-builtins (existence, arithmetic, type-checking). Only the `diff-test`
-suffix-stripping (checkpoint 5) remains; `throw/1` is intentionally
-excluded.** Replaces the buffer-scan / string-trailer hacks
+**Status: COMPLETE. All three layers shipped; every checkpoint met.**
+Layer 3 provenance covers all raising builtins (existence, arithmetic,
+type-checking); the `diff-test` strips the suffix before comparing to the
+v1 oracle (checkpoint 5); `throw/1` is intentionally excluded (a
+user-thrown ball isn't a system error). This doc no longer guides pending
+work and is ready to retire to `done/`. Replaces the buffer-scan /
+string-trailer hacks
 the diagnostics path leaned on. Layer 1 (frontend
 `Span`/`Spanned`/`SourceMap`, structured `ParseError`, tokenizer byte
 offsets) and Layer 2 (LSP consumes spans directly — both
@@ -176,6 +179,8 @@ machine cells are unchanged.
 4. **Footprint** ✅ — hello-world stays under the ceiling
    (`tests/binary_size.rs`); empty `@plg_srcmap`/`@plg_files` cost ~0
    bytes, so provenance is pay-for-what-you-use.
-5. **Differential**: `just diff-test` continues to match the v1 oracle
-   modulo the new `at file:line:col` suffix (the oracle never emitted
-   it). Diff helper learns to strip the suffix when comparing.
+5. **Differential** ✅ — `differential.rs`'s `strip_provenance` removes the
+   `at file:line:col` suffix before comparing to the v1 oracle (which never
+   emits it), unit-tested by `strip_provenance_removes_suffix`. The corpus
+   gained `div_in_body`/`type_in_body` (compiled-body raises) so the
+   stripping is exercised against the oracle, not just defensive.
