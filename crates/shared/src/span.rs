@@ -40,10 +40,11 @@ impl Span {
 /// A value annotated with its source span — carries spans alongside the AST
 /// without putting one inside `Term` itself.
 ///
-/// No in-tree consumer yet: the undefined-call lint currently uses the
-/// parser's flat `CallSite` occurrences instead. `Spanned<T>` is reserved
-/// for the Layer 3 runtime-provenance path (see `docs/design/SPANS.md`),
-/// where spanned goals feed codegen's `@plg_srcmap` side-table.
+/// Consumers: the parser's spanned body conjuncts (`Spanned<Term>`, codegen
+/// path) and the compiler's lowered goal IR (`type LGoal = Spanned<LGoalKind>`,
+/// SPANS.md Layer 3), where every goal carries its source span so raising
+/// call sites get `site_id` provenance with no per-variant plumbing. The
+/// undefined-call lint still uses the parser's flat `CallSite` occurrences.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Spanned<T> {
     pub node: T,

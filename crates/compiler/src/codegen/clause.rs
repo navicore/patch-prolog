@@ -6,7 +6,7 @@
 //! Body frame: see body.rs.
 
 use super::body::{After, ClauseCtx};
-use super::lower::{self, LGoal};
+use super::lower::{self, LGoal, LGoalKind};
 use super::term_emit::collect_vars;
 use super::{CodeGen, GoalTarget};
 use plg_frontend::CgClause;
@@ -180,8 +180,8 @@ impl CodeGen<'_> {
         g: &LGoal,
         vars: &HashMap<VarId, String>,
     ) -> Result<(), String> {
-        let r = match g {
-            LGoal::Unify(x, y) => {
+        let r = match &g.node {
+            LGoalKind::Unify(x, y) => {
                 let (wx, wy) = (self.emit_term(b, x, vars)?, self.emit_term(b, y, vars)?);
                 let r = self.fresh();
                 writeln!(
@@ -191,7 +191,7 @@ impl CodeGen<'_> {
                 .unwrap();
                 r
             }
-            LGoal::NotUnify(x, y) => {
+            LGoalKind::NotUnify(x, y) => {
                 let (wx, wy) = (self.emit_term(b, x, vars)?, self.emit_term(b, y, vars)?);
                 let r = self.fresh();
                 writeln!(
@@ -201,7 +201,7 @@ impl CodeGen<'_> {
                 .unwrap();
                 r
             }
-            LGoal::TermCmp(op, x, y) => {
+            LGoalKind::TermCmp(op, x, y) => {
                 let (wx, wy) = (self.emit_term(b, x, vars)?, self.emit_term(b, y, vars)?);
                 let r = self.fresh();
                 writeln!(
@@ -211,7 +211,7 @@ impl CodeGen<'_> {
                 .unwrap();
                 r
             }
-            LGoal::Compare(o, x, y) => {
+            LGoalKind::Compare(o, x, y) => {
                 let wo = self.emit_term(b, o, vars)?;
                 let (wx, wy) = (self.emit_term(b, x, vars)?, self.emit_term(b, y, vars)?);
                 let r = self.fresh();
@@ -222,7 +222,7 @@ impl CodeGen<'_> {
                 .unwrap();
                 r
             }
-            LGoal::Is(x, e) => {
+            LGoalKind::Is(x, e) => {
                 let wx = self.emit_term(b, x, vars)?;
                 let we = self.emit_term(b, e, vars)?;
                 let r = self.fresh();
@@ -233,7 +233,7 @@ impl CodeGen<'_> {
                 .unwrap();
                 r
             }
-            LGoal::ArithCmp(op, x, y) => {
+            LGoalKind::ArithCmp(op, x, y) => {
                 let (wx, wy) = (self.emit_term(b, x, vars)?, self.emit_term(b, y, vars)?);
                 let r = self.fresh();
                 writeln!(
@@ -243,7 +243,7 @@ impl CodeGen<'_> {
                 .unwrap();
                 r
             }
-            LGoal::RtDet { sym, args } => {
+            LGoalKind::RtDet { sym, args } => {
                 let mut words = Vec::with_capacity(args.len());
                 for a in args {
                     words.push(self.emit_term(b, a, vars)?);

@@ -61,15 +61,20 @@ pub const DET_BUILTINS: &[(&str, u32, &str)] = &[
     ("nl", 0, "plg_rt_b_nl_0"),
 ];
 
+/// A lowered goal: its kind plus the source span every goal carries (SPANS.md
+/// Layer 3). Reusing `plg_shared::Spanned` keeps provenance uniform — a
+/// raising kind reads `g.span` with no per-variant plumbing, and finer
+/// granularity later is a parser change, not an IR one.
+pub type LGoal = Spanned<LGoalKind>;
+
 #[derive(Clone)]
-pub enum LGoal {
+pub enum LGoalKind {
     /// User predicate (or dynamic / undefined / control builtin routed
-    /// through emit_call_tail). `span` is the call site (SPANS.md Layer 3):
-    /// codegen turns it into a `site_id` for existence_error provenance.
+    /// through emit_call_tail). The enclosing `LGoal`'s span is the call
+    /// site; codegen turns it into a `site_id` for existence_error.
     Call {
         functor: AtomId,
         args: Vec<Term>,
-        span: Span,
     },
     /// A variable goal (`p :- X.`) — runtime metacall.
     Metacall(Term),
@@ -103,17 +108,17 @@ pub fn lower_goal(t: &Term, span: Span, interner: &StringInterner) -> Result<LGo
     let (name, args): (&str, &[Term]) = match t {
         Term::Atom(id) => (interner.resolve(*id), &[]),
         Term::Compound { functor, args } => (interner.resolve(*functor), args),
-        Term::Var(_) => return Ok(LGoal::Metacall(t.clone())),
+        Term::Var(_) => return Ok(Spanned::new(LGoalKind::Metacall(t.clone()), span)),
         other => return Err(format!("goal is not callable: {other:?}")),
     };
-    let g = match (name, args.len()) {
-        ("true", 0) => LGoal::True,
-        ("fail", 0) | ("false", 0) => LGoal::Fail,
-        ("!", 0) => LGoal::Cut,
+    let kind = match (name, args.len()) {
+        ("true", 0) => LGoalKind::True,
+        ("fail", 0) | ("false", 0) => LGoalKind::Fail,
+        ("!", 0) => LGoalKind::Cut,
         (",", 2) => {
             let mut goals = Vec::new();
             flatten_conj(t, span, interner, &mut goals)?;
-            LGoal::Conj(goals)
+            LGoalKind::Conj(goals)
         }
         (";", 2) => {
             // `(C -> T ; E)` is if-then-else, not a plain disjunction.
@@ -124,47 +129,47 @@ pub fn lower_goal(t: &Term, span: Span, interner: &StringInterner) -> Result<LGo
                 && interner.resolve(*functor) == "->"
                 && ite_args.len() == 2
             {
-                LGoal::IfThenElse(
+                LGoalKind::IfThenElse(
                     Box::new(lower_goal(&ite_args[0], span, interner)?),
                     Box::new(lower_goal(&ite_args[1], span, interner)?),
                     Box::new(lower_goal(&args[1], span, interner)?),
                 )
             } else {
-                LGoal::Disj(
+                LGoalKind::Disj(
                     Box::new(lower_goal(&args[0], span, interner)?),
                     Box::new(lower_goal(&args[1], span, interner)?),
                 )
             }
         }
-        ("->", 2) => LGoal::IfThen(
+        ("->", 2) => LGoalKind::IfThen(
             Box::new(lower_goal(&args[0], span, interner)?),
             Box::new(lower_goal(&args[1], span, interner)?),
         ),
-        ("\\+", 1) => LGoal::Naf(Box::new(lower_goal(&args[0], span, interner)?)),
+        ("\\+", 1) => LGoalKind::Naf(Box::new(lower_goal(&args[0], span, interner)?)),
         ("once", 1) if !matches!(args[0], Term::Var(_)) => {
-            LGoal::Once(Box::new(lower_goal(&args[0], span, interner)?))
+            LGoalKind::Once(Box::new(lower_goal(&args[0], span, interner)?))
         }
         // once(Var): route through the runtime metacall (the goal walker
         // implements once over runtime-built goals).
-        ("once", 1) => LGoal::Metacall(t.clone()),
-        ("=", 2) => LGoal::Unify(args[0].clone(), args[1].clone()),
-        ("\\=", 2) => LGoal::NotUnify(args[0].clone(), args[1].clone()),
-        ("compare", 3) => LGoal::Compare(args[0].clone(), args[1].clone(), args[2].clone()),
-        ("is", 2) => LGoal::Is(args[0].clone(), args[1].clone()),
+        ("once", 1) => LGoalKind::Metacall(t.clone()),
+        ("=", 2) => LGoalKind::Unify(args[0].clone(), args[1].clone()),
+        ("\\=", 2) => LGoalKind::NotUnify(args[0].clone(), args[1].clone()),
+        ("compare", 3) => LGoalKind::Compare(args[0].clone(), args[1].clone(), args[2].clone()),
+        ("is", 2) => LGoalKind::Is(args[0].clone(), args[1].clone()),
         _ => {
             if let Some(&(_, op)) = ARITH_OPS.iter().find(|(n, _)| *n == name)
                 && args.len() == 2
             {
-                LGoal::ArithCmp(op, args[0].clone(), args[1].clone())
+                LGoalKind::ArithCmp(op, args[0].clone(), args[1].clone())
             } else if let Some(&(_, op)) = ORDER_OPS.iter().find(|(n, _)| *n == name)
                 && args.len() == 2
             {
-                LGoal::TermCmp(op, args[0].clone(), args[1].clone())
+                LGoalKind::TermCmp(op, args[0].clone(), args[1].clone())
             } else if let Some(&(_, _, sym)) = DET_BUILTINS
                 .iter()
                 .find(|(n, a, _)| *n == name && *a as usize == args.len())
             {
-                LGoal::RtDet {
+                LGoalKind::RtDet {
                     sym,
                     args: args.to_vec(),
                 }
@@ -174,15 +179,14 @@ pub fn lower_goal(t: &Term, span: Span, interner: &StringInterner) -> Result<LGo
                     Term::Compound { functor, .. } => *functor,
                     _ => unreachable!(),
                 };
-                LGoal::Call {
+                LGoalKind::Call {
                     functor,
                     args: args.to_vec(),
-                    span,
                 }
             }
         }
     };
-    Ok(g)
+    Ok(Spanned::new(kind, span))
 }
 
 /// Flatten a `,`-tree into a goal list (right-associated per the parser).
@@ -202,12 +206,26 @@ fn flatten_conj(
         flatten_conj(&args[1], span, interner, out)?;
         return Ok(());
     }
-    match lower_goal(t, span, interner)? {
-        LGoal::True => {}                                 // drop bare true
-        LGoal::Conj(mut inner) => out.append(&mut inner), // shouldn't occur, but flatten
-        g => out.push(g),
-    }
+    splice_lowered(lower_goal(t, span, interner)?, out);
     Ok(())
+}
+
+/// Push a lowered goal, splicing a `Conj` into the flat sequence and dropping
+/// a bare `true` — preserving the IR shape the single-`,`-tree path produced.
+///
+/// Note: splicing a `Conj` discards the wrapper's own span. That is
+/// intentional and lossless for provenance — `flatten_conj` already
+/// propagated the same span down to every inner leaf, so the per-leaf spans
+/// are the source of truth after splicing. The only thing lost is "this whole
+/// parenthesized group appeared at X" as a distinct fact; no current consumer
+/// needs it (a nested-goal stack trace would be the first that might).
+fn splice_lowered(lowered: LGoal, out: &mut Vec<LGoal>) {
+    let Spanned { node, span } = lowered;
+    match node {
+        LGoalKind::True => {}
+        LGoalKind::Conj(inner) => out.extend(inner),
+        kind => out.push(Spanned::new(kind, span)),
+    }
 }
 
 /// Lower a clause body: the codegen parser yields top-level conjuncts, each
@@ -217,11 +235,7 @@ fn flatten_conj(
 pub fn lower_body(body: &[Spanned<Term>], interner: &StringInterner) -> Result<Vec<LGoal>, String> {
     let mut goals = Vec::new();
     for sp in body {
-        match lower_goal(&sp.node, sp.span, interner)? {
-            LGoal::True => {}
-            LGoal::Conj(mut inner) => goals.append(&mut inner),
-            g => goals.push(g),
-        }
+        splice_lowered(lower_goal(&sp.node, sp.span, interner)?, &mut goals);
     }
     Ok(goals)
 }
@@ -234,13 +248,13 @@ pub fn count_scratch(goals: &[LGoal]) -> usize {
 }
 
 fn scratch_in(g: &LGoal) -> usize {
-    match g {
-        LGoal::IfThenElse(c, t, e) => 2 + scratch_in(c) + scratch_in(t) + scratch_in(e),
-        LGoal::Naf(g) => 2 + scratch_in(g),
-        LGoal::IfThen(c, t) => 1 + scratch_in(c) + scratch_in(t),
-        LGoal::Once(g) => 1 + scratch_in(g),
-        LGoal::Disj(a, b) => scratch_in(a) + scratch_in(b),
-        LGoal::Conj(gs) => gs.iter().map(scratch_in).sum(),
+    match &g.node {
+        LGoalKind::IfThenElse(c, t, e) => 2 + scratch_in(c) + scratch_in(t) + scratch_in(e),
+        LGoalKind::Naf(g) => 2 + scratch_in(g),
+        LGoalKind::IfThen(c, t) => 1 + scratch_in(c) + scratch_in(t),
+        LGoalKind::Once(g) => 1 + scratch_in(g),
+        LGoalKind::Disj(a, b) => scratch_in(a) + scratch_in(b),
+        LGoalKind::Conj(gs) => gs.iter().map(scratch_in).sum(),
         _ => 0,
     }
 }
@@ -249,47 +263,47 @@ fn scratch_in(g: &LGoal) -> usize {
 /// order), so the clause frame can carry them.
 pub fn collect_goal_vars(g: &LGoal, out: &mut Vec<plg_shared::term::VarId>) {
     use super::term_emit::collect_vars;
-    match g {
-        LGoal::Call { args, .. } => {
+    match &g.node {
+        LGoalKind::Call { args, .. } => {
             for a in args {
                 collect_vars(a, out);
             }
         }
-        LGoal::Unify(a, b) | LGoal::NotUnify(a, b) | LGoal::Is(a, b) => {
+        LGoalKind::Unify(a, b) | LGoalKind::NotUnify(a, b) | LGoalKind::Is(a, b) => {
             collect_vars(a, out);
             collect_vars(b, out);
         }
-        LGoal::TermCmp(_, a, b) | LGoal::ArithCmp(_, a, b) => {
+        LGoalKind::TermCmp(_, a, b) | LGoalKind::ArithCmp(_, a, b) => {
             collect_vars(a, out);
             collect_vars(b, out);
         }
-        LGoal::Compare(o, a, b) => {
+        LGoalKind::Compare(o, a, b) => {
             collect_vars(o, out);
             collect_vars(a, out);
             collect_vars(b, out);
         }
-        LGoal::Disj(a, b) | LGoal::IfThen(a, b) => {
+        LGoalKind::Disj(a, b) | LGoalKind::IfThen(a, b) => {
             collect_goal_vars(a, out);
             collect_goal_vars(b, out);
         }
-        LGoal::IfThenElse(c, t, e) => {
+        LGoalKind::IfThenElse(c, t, e) => {
             collect_goal_vars(c, out);
             collect_goal_vars(t, out);
             collect_goal_vars(e, out);
         }
-        LGoal::Naf(g) | LGoal::Once(g) => collect_goal_vars(g, out),
-        LGoal::Conj(gs) => {
+        LGoalKind::Naf(g) | LGoalKind::Once(g) => collect_goal_vars(g, out),
+        LGoalKind::Conj(gs) => {
             for g in gs {
                 collect_goal_vars(g, out);
             }
         }
-        LGoal::Metacall(t) => collect_vars(t, out),
-        LGoal::RtDet { args, .. } => {
+        LGoalKind::Metacall(t) => collect_vars(t, out),
+        LGoalKind::RtDet { args, .. } => {
             for a in args {
                 collect_vars(a, out);
             }
         }
-        LGoal::True | LGoal::Fail | LGoal::Cut => {}
+        LGoalKind::True | LGoalKind::Fail | LGoalKind::Cut => {}
     }
 }
 

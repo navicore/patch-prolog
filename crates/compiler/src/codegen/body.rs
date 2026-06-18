@@ -20,7 +20,7 @@
 //!   cuts to h and returns 0.
 
 use super::CodeGen;
-use super::lower::LGoal;
+use super::lower::{LGoal, LGoalKind};
 use plg_shared::term::VarId;
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -128,13 +128,14 @@ impl CodeGen<'_> {
         let mut i = 0;
         while i < goals.len() {
             let rest = &goals[i + 1..];
-            match &goals[i] {
-                LGoal::True => {}
-                LGoal::Fail => {
+            let goal = &goals[i];
+            match &goal.node {
+                LGoalKind::True => {}
+                LGoalKind::Fail => {
                     writeln!(b, "  ret i32 0").unwrap();
                     return Ok(()); // rest unreachable
                 }
-                LGoal::Cut => {
+                LGoalKind::Cut => {
                     // The barrier slot depends on context: slot 2 is the
                     // predicate barrier; call-like constructs (`->`
                     // conditions, `\+`, `once`) pass a local slot, making
@@ -147,23 +148,19 @@ impl CodeGen<'_> {
                     .unwrap();
                     writeln!(b, "  call void @plg_rt_cut(ptr %m, i64 {h})").unwrap();
                 }
-                g @ (LGoal::Unify(..)
-                | LGoal::NotUnify(..)
-                | LGoal::TermCmp(..)
-                | LGoal::Compare(..)
-                | LGoal::Is(..)
-                | LGoal::ArithCmp(..)
-                | LGoal::RtDet { .. }) => self.emit_inline_builtin(b, g, vars)?,
-                LGoal::Call {
-                    functor,
-                    args,
-                    span,
-                } => {
+                LGoalKind::Unify(..)
+                | LGoalKind::NotUnify(..)
+                | LGoalKind::TermCmp(..)
+                | LGoalKind::Compare(..)
+                | LGoalKind::Is(..)
+                | LGoalKind::ArithCmp(..)
+                | LGoalKind::RtDet { .. } => self.emit_inline_builtin(b, goal, vars)?,
+                LGoalKind::Call { functor, args } => {
                     let rest_after = self.rest_after(rest, after, ctx, cut_slot);
                     self.emit_set_k(b, &rest_after, &bf);
-                    return self.emit_call_tail(b, *functor, args, vars, *span);
+                    return self.emit_call_tail(b, *functor, args, vars, goal.span);
                 }
-                LGoal::Metacall(t) => {
+                LGoalKind::Metacall(t) => {
                     // Runtime goal walker; the installed k is the
                     // continuation, exactly like a predicate call.
                     let rest_after = self.rest_after(rest, after, ctx, cut_slot);
@@ -174,7 +171,7 @@ impl CodeGen<'_> {
                     writeln!(b, "  ret i32 {r}").unwrap();
                     return Ok(());
                 }
-                LGoal::Disj(a, b2) => {
+                LGoalKind::Disj(a, b2) => {
                     // Cut is transparent in both branches.
                     let rest_after = self.rest_after(rest, after, ctx, cut_slot);
                     let bsym = ctx.queue(AuxKind::Seq {
@@ -187,7 +184,7 @@ impl CodeGen<'_> {
                     writeln!(b, "  call void @plg_rt_push_cp(ptr %m, i64 {t}, i64 {bf})").unwrap();
                     return self.compile_seq(b, &goals_of(a), &rest_after, ctx, vars, cut_slot);
                 }
-                LGoal::IfThenElse(c, t, e) => {
+                LGoalKind::IfThenElse(c, t, e) => {
                     let rest_after = self.rest_after(rest, after, ctx, cut_slot);
                     let slot = ctx.alloc_scratch();
                     self.emit_capture_height(b, &bf, slot);
@@ -219,7 +216,7 @@ impl CodeGen<'_> {
                         local,
                     );
                 }
-                LGoal::IfThen(c, t) => {
+                LGoalKind::IfThen(c, t) => {
                     let rest_after = self.rest_after(rest, after, ctx, cut_slot);
                     let slot = ctx.alloc_scratch();
                     self.emit_capture_height(b, &bf, slot);
@@ -240,7 +237,7 @@ impl CodeGen<'_> {
                         slot,
                     );
                 }
-                LGoal::Once(g) => {
+                LGoalKind::Once(g) => {
                     // once(G) = commit to G's first solution, continue.
                     let slot = ctx.alloc_scratch();
                     self.emit_capture_height(b, &bf, slot);
@@ -260,7 +257,7 @@ impl CodeGen<'_> {
                         slot,
                     );
                 }
-                LGoal::Naf(g) => {
+                LGoalKind::Naf(g) => {
                     let rest_after = self.rest_after(rest, after, ctx, cut_slot);
                     let cont_sym = match &rest_after {
                         After::Fn(s) => s.clone(),
@@ -278,7 +275,7 @@ impl CodeGen<'_> {
                     self.emit_capture_height(b, &bf, local);
                     return self.compile_seq(b, &goals_of(g), &After::Fn(found), ctx, vars, local);
                 }
-                LGoal::Conj(gs) => {
+                LGoalKind::Conj(gs) => {
                     let mut combined = gs.clone();
                     combined.extend_from_slice(rest);
                     return self.compile_seq(b, &combined, after, ctx, vars, cut_slot);
@@ -445,8 +442,8 @@ impl CodeGen<'_> {
 
 /// A control-construct branch as a goal list.
 fn goals_of(g: &LGoal) -> Vec<LGoal> {
-    match g {
-        LGoal::Conj(v) => v.clone(),
-        other => vec![other.clone()],
+    match &g.node {
+        LGoalKind::Conj(v) => v.clone(),
+        _ => vec![g.clone()],
     }
 }

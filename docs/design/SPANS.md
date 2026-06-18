@@ -24,14 +24,17 @@ v1). The compile path parses bodies into spanned top-level conjuncts
 into the other raising builtins (`is/2`, comparisons, type-checks,
 `throw/1`) — each is "pass `site_id` to that call + read it in the error
 constructor"; and the diff-helper suffix-stripping for checkpoint 5.
-Two refactors to do *as part of* that fast-follow rather than after:
-(a) only `LGoal::Call` carries a `span` today — when more variants
-(`RtDet`, `Is`, `ArithCmp`, `Metacall`) start raising, lift the span to a
-wrapper (`LGoal { kind, span }`) so the bookkeeping lives in one place
-instead of per-variant; (b) `Machine::site_location` clones the filename
-per raise (fine for cold `existence_error`) — add an
-`append_to_error_msg(&mut self, &str)` helper before wiring tighter
-loops like arithmetic type errors.
+One refactor remains to do *as part of* that fast-follow rather than
+after: `Machine::site_location` clones the filename per raise (fine for
+cold `existence_error`) — add an `append_to_error_msg(&mut self, &str)`
+helper before wiring tighter loops like arithmetic type errors.
+
+**Done (Stage 1 of the fast-follow):** the goal IR is now
+`type LGoal = Spanned<LGoalKind>` — every goal carries a span uniformly
+(reusing `plg_shared::Spanned`), so a raising kind reads `g.span` with no
+per-variant plumbing. This also structurally enables finer granularity
+later (per-leaf spans become a parser change, not an IR one). Behaviour
+unchanged; existence_error provenance and golden IR are byte-identical.
 
 **Known coarseness:** a top-level `;` body collapses to one span, so an
 undefined call inside a disjunction branch reports the body's start
