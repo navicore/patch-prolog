@@ -225,6 +225,82 @@ fn query_side_arith_error_has_no_location_suffix() {
 }
 
 #[test]
+fn type_check_builtin_error_carries_source_location() {
+    // SPANS.md Layer 3, Stage 3: a type-checking det builtin (atom_length/2)
+    // names file:line:col when it raises. `atom_length(123, _)` is line 2 col 5.
+    let c = compile("go :-\n    atom_length(123, _).\n");
+    let (out, code) = c.query("go", &[]);
+    assert_eq!(code, 3);
+    assert!(out.contains("type_error(atom, 123)"), "{out}");
+    assert!(out.contains("prog.pl:2:5"), "{out}");
+}
+
+#[test]
+fn sort_type_error_carries_source_location() {
+    let c = compile("go :-\n    sort(foo, _).\n");
+    let (out, code) = c.query("go", &[]);
+    assert_eq!(code, 3);
+    assert!(out.contains("type_error(list, foo)"), "{out}");
+    assert!(out.contains("prog.pl:2:5"), "{out}");
+}
+
+#[test]
+fn query_side_type_check_error_has_no_location_suffix() {
+    // Runtime-walked det builtin (a query): no compiled site, byte-identical v1.
+    let c = compile("ok(yes).\n");
+    let (out, code) = c.query("atom_length(123, _)", &[]);
+    assert_eq!(code, 3);
+    assert!(out.contains("type_error(atom, 123)"), "{out}");
+    assert!(!out.contains(" at "), "no suffix expected: {out}");
+}
+
+#[test]
+fn every_raising_det_builtin_carries_provenance() {
+    // SPANS.md Layer 3, Stage 3: ONE pin per raising det builtin, so a future
+    // `raises`-flag / runtime-signature mismatch can't slip through silently
+    // (the IR is generated from the same flag, but the runtime ABI is not).
+    // One program, compiled once; each clause body hits a builtin with bad
+    // input and must name a source location.
+    let src = "\
+        t0 :- functor(_, _, _).\n\
+        t1 :- arg(foo, bar, _).\n\
+        t2 :- _ =.. foo.\n\
+        t3 :- atom_length(123, _).\n\
+        t4 :- atom_concat(123, foo, _).\n\
+        t5 :- atom_chars(123, _).\n\
+        t6 :- number_chars(_, [a]).\n\
+        t7 :- number_codes(_, [a]).\n\
+        t8 :- msort(foo, _).\n\
+        t9 :- sort(foo, _).\n\
+        t10 :- succ(-1, _).\n\
+        t11 :- plus(_, _, _).\n";
+    let c = compile(src);
+    let cases = [
+        ("t0", "instantiation_error"),
+        ("t1", "type_error(integer, foo)"),
+        ("t2", "type_error(list, foo)"),
+        ("t3", "type_error(atom, 123)"),
+        ("t4", "type_error(atom, 123)"),
+        ("t5", "type_error(atom, 123)"),
+        ("t6", "syntax_error"),
+        ("t7", "character_codes"),
+        ("t8", "type_error(list, foo)"),
+        ("t9", "type_error(list, foo)"),
+        ("t10", "domain_error(not_less_than_zero, -1)"),
+        ("t11", "instantiation_error"),
+    ];
+    for (q, expect) in cases {
+        let (out, code) = c.query(q, &[]);
+        assert_eq!(code, 3, "{q}: {out}");
+        assert!(out.contains(expect), "{q}: expected {expect}, got {out}");
+        assert!(
+            out.contains(" at ") && out.contains("prog.pl:"),
+            "{q}: no provenance suffix: {out}"
+        );
+    }
+}
+
+#[test]
 fn step_limit_is_uncatchable_resource_error() {
     let c = compile("loop :- loop.\n");
     let (out, code) = c.query("loop", &[]);

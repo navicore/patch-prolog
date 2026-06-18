@@ -105,7 +105,13 @@ fn parse_number(m: &mut Machine, s: &str) -> Option<Word> {
 
 /// `atom_length/2`: length (in chars) of an atom. 1 = success.
 #[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_b_atom_length_2(m: *mut Machine, atom: u64, len: u64) -> i32 {
+pub extern "C" fn plg_rt_b_atom_length_2(
+    m: *mut Machine,
+    atom: u64,
+    len: u64,
+    site_id: u32,
+) -> i32 {
+    let _site = crate::machine::ErrorSiteGuard::enter(m, site_id);
     let m = mref(m);
     let w = m.deref(atom);
     if tag_of(w) == TAG_ATOM {
@@ -125,7 +131,14 @@ pub extern "C" fn plg_rt_b_atom_length_2(m: *mut Machine, atom: u64, len: u64) -
 /// `atom_concat/3`: concatenate two bound atoms. Only this mode is
 /// supported (v1 raises a type error otherwise).
 #[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_b_atom_concat_3(m: *mut Machine, a: u64, b: u64, result: u64) -> i32 {
+pub extern "C" fn plg_rt_b_atom_concat_3(
+    m: *mut Machine,
+    a: u64,
+    b: u64,
+    result: u64,
+    site_id: u32,
+) -> i32 {
+    let _site = crate::machine::ErrorSiteGuard::enter(m, site_id);
     let m = mref(m);
     let wa = m.deref(a);
     let wb = m.deref(b);
@@ -151,7 +164,13 @@ pub extern "C" fn plg_rt_b_atom_concat_3(m: *mut Machine, a: u64, b: u64, result
 
 /// `atom_chars/2`: both directions (atom ↔ list of one-char atoms).
 #[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_b_atom_chars_2(m: *mut Machine, atom: u64, list: u64) -> i32 {
+pub extern "C" fn plg_rt_b_atom_chars_2(
+    m: *mut Machine,
+    atom: u64,
+    list: u64,
+    site_id: u32,
+) -> i32 {
+    let _site = crate::machine::ErrorSiteGuard::enter(m, site_id);
     let m = mref(m);
     let w = m.deref(atom);
     match tag_of(w) {
@@ -217,7 +236,13 @@ fn chars_to_string(m: &Machine, elems: &[Word]) -> Option<String> {
 
 /// `number_chars/2`: both directions (number ↔ list of one-char atoms).
 #[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_b_number_chars_2(m: *mut Machine, num: u64, chars: u64) -> i32 {
+pub extern "C" fn plg_rt_b_number_chars_2(
+    m: *mut Machine,
+    num: u64,
+    chars: u64,
+    site_id: u32,
+) -> i32 {
+    let _site = crate::machine::ErrorSiteGuard::enter(m, site_id);
     let m = mref(m);
     let w = m.deref(num);
     if let Some(s) = number_string(m, w) {
@@ -267,7 +292,13 @@ fn number_from_chars(m: &mut Machine, num: u64, chars: u64) -> i32 {
 
 /// `number_codes/2`: both directions (number ↔ list of char codes).
 #[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_b_number_codes_2(m: *mut Machine, num: u64, codes: u64) -> i32 {
+pub extern "C" fn plg_rt_b_number_codes_2(
+    m: *mut Machine,
+    num: u64,
+    codes: u64,
+    site_id: u32,
+) -> i32 {
+    let _site = crate::machine::ErrorSiteGuard::enter(m, site_id);
     let m = mref(m);
     let w = m.deref(num);
     if let Some(s) = number_string(m, w) {
@@ -332,10 +363,28 @@ fn codes_domain_error(m: &mut Machine, codes: u64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::machine::NO_SITE;
     use plg_shared::StringInterner;
 
     fn machine() -> Box<Machine> {
         Machine::new(StringInterner::new(), Vec::new())
+    }
+
+    // Thin wrappers: existing tests exercise behavior, not provenance.
+    fn alen(m: *mut Machine, a: u64, l: u64) -> i32 {
+        plg_rt_b_atom_length_2(m, a, l, NO_SITE)
+    }
+    fn acat(m: *mut Machine, a: u64, b: u64, r: u64) -> i32 {
+        plg_rt_b_atom_concat_3(m, a, b, r, NO_SITE)
+    }
+    fn achars(m: *mut Machine, a: u64, l: u64) -> i32 {
+        plg_rt_b_atom_chars_2(m, a, l, NO_SITE)
+    }
+    fn nchars(m: *mut Machine, n: u64, c: u64) -> i32 {
+        plg_rt_b_number_chars_2(m, n, c, NO_SITE)
+    }
+    fn ncodes(m: *mut Machine, n: u64, c: u64) -> i32 {
+        plg_rt_b_number_codes_2(m, n, c, NO_SITE)
     }
 
     fn msg(m: &Machine) -> &str {
@@ -358,15 +407,15 @@ mod tests {
         let foo = atom_word(&mut m, "foo");
         let x = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_atom_length_2(mp, foo, x), 1);
+        assert_eq!(alen(mp, foo, x), 1);
         assert_eq!(int_value(m.deref(x)), 3);
         // mismatch fails
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_atom_length_2(mp, foo, make_int(5)), 0);
+        assert_eq!(alen(mp, foo, make_int(5)), 0);
         // non-atom errors
         let mp = &mut *m as *mut Machine;
         let y = m.new_var();
-        assert_eq!(plg_rt_b_atom_length_2(mp, make_int(123), y), 0);
+        assert_eq!(alen(mp, make_int(123), y), 0);
         assert_eq!(
             msg(&m),
             "error(type_error(atom, 123), atom_length/2: first argument must be an atom)"
@@ -380,7 +429,7 @@ mod tests {
         let bar = atom_word(&mut m, "bar");
         let x = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_atom_concat_3(mp, foo, bar, x), 1);
+        assert_eq!(acat(mp, foo, bar, x), 1);
         let foobar = m.atoms.lookup("foobar").unwrap();
         assert_eq!(m.deref(x), make_atom(foobar));
 
@@ -390,7 +439,7 @@ mod tests {
         let foobar = atom_word(&mut m, "foobar");
         let v = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_atom_concat_3(mp, v, bar, foobar), 0);
+        assert_eq!(acat(mp, v, bar, foobar), 0);
         assert!(msg(&m).starts_with("error(type_error(atom, _"));
         assert!(msg(&m).ends_with("atom_concat/3: first two arguments must be atoms)"));
     }
@@ -401,7 +450,7 @@ mod tests {
         let foo = atom_word(&mut m, "foo");
         let x = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_atom_chars_2(mp, foo, x), 1);
+        assert_eq!(achars(mp, foo, x), 1);
         let elems = collect_list(&m, x).unwrap();
         assert_eq!(elems.len(), 3);
         let f = m.atoms.lookup("f").unwrap();
@@ -413,7 +462,7 @@ mod tests {
         let inlist = build_list(&mut m, &[f, o, o]);
         let a = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_atom_chars_2(mp, a, inlist), 1);
+        assert_eq!(achars(mp, a, inlist), 1);
         let foo = m.atoms.lookup("foo").unwrap();
         assert_eq!(m.deref(a), make_atom(foo));
     }
@@ -424,7 +473,7 @@ mod tests {
         // 123 → ['1','2','3']
         let x = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_number_chars_2(mp, make_int(123), x), 1);
+        assert_eq!(nchars(mp, make_int(123), x), 1);
         let elems = collect_list(&m, x).unwrap();
         assert_eq!(elems.len(), 3);
         let one = m.atoms.lookup("1").unwrap();
@@ -437,7 +486,7 @@ mod tests {
         let inlist = build_list(&mut m, &[c1, c2, c3]);
         let n = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_number_chars_2(mp, n, inlist), 1);
+        assert_eq!(nchars(mp, n, inlist), 1);
         assert_eq!(int_value(m.deref(n)), 123);
     }
 
@@ -447,7 +496,7 @@ mod tests {
         let three = flt(&mut m, 3.0);
         let x = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_number_chars_2(mp, three, x), 1);
+        assert_eq!(nchars(mp, three, x), 1);
         let s = chars_to_string(&m, &collect_list(&m, x).unwrap()).unwrap();
         assert_eq!(s, "3.0");
     }
@@ -459,7 +508,7 @@ mod tests {
         let inlist = build_list(&mut m, &[a]);
         let n = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_number_chars_2(mp, n, inlist), 0);
+        assert_eq!(nchars(mp, n, inlist), 0);
         assert_eq!(
             msg(&m),
             "error(syntax_error, number_chars/2: invalid number syntax)"
@@ -472,7 +521,7 @@ mod tests {
         // 123 → [49,50,51]
         let x = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_number_codes_2(mp, make_int(123), x), 1);
+        assert_eq!(ncodes(mp, make_int(123), x), 1);
         let elems = collect_list(&m, x).unwrap();
         assert_eq!(int_value(m.deref(elems[0])), 49);
 
@@ -480,7 +529,7 @@ mod tests {
         let inlist = build_list(&mut m, &[make_int(49), make_int(50), make_int(51)]);
         let n = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_number_codes_2(mp, n, inlist), 1);
+        assert_eq!(ncodes(mp, n, inlist), 1);
         assert_eq!(int_value(m.deref(n)), 123);
     }
 }

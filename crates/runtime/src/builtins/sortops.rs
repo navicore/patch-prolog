@@ -52,7 +52,8 @@ fn build_list(m: &mut Machine, elems: &[Word]) -> Word {
 
 /// `msort/2`: stable sort by standard order, duplicates kept.
 #[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_b_msort_2(m: *mut Machine, list: u64, sorted: u64) -> i32 {
+pub extern "C" fn plg_rt_b_msort_2(m: *mut Machine, list: u64, sorted: u64, site_id: u32) -> i32 {
+    let _site = crate::machine::ErrorSiteGuard::enter(m, site_id);
     let m = mref(m);
     let Some(mut elems) = collect_list(m, list) else {
         let culprit = m.deref(list);
@@ -66,7 +67,8 @@ pub extern "C" fn plg_rt_b_msort_2(m: *mut Machine, list: u64, sorted: u64) -> i
 
 /// `sort/2`: sort by standard order then drop adjacent `Equal` dups.
 #[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_b_sort_2(m: *mut Machine, list: u64, sorted: u64) -> i32 {
+pub extern "C" fn plg_rt_b_sort_2(m: *mut Machine, list: u64, sorted: u64, site_id: u32) -> i32 {
+    let _site = crate::machine::ErrorSiteGuard::enter(m, site_id);
     let m = mref(m);
     let Some(mut elems) = collect_list(m, list) else {
         let culprit = m.deref(list);
@@ -82,10 +84,19 @@ pub extern "C" fn plg_rt_b_sort_2(m: *mut Machine, list: u64, sorted: u64) -> i3
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::machine::NO_SITE;
     use plg_shared::StringInterner;
 
     fn machine() -> Box<Machine> {
         Machine::new(StringInterner::new(), Vec::new())
+    }
+
+    // Thin wrappers: existing tests exercise behavior, not provenance.
+    fn msort(m: *mut Machine, l: u64, s: u64) -> i32 {
+        plg_rt_b_msort_2(m, l, s, NO_SITE)
+    }
+    fn sort(m: *mut Machine, l: u64, s: u64) -> i32 {
+        plg_rt_b_sort_2(m, l, s, NO_SITE)
     }
 
     fn msg(m: &Machine) -> &str {
@@ -103,7 +114,7 @@ mod tests {
         let l = ints(&mut m, &[3, 1, 2, 1]);
         let out = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_msort_2(mp, l, out), 1);
+        assert_eq!(msort(mp, l, out), 1);
         let got: Vec<i64> = collect_list(&m, out)
             .unwrap()
             .iter()
@@ -118,7 +129,7 @@ mod tests {
         let l = ints(&mut m, &[3, 1, 2, 1]);
         let out = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_sort_2(mp, l, out), 1);
+        assert_eq!(sort(mp, l, out), 1);
         let got: Vec<i64> = collect_list(&m, out)
             .unwrap()
             .iter()
@@ -133,7 +144,7 @@ mod tests {
         let foo = make_atom(m.atoms.intern("foo"));
         let out = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_sort_2(mp, foo, out), 0);
+        assert_eq!(sort(mp, foo, out), 0);
         assert_eq!(
             msg(&m),
             "error(type_error(list, foo), sort/2: first argument must be a list)"
@@ -143,7 +154,7 @@ mod tests {
         let foo = make_atom(m.atoms.intern("foo"));
         let out = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_msort_2(mp, foo, out), 0);
+        assert_eq!(msort(mp, foo, out), 0);
         assert_eq!(
             msg(&m),
             "error(type_error(list, foo), msort/2: first argument must be a list)"

@@ -1,8 +1,9 @@
 ## Spans (frontend → LSP → runtime errors)
 
-**Status: Layers 1–2 done; Layer 3 landed for `existence_error` and
-arithmetic (`is/2`, comparisons); type-checking builtins are the
-remaining fast-follow.** Replaces the buffer-scan / string-trailer hacks
+**Status: Layers 1–2 done; Layer 3 provenance complete for all raising
+builtins (existence, arithmetic, type-checking). Only the `diff-test`
+suffix-stripping (checkpoint 5) remains; `throw/1` is intentionally
+excluded.** Replaces the buffer-scan / string-trailer hacks
 the diagnostics path leaned on. Layer 1 (frontend
 `Span`/`Spanned`/`SourceMap`, structured `ParseError`, tokenizer byte
 offsets) and Layer 2 (LSP consumes spans directly — both
@@ -30,20 +31,30 @@ So `is/2`/comparison errors (`evaluation_error`, `type_error`,
 point supersedes the planned `append_to_error_msg` helper, and the
 `NO_SITE` default allocates nothing on the no-provenance path.
 
-**Remaining (fast-follow):** the type-checking det builtins (`functor/3`,
-`arg/3`, `=../2`, `atom_*`, `number_chars/codes`, `msort`/`sort`,
-`succ`/`plus`) — each just sets `m.error_site` at its ABI boundary like
-`plg_rt_b_is` does. `throw/1` is intentionally excluded (a user-thrown
-ball isn't a system error). Plus the diff-helper suffix-stripping for
-checkpoint 5.
+**Adding a new raising builtin** is now two lines: take a trailing
+`site_id: u32`, and `let _site = ErrorSiteGuard::enter(m, site_id);` at
+the top (the guard sets/restores `m.error_site`). Codegen passes
+`g.span`'s `site_id` automatically — for det builtins via the `raises`
+flag in `DET_BUILTINS`; the decl-gen and RtDet emitter key off it.
 
-**Done (Stages 1–2 of the fast-follow):** the goal IR is now
-`type LGoal = Spanned<LGoalKind>` — every goal carries a span uniformly
-(reusing `plg_shared::Spanned`), so a raising kind reads `g.span` with no
-per-variant plumbing (Stage 1); and arithmetic provenance is wired and
-tested (`arithmetic_*_carries_source_location` +
-`query_side_arith_error_has_no_location_suffix`, Stage 2). Byte-exact v1
-messages and golden IR are preserved.
+**Remaining:** the `diff-test` helper must strip the ` at file:line:col`
+suffix before comparing to the v1 oracle (checkpoint 5; not in CI).
+`throw/1` is intentionally excluded — a user-thrown ball isn't a system
+error, so a source suffix on it would be noise.
+
+**Done (Stages 1–3 of the fast-follow):**
+- Stage 1 — the goal IR is now `type LGoal = Spanned<LGoalKind>`, so every
+  goal carries a span uniformly (reusing `plg_shared::Spanned`).
+- Stage 2 — arithmetic (`is/2`, comparisons) via the `m.error_site` /
+  `set_formal` mechanism; `existence_error` migrated to it; the
+  `ErrorSiteGuard` RAII makes set/restore foolproof and nesting-correct.
+- Stage 3 — the type-checking det builtins (`functor/3`, `arg/3`, `=../2`,
+  `atom_*`, `number_chars/codes`, `msort`/`sort`, `succ`/`plus`), driven by
+  the `DET_BUILTINS` `raises` flag.
+
+All pinned by integration tests (`*_carries_source_location` +
+`query_side_*_has_no_location_suffix`); byte-exact v1 messages and golden
+IR are preserved throughout.
 
 **Known coarseness:** a top-level `;` body collapses to one span, so an
 undefined call inside a disjunction branch reports the body's start

@@ -47,7 +47,8 @@ fn int_word(m: &mut Machine, n: i64) -> Word {
 
 /// `succ/2`: `S = X + 1` over non-negative integers, both modes.
 #[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_b_succ_2(m: *mut Machine, x: u64, s: u64) -> i32 {
+pub extern "C" fn plg_rt_b_succ_2(m: *mut Machine, x: u64, s: u64, site_id: u32) -> i32 {
+    let _site = crate::machine::ErrorSiteGuard::enter(m, site_id);
     let m = mref(m);
     let wx = m.deref(x);
     let ws = m.deref(s);
@@ -98,7 +99,8 @@ pub extern "C" fn plg_rt_b_succ_2(m: *mut Machine, x: u64, s: u64) -> i32 {
 
 /// `plus/3`: `Z = X + Y` over integers; any single unbound is solved for.
 #[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_b_plus_3(m: *mut Machine, x: u64, y: u64, z: u64) -> i32 {
+pub extern "C" fn plg_rt_b_plus_3(m: *mut Machine, x: u64, y: u64, z: u64, site_id: u32) -> i32 {
+    let _site = crate::machine::ErrorSiteGuard::enter(m, site_id);
     let m = mref(m);
     let wx = int_of(m, m.deref(x));
     let wy = int_of(m, m.deref(y));
@@ -268,10 +270,19 @@ pub extern "C" fn plg_rt_b_nl_0(_m: *mut Machine) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::machine::NO_SITE;
     use plg_shared::StringInterner;
 
     fn machine() -> Box<Machine> {
         Machine::new(StringInterner::new(), Vec::new())
+    }
+
+    // Thin wrappers: existing tests exercise behavior, not provenance.
+    fn succ(m: *mut Machine, x: u64, s: u64) -> i32 {
+        plg_rt_b_succ_2(m, x, s, NO_SITE)
+    }
+    fn plus(m: *mut Machine, x: u64, y: u64, z: u64) -> i32 {
+        plg_rt_b_plus_3(m, x, y, z, NO_SITE)
     }
 
     fn msg(m: &Machine) -> &str {
@@ -291,12 +302,12 @@ mod tests {
         let mut m = machine();
         let x = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_succ_2(mp, make_int(3), x), 1);
+        assert_eq!(succ(mp, make_int(3), x), 1);
         assert_eq!(int_value(m.deref(x)), 4);
 
         let y = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_succ_2(mp, y, make_int(5)), 1);
+        assert_eq!(succ(mp, y, make_int(5)), 1);
         assert_eq!(int_value(m.deref(y)), 4);
     }
 
@@ -306,14 +317,14 @@ mod tests {
         let y = m.new_var();
         let mp = &mut *m as *mut Machine;
         // succ(X, 0) fails (no predecessor)
-        assert_eq!(plg_rt_b_succ_2(mp, y, make_int(0)), 0);
+        assert_eq!(succ(mp, y, make_int(0)), 0);
         assert!(m.error.is_none());
 
         // succ(-1, X) → domain_error
         let mut m = machine();
         let x = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_succ_2(mp, make_int(-1), x), 0);
+        assert_eq!(succ(mp, make_int(-1), x), 0);
         assert_eq!(
             msg(&m),
             "error(domain_error(not_less_than_zero, -1), succ/2: argument must be non-negative)"
@@ -324,7 +335,7 @@ mod tests {
         let x = m.new_var();
         let y = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_succ_2(mp, x, y), 0);
+        assert_eq!(succ(mp, x, y), 0);
         assert_eq!(
             msg(&m),
             "error(instantiation_error, succ/2: at least one argument must be an integer)"
@@ -336,17 +347,17 @@ mod tests {
         let mut m = machine();
         let z = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_plus_3(mp, make_int(2), make_int(3), z), 1);
+        assert_eq!(plus(mp, make_int(2), make_int(3), z), 1);
         assert_eq!(int_value(m.deref(z)), 5);
 
         let y = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_plus_3(mp, make_int(2), y, make_int(5)), 1);
+        assert_eq!(plus(mp, make_int(2), y, make_int(5)), 1);
         assert_eq!(int_value(m.deref(y)), 3);
 
         let x = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_plus_3(mp, x, make_int(3), make_int(5)), 1);
+        assert_eq!(plus(mp, x, make_int(3), make_int(5)), 1);
         assert_eq!(int_value(m.deref(x)), 2);
 
         // two unbound → instantiation
@@ -354,7 +365,7 @@ mod tests {
         let x = m.new_var();
         let y = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_plus_3(mp, x, y, make_int(5)), 0);
+        assert_eq!(plus(mp, x, y, make_int(5)), 0);
         assert_eq!(
             msg(&m),
             "error(instantiation_error, plus/3: at least two arguments must be integers)"

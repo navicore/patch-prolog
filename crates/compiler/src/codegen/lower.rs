@@ -25,40 +25,47 @@ pub const ORDER_OPS: &[(&str, i32)] = &[
     ("@>=", 5),
 ];
 
-/// Deterministic runtime builtins: (name, arity, C symbol). The exact
-/// v1 builtin vocabulary — names NOT here (and not control) fall
+/// Deterministic runtime builtins: `(name, arity, C symbol, raises)`. The
+/// exact v1 builtin vocabulary — names NOT here (and not control) fall
 /// through to existence_error, like v1. Mirrored by the runtime's
 /// query-side dispatch (control.rs); the diff corpus guards the pair.
-pub const DET_BUILTINS: &[(&str, u32, &str)] = &[
-    ("var", 1, "plg_rt_b_var_1"),
-    ("nonvar", 1, "plg_rt_b_nonvar_1"),
-    ("atom", 1, "plg_rt_b_atom_1"),
-    ("number", 1, "plg_rt_b_number_1"),
-    ("integer", 1, "plg_rt_b_integer_1"),
-    ("float", 1, "plg_rt_b_float_1"),
-    ("compound", 1, "plg_rt_b_compound_1"),
-    ("is_list", 1, "plg_rt_b_is_list_1"),
-    ("functor", 3, "plg_rt_b_functor_3"),
-    ("arg", 3, "plg_rt_b_arg_3"),
-    ("=..", 2, "plg_rt_b_univ_2"),
-    ("copy_term", 2, "plg_rt_b_copy_term_2"),
-    ("atom_length", 2, "plg_rt_b_atom_length_2"),
-    ("atom_concat", 3, "plg_rt_b_atom_concat_3"),
-    ("atom_chars", 2, "plg_rt_b_atom_chars_2"),
-    ("number_chars", 2, "plg_rt_b_number_chars_2"),
-    ("number_codes", 2, "plg_rt_b_number_codes_2"),
-    ("msort", 2, "plg_rt_b_msort_2"),
-    ("sort", 2, "plg_rt_b_sort_2"),
-    ("succ", 2, "plg_rt_b_succ_2"),
-    ("plus", 3, "plg_rt_b_plus_3"),
+///
+/// `raises` (SPANS.md Layer 3): true for builtins that can raise an ISO
+/// error (type/instantiation/etc.). Those take a trailing `site_id` arg so
+/// the runtime can append `at file:line:col`; pure ones (type checks, I/O)
+/// do not. Keep in sync with the runtime signatures — the golden-IR /
+/// integration tests catch a mismatch.
+pub const DET_BUILTINS: &[(&str, u32, &str, bool)] = &[
+    ("var", 1, "plg_rt_b_var_1", false),
+    ("nonvar", 1, "plg_rt_b_nonvar_1", false),
+    ("atom", 1, "plg_rt_b_atom_1", false),
+    ("number", 1, "plg_rt_b_number_1", false),
+    ("integer", 1, "plg_rt_b_integer_1", false),
+    ("float", 1, "plg_rt_b_float_1", false),
+    ("compound", 1, "plg_rt_b_compound_1", false),
+    ("is_list", 1, "plg_rt_b_is_list_1", false),
+    ("functor", 3, "plg_rt_b_functor_3", true),
+    ("arg", 3, "plg_rt_b_arg_3", true),
+    ("=..", 2, "plg_rt_b_univ_2", true),
+    ("copy_term", 2, "plg_rt_b_copy_term_2", false),
+    ("atom_length", 2, "plg_rt_b_atom_length_2", true),
+    ("atom_concat", 3, "plg_rt_b_atom_concat_3", true),
+    ("atom_chars", 2, "plg_rt_b_atom_chars_2", true),
+    ("number_chars", 2, "plg_rt_b_number_chars_2", true),
+    ("number_codes", 2, "plg_rt_b_number_codes_2", true),
+    ("msort", 2, "plg_rt_b_msort_2", true),
+    ("sort", 2, "plg_rt_b_sort_2", true),
+    ("succ", 2, "plg_rt_b_succ_2", true),
+    ("plus", 3, "plg_rt_b_plus_3", true),
     (
         "unify_with_occurs_check",
         2,
         "plg_rt_b_unify_with_occurs_check_2",
+        false,
     ),
-    ("write", 1, "plg_rt_b_write_1"),
-    ("writeln", 1, "plg_rt_b_writeln_1"),
-    ("nl", 0, "plg_rt_b_nl_0"),
+    ("write", 1, "plg_rt_b_write_1", false),
+    ("writeln", 1, "plg_rt_b_writeln_1", false),
+    ("nl", 0, "plg_rt_b_nl_0", false),
 ];
 
 /// A lowered goal: its kind plus the source span every goal carries (SPANS.md
@@ -79,10 +86,13 @@ pub enum LGoalKind {
     /// A variable goal (`p :- X.`) — runtime metacall.
     Metacall(Term),
     /// Deterministic runtime builtin executed inline: call the C
-    /// symbol with the argument words, branch on the i32 result.
+    /// symbol with the argument words, branch on the i32 result. `raises`
+    /// (from `DET_BUILTINS`) decides whether codegen passes a trailing
+    /// `site_id` — carried here so emit is O(1), not a per-site table scan.
     RtDet {
         sym: &'static str,
         args: Vec<Term>,
+        raises: bool,
     },
     True,
     Fail,
@@ -165,13 +175,14 @@ pub fn lower_goal(t: &Term, span: Span, interner: &StringInterner) -> Result<LGo
                 && args.len() == 2
             {
                 LGoalKind::TermCmp(op, args[0].clone(), args[1].clone())
-            } else if let Some(&(_, _, sym)) = DET_BUILTINS
+            } else if let Some(&(_, _, sym, raises)) = DET_BUILTINS
                 .iter()
-                .find(|(n, a, _)| *n == name && *a as usize == args.len())
+                .find(|(n, a, _, _)| *n == name && *a as usize == args.len())
             {
                 LGoalKind::RtDet {
                     sym,
                     args: args.to_vec(),
+                    raises,
                 }
             } else {
                 let functor = match t {
@@ -335,7 +346,7 @@ mod vocab_invariant {
 
     #[test]
     fn det_builtins_are_det_rows_in_shared() {
-        for &(name, arity, _sym) in DET_BUILTINS {
+        for &(name, arity, _sym, _raises) in DET_BUILTINS {
             let row = BUILTINS
                 .iter()
                 .find(|s| s.name == name && s.arity == arity)
@@ -351,7 +362,7 @@ mod vocab_invariant {
     #[test]
     fn recognized_names_equal_shared_vocabulary() {
         let mut covered: BTreeSet<(&str, u32)> = BTreeSet::new();
-        for &(n, a, _) in DET_BUILTINS {
+        for &(n, a, _, _) in DET_BUILTINS {
             covered.insert((n, a));
         }
         for &(n, _) in ARITH_OPS {

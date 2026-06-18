@@ -105,8 +105,11 @@ pub fn codegen_program(
     cg.out.push_str(RUNTIME_DECLS);
     // Deterministic-builtin declarations, generated from the table so
     // the IR and the lowering can never disagree.
-    for (_, arity, sym) in super::lower::DET_BUILTINS {
-        let args: String = std::iter::repeat_n(", i64", *arity as usize).collect();
+    for (_, arity, sym, raises) in super::lower::DET_BUILTINS {
+        let mut args: String = std::iter::repeat_n(", i64", *arity as usize).collect();
+        if *raises {
+            args.push_str(", i32"); // trailing site_id (SPANS.md Layer 3)
+        }
         writeln!(cg.out, "declare i32 @{sym}(ptr{args})").unwrap();
     }
     cg.out.push('\n');

@@ -11,7 +11,7 @@
 
 use crate::builtins::pred;
 use crate::cell::*;
-use crate::machine::{ContFn, Machine};
+use crate::machine::{ContFn, Machine, NO_SITE};
 use crate::solve::call_goal;
 use crate::unify::unify;
 
@@ -113,19 +113,20 @@ fn det_builtin(mp: *mut Machine, name: &str, arity: u32, a: &[Word]) -> Option<b
         ("float", 1) => typecheck::plg_rt_b_float_1(mp, a[0]),
         ("compound", 1) => typecheck::plg_rt_b_compound_1(mp, a[0]),
         ("is_list", 1) => typecheck::plg_rt_b_is_list_1(mp, a[0]),
-        ("functor", 3) => termops::plg_rt_b_functor_3(mp, a[0], a[1], a[2]),
-        ("arg", 3) => termops::plg_rt_b_arg_3(mp, a[0], a[1], a[2]),
-        ("=..", 2) => termops::plg_rt_b_univ_2(mp, a[0], a[1]),
+        // Runtime-walked (query/metacall): raising builtins get NO_SITE.
+        ("functor", 3) => termops::plg_rt_b_functor_3(mp, a[0], a[1], a[2], NO_SITE),
+        ("arg", 3) => termops::plg_rt_b_arg_3(mp, a[0], a[1], a[2], NO_SITE),
+        ("=..", 2) => termops::plg_rt_b_univ_2(mp, a[0], a[1], NO_SITE),
         ("copy_term", 2) => termops::plg_rt_b_copy_term_2(mp, a[0], a[1]),
-        ("atom_length", 2) => atomops::plg_rt_b_atom_length_2(mp, a[0], a[1]),
-        ("atom_concat", 3) => atomops::plg_rt_b_atom_concat_3(mp, a[0], a[1], a[2]),
-        ("atom_chars", 2) => atomops::plg_rt_b_atom_chars_2(mp, a[0], a[1]),
-        ("number_chars", 2) => atomops::plg_rt_b_number_chars_2(mp, a[0], a[1]),
-        ("number_codes", 2) => atomops::plg_rt_b_number_codes_2(mp, a[0], a[1]),
-        ("msort", 2) => sortops::plg_rt_b_msort_2(mp, a[0], a[1]),
-        ("sort", 2) => sortops::plg_rt_b_sort_2(mp, a[0], a[1]),
-        ("succ", 2) => miscops::plg_rt_b_succ_2(mp, a[0], a[1]),
-        ("plus", 3) => miscops::plg_rt_b_plus_3(mp, a[0], a[1], a[2]),
+        ("atom_length", 2) => atomops::plg_rt_b_atom_length_2(mp, a[0], a[1], NO_SITE),
+        ("atom_concat", 3) => atomops::plg_rt_b_atom_concat_3(mp, a[0], a[1], a[2], NO_SITE),
+        ("atom_chars", 2) => atomops::plg_rt_b_atom_chars_2(mp, a[0], a[1], NO_SITE),
+        ("number_chars", 2) => atomops::plg_rt_b_number_chars_2(mp, a[0], a[1], NO_SITE),
+        ("number_codes", 2) => atomops::plg_rt_b_number_codes_2(mp, a[0], a[1], NO_SITE),
+        ("msort", 2) => sortops::plg_rt_b_msort_2(mp, a[0], a[1], NO_SITE),
+        ("sort", 2) => sortops::plg_rt_b_sort_2(mp, a[0], a[1], NO_SITE),
+        ("succ", 2) => miscops::plg_rt_b_succ_2(mp, a[0], a[1], NO_SITE),
+        ("plus", 3) => miscops::plg_rt_b_plus_3(mp, a[0], a[1], a[2], NO_SITE),
         ("unify_with_occurs_check", 2) => {
             miscops::plg_rt_b_unify_with_occurs_check_2(mp, a[0], a[1])
         }
