@@ -97,3 +97,33 @@ mdBook. Source pages:
 
 Build the site locally with `just docs-serve` (live reload) or `just docs`
 (one-shot into `book/`).
+
+## Releasing
+
+Crates publish to [crates.io](https://crates.io) from **Forgejo Actions**
+(`.forgejo/workflows/release.yml`) when a `v*` tag is pushed:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The workflow then, on the same `navicore-rust` runner CI uses (so the
+`rust-toolchain.toml` pin governs):
+
+1. sets the `[workspace.package]` version and the `=`-pinned inter-crate
+   dependencies to the tag, regenerates `Cargo.lock`, and commits the bump
+   back to `main`;
+2. publishes in dependency order with a pause between each so crates.io
+   indexes it before the next depends on it:
+   `patch-prolog-shared` → `-frontend` → `-runtime` → `-compiler` →
+   `-lsp` → `-repl`.
+
+The crates.io **package** names are `patch-prolog-*`; the library and binary
+names are unchanged (`use plg_shared`; the binaries are `plgc`/`plgl`/`plgr`),
+so `patch-prolog-runtime` still builds the `libplg_runtime.a` the compiler
+embeds.
+
+Required repo secrets (Forgejo → Settings → Actions → Secrets and Variables):
+
+- `PAT` — Forgejo token with `write:repository`, to push the version bump to `main`.
+- `CRATES_IO_TOKEN` — crates.io API token from <https://crates.io/settings/tokens>.

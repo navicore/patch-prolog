@@ -1,5 +1,5 @@
 [package]
-name = "plg-runtime"
+name = "patch-prolog-runtime"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -7,9 +7,13 @@ license.workspace = true
 description = "Runtime library for patch-prolog2 compiled binaries"
 
 [lib]
+# The crates.io package is `patch-prolog-runtime`, but the lib name MUST stay
+# `plg_runtime` so the staticlib artifact is `libplg_runtime.a` — the name the
+# compiler's build.rs locates and embeds via include_bytes!.
+name = "plg_runtime"
 crate-type = ["staticlib", "rlib"] # staticlib for LLVM linking, rlib for testing
 
 # IMPORTANT: every dependency added here ships inside every compiled
 # Prolog binary. No clap, no serde — JSON output is hand-rolled.
 [dependencies]
-plg-shared = { path = "../shared" }
+plg-shared = { path = "../shared", version = "=0.1.0", package = "patch-prolog-shared" }

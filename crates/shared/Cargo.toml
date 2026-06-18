@@ -1,5 +1,5 @@
 [package]
-name = "plg-shared"
+name = "patch-prolog-shared"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

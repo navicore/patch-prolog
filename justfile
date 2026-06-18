@@ -28,13 +28,13 @@ install: build
 # Build the Rust runtime as static library
 build-runtime:
     @echo "Building runtime..."
-    cargo build --locked --release -p plg-runtime
+    cargo build --locked --release -p patch-prolog-runtime
     @echo "✅ Runtime built: target/release/libplg_runtime.a"
 
 # Build the compiler
 build-compiler:
     @echo "Building compiler..."
-    cargo build --locked --release -p plg-compiler
+    cargo build --locked --release -p patch-prolog-compiler
     @echo "✅ Compiler built: target/release/plgc"
 
 # Compile all example programs to native binaries.
@@ -69,13 +69,13 @@ build-examples: build
 # embedded copy stale (same trap as the release `build` ordering).
 test:
     @echo "Running Rust unit tests..."
-    cargo build --locked -p plg-runtime
+    cargo build --locked -p patch-prolog-runtime
     cargo test --locked --workspace --all-targets
 
 # Run integration tests (compile .pl programs and query the binaries)
 test-integration: build
     @echo "Running compiled-binary integration tests..."
-    cargo test --locked --release -p plg-compiler --test integration
+    cargo test --locked --release -p patch-prolog-compiler --test integration
     @echo "✅ Integration tests passed!"
 
 # Differential tests: same (program, goal) corpus through the old
@@ -85,11 +85,11 @@ test-integration: build
 # as direct tests instead — see docs/ISO_COMPLIANCE.md.
 diff-test: build
     @echo "Running differential tests vs ../patch-prolog oracle..."
-    cargo test --locked --release -p plg-compiler --test differential -- --nocapture
+    cargo test --locked --release -p patch-prolog-compiler --test differential -- --nocapture
 
 # Binary hygiene: size ceiling + standalone (system-libs-only) contract
 check-binary-contents:
-    cargo test --locked --release -p plg-compiler --test binary_size -- --nocapture
+    cargo test --locked --release -p patch-prolog-compiler --test binary_size -- --nocapture
 
 # Lint all Prolog example sources with the compiler's static checks
 lint-pl: build

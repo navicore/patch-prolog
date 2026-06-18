@@ -1,0 +1,95 @@
+name: Release
+
+# Publishes the workspace crates to crates.io on a `vX.Y.Z` tag push.
+# Bumps the workspace version + inter-crate pins from the tag, commits the
+# bump back to main, then publishes in dependency order.
+#
+# Runs on the same `navicore-rust` runner as CI, so the toolchain is pinned by
+# rust-toolchain.toml (1.96.0) exactly as CI tests it — no `@stable` drift.
+#
+# Required repo secrets (Settings -> Actions -> Secrets and Variables):
+#   PAT             - Forgejo token with `write:repository` (pushes the bump to main)
+#   CRATES_IO_TOKEN - crates.io API token (https://crates.io/settings/tokens)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Publish to crates.io
+    runs-on: navicore-rust
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Checkout main (PAT lets us push the version bump back)
+        uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.PAT }}
+          ref: main
+
+      - name: Verify toolchain (pinned by rust-toolchain.toml, matches CI)
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing $VERSION"
+
+      - name: Set workspace version + inter-crate pins to the tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # [workspace.package] version — the single source every crate inherits
+          # via `version.workspace = true`. Section-scoped awk so dependency
+          # version strings are never touched.
+          awk -v new_version="$VERSION" '
+            /^\[workspace\.package\]/ { in_section=1 }
+            /^\[/ && !/^\[workspace\.package\]/ { in_section=0 }
+            in_section && /^version = / {
+              print "version = \"" new_version "\""
+              in_section=0
+              next
+            }
+            { print }
+          ' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
+          # Exact-match inter-crate dependency pins: version = "=X.Y.Z". These
+          # are the only `=`-pinned versions in the member manifests (workspace
+          # deps use caret ranges), so a global replace is safe.
+          for f in crates/*/Cargo.toml; do
+            sed -i "s/version = \"=[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\"/version = \"=$VERSION\"/g" "$f"
+          done
+          cargo generate-lockfile
+
+      - name: Commit and push the version bump
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git config user.name "forgejo-actions[bot]"
+          git config user.email "forgejo-actions[bot]@users.noreply.git.navicore.tech"
+          git add Cargo.toml crates/*/Cargo.toml Cargo.lock
+          git commit -m "chore: bump version to $VERSION" || echo "nothing to commit"
+          git push origin main
+
+      - name: Publish to crates.io in dependency order
+        run: |
+          publish() {
+            cargo publish -p "$1" --no-verify --token "${{ secrets.CRATES_IO_TOKEN }}" \
+              || echo "::warning::publish $1 failed (may already exist)"
+          }
+          # Leaf to dependent: shared -> {frontend, runtime} -> compiler -> {lsp, repl}.
+          # 120s between publishes lets crates.io index each before the next needs it.
+          publish patch-prolog-shared
+          sleep 120
+          publish patch-prolog-frontend
+          sleep 120
+          publish patch-prolog-runtime
+          sleep 120
+          publish patch-prolog-compiler
+          sleep 120
+          publish patch-prolog-lsp
+          sleep 120
+          publish patch-prolog-repl
