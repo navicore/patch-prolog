@@ -92,10 +92,11 @@ Fact-table is a **safe feature**; it does not justify new `unsafe`:
    data-emission time; record IR size + `clang` time before/after.
    *Measured (Stage A, 2026-06-18):* 100k 2-column facts emit one `.rodata`
    table + two functions (not 100k functions) and compile in ~1.0s total
-   (`plgc` + `clang`), 4.5M binary. This is the **compile-time / footprint**
-   win. Query latency at scale is NOT covered here: Stage A full-scans the
-   table per solution (a worst-case bound-key query over 100k rows ~90ms);
-   bound-key queries become O(log n) only with Stage B's first-arg index.
+   (`plgc` + `clang`), 4.5M binary — the **compile-time / footprint** win.
+   *Stage B (2026-06-18):* a first-arg index (a `.rodata` array of row indices
+   sorted by column 0) gives bound-key queries an O(log n) binary search to
+   the matching row range; unbound or non-immediate first args still full-scan,
+   identical to Stage A. The index adds one word per row.
 3. **Footprint:** fact-table binary < per-clause equivalent; hello-world
    unchanged; `binary_size` + `ldd` gates green.
 4. **Mixed + re-entry:** a program mixing fact and rule predicates

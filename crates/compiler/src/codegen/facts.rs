@@ -97,6 +97,26 @@ impl CodeGen<'_> {
             .unwrap();
         }
 
+        // --- First-argument index (Stage B): row indices sorted by column 0
+        //     (ties keep program order), for an O(log n) bound-key lookup.
+        //     Arity-0 predicates have no first column, so no index — the entry
+        //     passes a null index pointer and the runtime always full-scans.
+        let has_index = arity >= 1;
+        if has_index {
+            let mut order: Vec<usize> = (0..nrows).collect();
+            order.sort_by_key(|&r| (words[r * arity as usize], r));
+            let body = order
+                .iter()
+                .map(|r| format!("i64 {r}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(
+                self.out,
+                "@{tbl}_idx = private unnamed_addr constant [{nrows} x i64] [{body}]"
+            )
+            .unwrap();
+        }
+
         // --- Entry: step, then find the first matching row (runtime), then
         //     musttail the continuation.
         self.reset_temps();
@@ -110,12 +130,20 @@ impl CodeGen<'_> {
         writeln!(self.out, "go:").unwrap();
         let tp = self.fresh();
         writeln!(self.out, "  {tp} = ptrtoint ptr @{tbl} to i64").unwrap();
+        // Index pointer: the sorted index for arity ≥ 1, else null (full scan).
+        let ip = if has_index {
+            let ip = self.fresh();
+            writeln!(self.out, "  {ip} = ptrtoint ptr @{tbl}_idx to i64").unwrap();
+            ip
+        } else {
+            "0".to_string()
+        };
         let rp = self.fresh();
         writeln!(self.out, "  {rp} = ptrtoint ptr @{sym}_ftr to i64").unwrap();
         let ok = self.fresh();
         writeln!(
             self.out,
-            "  {ok} = call i32 @plg_rt_fact_first(ptr %m, i64 {tp}, i64 {nrows}, i64 {arity}, i64 {rp})"
+            "  {ok} = call i32 @plg_rt_fact_first(ptr %m, i64 {tp}, i64 {ip}, i64 {nrows}, i64 {arity}, i64 {rp})"
         )
         .unwrap();
         let d = self.fresh();
