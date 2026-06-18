@@ -176,14 +176,42 @@ Gate results:
 - `throw/1` intentionally excluded (a user-thrown ball isn't a system
   error).
 
+## M9 — Fact-table compilation ✅ (2026-06-18)
+
+The first post-parity feature: a predicate whose clauses are all bodyless
+facts with ground head args compiles to one `.rodata` data table + a
+generic runtime lookup, instead of one clause function each — same
+semantics, same single immutable binary, near-instant rebuilds at 100k+
+facts. Serves the production thesis (immutable binary as the only prod
+artifact; fact churn = deploy cadence). Built in three staged PRs:
+- **A**: immediate (atom/int) columns + the generic CPS lookup
+  (`plg_rt_fact_first`/`_next`); delivery to the continuation is a
+  `musttail` in generated IR (constant C stack through recursive fact
+  predicates).
+- **B**: a first-argument index (a `.rodata` array of row indices sorted
+  by column 0) — bound-key queries binary-search the matching range.
+- **C**: ground compound / list / float / big-int columns serialized into
+  a per-predicate `.rodata` blob (the `copyterm`/`TermBuf` cell format),
+  restored onto the heap on lookup. The word/cell ABI is single-sourced
+  in `plg-shared::cell` so codegen and runtime can't drift.
+
+Gate results:
+- Equivalence: the differential corpus (now including compound facts)
+  is byte-identical to the v1 oracle; the same facts compiled fact-table
+  vs per-clause give identical query output, order, and `--limit`.
+- Stack safety: 2000-deep recursion *through* a fact table holds under a
+  512KB stack (`deep_recursion_runs_in_constant_c_stack`).
+- Footprint: one table (+ index, + blob) per predicate, not N functions;
+  100k facts compile in ~1s; `binary_size` gate green.
+- Coverage: integration tests per column kind + `findall`/`call`
+  re-entry + undefined→`existence_error`; golden tests pin table/index/
+  blob emission.
+- Deferred (recorded in the design doc): multi-argument indexing,
+  float-keyed indexing, compound-column-0 interning, the `unsafe`
+  bounds-elision seam (gated on a profile).
+
 ## Future (explicitly out of scope)
 
-- **Fact-table compilation**: compile ground-fact predicates to static
-  data tables in `.rodata` (generic indexed lookup) instead of one
-  clause function each — same semantics, same single immutable binary,
-  near-instant rebuilds at 100k+ facts. Serves the production
-  architecture (immutable binary as the ONLY prod artifact; fact churn
-  = deploy cadence). Likely the first post-parity feature.
 - Bundled backend ("the Zig route") only if compiles must happen ON
   hardened machines — same ADR. (Runtime `--facts` loading was
   considered and REJECTED for the prod shape: it reopens the
