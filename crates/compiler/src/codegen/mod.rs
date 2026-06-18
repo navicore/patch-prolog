@@ -8,6 +8,7 @@
 mod atoms;
 mod body;
 mod clause;
+mod facts;
 mod lower;
 mod predicate;
 mod program;
