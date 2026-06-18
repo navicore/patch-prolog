@@ -183,6 +183,48 @@ fn query_side_existence_error_has_no_location_suffix() {
 }
 
 #[test]
+fn arithmetic_evaluation_error_carries_source_location() {
+    // SPANS.md Layer 3, Stage 2: an is/2 zero-divisor in a compiled body
+    // names file:line:col. Conjunct `_ is 1 // 0` is line 2, col 5.
+    let c = compile("go :-\n    _ is 1 // 0.\n");
+    let (out, code) = c.query("go", &[]);
+    assert_eq!(code, 3);
+    assert!(out.contains("evaluation_error(zero_divisor)"), "{out}");
+    assert!(out.contains("prog.pl:2:5"), "{out}");
+}
+
+#[test]
+fn arithmetic_type_error_carries_source_location() {
+    // is/2 evaluating a non-number atom → type_error, with provenance.
+    let c = compile("go :-\n    _ is foo + 1.\n");
+    let (out, code) = c.query("go", &[]);
+    assert_eq!(code, 3);
+    assert!(out.contains("type_error(evaluable, foo)"), "{out}");
+    assert!(out.contains("prog.pl:2:5"), "{out}");
+}
+
+#[test]
+fn arithmetic_comparison_error_carries_source_location() {
+    // A comparison (`<`) evaluating a non-number also names the call site.
+    let c = compile("go :-\n    1 < foo.\n");
+    let (out, code) = c.query("go", &[]);
+    assert_eq!(code, 3);
+    assert!(out.contains("type_error(evaluable, foo)"), "{out}");
+    assert!(out.contains("prog.pl:2:5"), "{out}");
+}
+
+#[test]
+fn query_side_arith_error_has_no_location_suffix() {
+    // Runtime-walked arithmetic (a query) has no compiled call site; the
+    // message stays byte-identical to v1.
+    let c = compile("ok(yes).\n");
+    let (out, code) = c.query("_ is 1 // 0", &[]);
+    assert_eq!(code, 3);
+    assert!(out.contains("evaluation_error(zero_divisor)"), "{out}");
+    assert!(!out.contains(" at "), "no suffix expected: {out}");
+}
+
+#[test]
 fn step_limit_is_uncatchable_resource_error() {
     let c = compile("loop :- loop.\n");
     let (out, code) = c.query("loop", &[]);

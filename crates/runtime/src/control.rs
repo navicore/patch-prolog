@@ -69,7 +69,8 @@ pub fn try_builtin(m: &mut Machine, name: &str, args_idx: usize, arity: u32) -> 
             det(m, ok)
         }
         ("is", 2) => {
-            let ok = pred::plg_rt_b_is(mp, arg(0), arg(1)) != 0;
+            // Runtime-walked (query/metacall): no compiled call site.
+            let ok = pred::plg_rt_b_is(mp, arg(0), arg(1), crate::machine::NO_SITE) != 0;
             det(m, ok)
         }
         ("compare", 3) => {
@@ -77,7 +78,13 @@ pub fn try_builtin(m: &mut Machine, name: &str, args_idx: usize, arity: u32) -> 
             det(m, ok)
         }
         (op, 2) if arith_op(op).is_some() => {
-            let ok = pred::plg_rt_b_arith_cmp(mp, arith_op(op).unwrap(), arg(0), arg(1)) != 0;
+            let ok = pred::plg_rt_b_arith_cmp(
+                mp,
+                arith_op(op).unwrap(),
+                arg(0),
+                arg(1),
+                crate::machine::NO_SITE,
+            ) != 0;
             det(m, ok)
         }
         (op, 2) if order_op(op).is_some() => {

@@ -41,43 +41,58 @@ fn value_to_word(m: &mut Machine, v: ArithValue) -> Option<Word> {
 }
 
 /// `is/2`: evaluate `expr`, unify `lhs` with the result. 1 = success,
-/// 0 = failure or error (error already set in `m.error`).
+/// 0 = failure or error (error already set in `m.error`). `site_id` carries
+/// source provenance (SPANS.md Layer 3): set around the eval so any error
+/// constructor it reaches appends ` at file:line:col` via `set_formal`.
 #[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_b_is(m: *mut Machine, lhs: u64, expr: u64) -> i32 {
+pub extern "C" fn plg_rt_b_is(m: *mut Machine, lhs: u64, expr: u64, site_id: u32) -> i32 {
     let m = mref(m);
-    let v = match arith::eval(m, expr) {
-        Ok(v) => v,
-        Err(()) => return 0,
+    m.error_site = site_id;
+    let r = match arith::eval(m, expr) {
+        Err(()) => 0,
+        Ok(v) => match value_to_word(m, v) {
+            None => 0,
+            Some(w) => crate::unify::unify(m, lhs, w) as i32,
+        },
     };
-    let Some(w) = value_to_word(m, v) else {
-        return 0;
-    };
-    crate::unify::unify(m, lhs, w) as i32
+    m.error_site = crate::machine::NO_SITE;
+    r
 }
 
 /// Arithmetic comparison. op: 0:'<' 1:'>' 2:'=<' 3:'>=' 4:'=:=' 5:'=\\='.
-/// 1 = holds, 0 = does not hold or error.
+/// 1 = holds, 0 = does not hold or error. `site_id`: see `plg_rt_b_is`.
 #[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_b_arith_cmp(m: *mut Machine, op: i32, a: u64, b: u64) -> i32 {
+pub extern "C" fn plg_rt_b_arith_cmp(
+    m: *mut Machine,
+    op: i32,
+    a: u64,
+    b: u64,
+    site_id: u32,
+) -> i32 {
     let m = mref(m);
-    let av = match arith::eval(m, a) {
-        Ok(v) => v,
-        Err(()) => return 0,
+    m.error_site = site_id;
+    let r = 'cmp: {
+        let av = match arith::eval(m, a) {
+            Ok(v) => v,
+            Err(()) => break 'cmp 0,
+        };
+        let bv = match arith::eval(m, b) {
+            Ok(v) => v,
+            Err(()) => break 'cmp 0,
+        };
+        let holds = match op {
+            0 => arith::arith_lt(av, bv),
+            1 => arith::arith_gt(av, bv),
+            2 => !arith::arith_gt(av, bv), // =< : not greater
+            3 => !arith::arith_lt(av, bv), // >= : not less
+            4 => arith::arith_eq(av, bv),  // =:=
+            5 => !arith::arith_eq(av, bv), // =\=
+            _ => break 'cmp 0,
+        };
+        holds as i32
     };
-    let bv = match arith::eval(m, b) {
-        Ok(v) => v,
-        Err(()) => return 0,
-    };
-    let holds = match op {
-        0 => arith::arith_lt(av, bv),
-        1 => arith::arith_gt(av, bv),
-        2 => !arith::arith_gt(av, bv), // =< : not greater
-        3 => !arith::arith_lt(av, bv), // >= : not less
-        4 => arith::arith_eq(av, bv),  // =:=
-        5 => !arith::arith_eq(av, bv), // =\=
-        _ => return 0,
-    };
-    holds as i32
+    m.error_site = crate::machine::NO_SITE;
+    r
 }
 
 /// `\=/2`: succeed iff `a` and `b` do NOT unify. Always undoes any bindings
@@ -174,6 +189,14 @@ mod tests {
         Machine::new(StringInterner::new(), Vec::new())
     }
 
+    // These exercise arithmetic, not provenance; call with no site.
+    fn is_(m: *mut Machine, lhs: u64, expr: u64) -> i32 {
+        plg_rt_b_is(m, lhs, expr, crate::machine::NO_SITE)
+    }
+    fn cmp_(m: *mut Machine, op: i32, a: u64, b: u64) -> i32 {
+        plg_rt_b_arith_cmp(m, op, a, b, crate::machine::NO_SITE)
+    }
+
     fn bin_str(m: &mut Machine, op: &str, a: Word, b: Word) -> Word {
         let f = m.atoms.intern(op);
         let idx = m.heap.len();
@@ -189,10 +212,10 @@ mod tests {
         let mp = &mut *m as *mut Machine;
         // 5 is 2+3 → success
         let e = bin_str(&mut m, "+", make_int(2), make_int(3));
-        assert_eq!(plg_rt_b_is(mp, make_int(5), e), 1);
+        assert_eq!(is_(mp, make_int(5), e), 1);
         // 6 is 2+3 → fail
         let e = bin_str(&mut m, "+", make_int(2), make_int(3));
-        assert_eq!(plg_rt_b_is(mp, make_int(6), e), 0);
+        assert_eq!(is_(mp, make_int(6), e), 0);
     }
 
     #[test]
@@ -201,7 +224,7 @@ mod tests {
         let v = m.new_var();
         let e = bin_str(&mut m, "*", make_int(4), make_int(5));
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_is(mp, v, e), 1);
+        assert_eq!(is_(mp, v, e), 1);
         assert_eq!(int_value(m.deref(v)), 20);
     }
 
@@ -212,7 +235,7 @@ mod tests {
         // 2.0 yields a float via /(1.0)... use 1/2 = 0.5 (always float).
         let e = bin_str(&mut m, "/", make_int(1), make_int(2));
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_is(mp, v, e), 1);
+        assert_eq!(is_(mp, v, e), 1);
         let d = m.deref(v);
         assert_eq!(tag_of(d), TAG_FLT);
         assert_eq!(f64::from_bits(m.heap[payload(d) as usize]), 0.5);
@@ -227,7 +250,7 @@ mod tests {
         let big = INT_MAX; // 2^60 - 1, the largest immediate
         let e = bin_str(&mut m, "+", make_int(big), make_int(big));
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_is(mp, v, e), 1);
+        assert_eq!(is_(mp, v, e), 1);
         assert!(m.error.is_none());
         let d = m.deref(v);
         assert_eq!(tag_of(d), TAG_BIG);
@@ -238,13 +261,13 @@ mod tests {
     fn arith_cmp_ops() {
         let mut m = machine();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_arith_cmp(mp, 0, make_int(1), make_int(2)), 1); // <
-        assert_eq!(plg_rt_b_arith_cmp(mp, 0, make_int(2), make_int(1)), 0);
-        assert_eq!(plg_rt_b_arith_cmp(mp, 1, make_int(2), make_int(1)), 1); // >
-        assert_eq!(plg_rt_b_arith_cmp(mp, 2, make_int(1), make_int(1)), 1); // =<
-        assert_eq!(plg_rt_b_arith_cmp(mp, 3, make_int(1), make_int(1)), 1); // >=
-        assert_eq!(plg_rt_b_arith_cmp(mp, 4, make_int(3), make_int(3)), 1); // =:=
-        assert_eq!(plg_rt_b_arith_cmp(mp, 5, make_int(3), make_int(4)), 1); // =\=
+        assert_eq!(cmp_(mp, 0, make_int(1), make_int(2)), 1); // <
+        assert_eq!(cmp_(mp, 0, make_int(2), make_int(1)), 0);
+        assert_eq!(cmp_(mp, 1, make_int(2), make_int(1)), 1); // >
+        assert_eq!(cmp_(mp, 2, make_int(1), make_int(1)), 1); // =<
+        assert_eq!(cmp_(mp, 3, make_int(1), make_int(1)), 1); // >=
+        assert_eq!(cmp_(mp, 4, make_int(3), make_int(3)), 1); // =:=
+        assert_eq!(cmp_(mp, 5, make_int(3), make_int(4)), 1); // =\=
     }
 
     #[test]
@@ -257,8 +280,8 @@ mod tests {
             make(TAG_FLT, idx as u64)
         };
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_arith_cmp(mp, 4, make_int(1), one_f), 1);
-        assert_eq!(plg_rt_b_arith_cmp(mp, 0, one_f, make_int(1)), 0);
+        assert_eq!(cmp_(mp, 4, make_int(1), one_f), 1);
+        assert_eq!(cmp_(mp, 0, one_f, make_int(1)), 0);
     }
 
     #[test]
@@ -266,7 +289,7 @@ mod tests {
         let mut m = machine();
         let v = m.new_var();
         let mp = &mut *m as *mut Machine;
-        assert_eq!(plg_rt_b_arith_cmp(mp, 0, make_int(1), v), 0);
+        assert_eq!(cmp_(mp, 0, make_int(1), v), 0);
         assert!(m.error.is_some());
     }
 

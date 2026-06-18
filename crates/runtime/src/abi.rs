@@ -150,7 +150,9 @@ pub extern "C" fn plg_rt_existence_error(
 ) -> i32 {
     let m = mref(m);
     let name = m.atoms.resolve(functor).to_string();
-    crate::errors::existence_procedure(m, &name, arity, site_id);
+    m.error_site = site_id;
+    crate::errors::existence_procedure(m, &name, arity);
+    m.error_site = crate::machine::NO_SITE;
     0
 }
 

@@ -180,6 +180,8 @@ impl CodeGen<'_> {
         g: &LGoal,
         vars: &HashMap<VarId, String>,
     ) -> Result<(), String> {
+        // Call-site span for raising builtins (SPANS.md Layer 3).
+        let span = g.span;
         let r = match &g.node {
             LGoalKind::Unify(x, y) => {
                 let (wx, wy) = (self.emit_term(b, x, vars)?, self.emit_term(b, y, vars)?);
@@ -225,20 +227,22 @@ impl CodeGen<'_> {
             LGoalKind::Is(x, e) => {
                 let wx = self.emit_term(b, x, vars)?;
                 let we = self.emit_term(b, e, vars)?;
+                let site = self.site_id(span);
                 let r = self.fresh();
                 writeln!(
                     b,
-                    "  {r} = call i32 @plg_rt_b_is(ptr %m, i64 {wx}, i64 {we})"
+                    "  {r} = call i32 @plg_rt_b_is(ptr %m, i64 {wx}, i64 {we}, i32 {site})"
                 )
                 .unwrap();
                 r
             }
             LGoalKind::ArithCmp(op, x, y) => {
                 let (wx, wy) = (self.emit_term(b, x, vars)?, self.emit_term(b, y, vars)?);
+                let site = self.site_id(span);
                 let r = self.fresh();
                 writeln!(
                     b,
-                    "  {r} = call i32 @plg_rt_b_arith_cmp(ptr %m, i32 {op}, i64 {wx}, i64 {wy})"
+                    "  {r} = call i32 @plg_rt_b_arith_cmp(ptr %m, i32 {op}, i64 {wx}, i64 {wy}, i32 {site})"
                 )
                 .unwrap();
                 r

@@ -93,6 +93,12 @@ pub struct Machine {
     pub srcmap: Vec<SrcLoc>,
     /// `file_id` → filename, parallel to `srcmap`'s `file` field.
     pub files: Vec<String>,
+    /// `site_id` of the raise currently in flight (SPANS.md Layer 3). A
+    /// raising compiled builtin sets this at its boundary and clears it on
+    /// exit; `set_formal` appends ` at file:line:col` from it. `NO_SITE` (the
+    /// default, and the value for runtime-internal/query-side raises) means no
+    /// suffix — keeping those messages byte-identical to v1.
+    pub error_site: u32,
     /// Query variables in source order: (name, heap index of the cell).
     pub query_vars: Vec<(String, usize)>,
     /// findall/3 collector stack (a stack because findall can nest):
@@ -131,6 +137,7 @@ impl Machine {
             registry,
             srcmap: Vec::new(),
             files: Vec::new(),
+            error_site: NO_SITE,
             query_vars: Vec::new(),
             findall_stack: Vec::new(),
             qbarrier: 0,
