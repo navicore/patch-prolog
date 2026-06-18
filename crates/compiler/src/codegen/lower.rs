@@ -68,14 +68,6 @@ pub const DET_BUILTINS: &[(&str, u32, &str, bool)] = &[
     ("nl", 0, "plg_rt_b_nl_0", false),
 ];
 
-/// Whether the det builtin with C symbol `sym` raises (and so takes a
-/// trailing `site_id` arg). Used by codegen to emit the extra argument.
-pub fn det_builtin_raises(sym: &str) -> bool {
-    DET_BUILTINS
-        .iter()
-        .any(|&(_, _, s, raises)| s == sym && raises)
-}
-
 /// A lowered goal: its kind plus the source span every goal carries (SPANS.md
 /// Layer 3). Reusing `plg_shared::Spanned` keeps provenance uniform — a
 /// raising kind reads `g.span` with no per-variant plumbing, and finer
@@ -94,10 +86,13 @@ pub enum LGoalKind {
     /// A variable goal (`p :- X.`) — runtime metacall.
     Metacall(Term),
     /// Deterministic runtime builtin executed inline: call the C
-    /// symbol with the argument words, branch on the i32 result.
+    /// symbol with the argument words, branch on the i32 result. `raises`
+    /// (from `DET_BUILTINS`) decides whether codegen passes a trailing
+    /// `site_id` — carried here so emit is O(1), not a per-site table scan.
     RtDet {
         sym: &'static str,
         args: Vec<Term>,
+        raises: bool,
     },
     True,
     Fail,
@@ -180,13 +175,14 @@ pub fn lower_goal(t: &Term, span: Span, interner: &StringInterner) -> Result<LGo
                 && args.len() == 2
             {
                 LGoalKind::TermCmp(op, args[0].clone(), args[1].clone())
-            } else if let Some(&(_, _, sym, _)) = DET_BUILTINS
+            } else if let Some(&(_, _, sym, raises)) = DET_BUILTINS
                 .iter()
                 .find(|(n, a, _, _)| *n == name && *a as usize == args.len())
             {
                 LGoalKind::RtDet {
                     sym,
                     args: args.to_vec(),
+                    raises,
                 }
             } else {
                 let functor = match t {

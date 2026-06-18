@@ -54,6 +54,12 @@ pub const NO_SITE: u32 = u32::MAX;
 /// nested raises — an outer builtin whose work reaches an inner raising
 /// builtin — each see their own site without a save/restore stack. Use this
 /// instead of hand-writing `m.error_site = site; ...; m.error_site = NO_SITE`.
+///
+/// FOOTGUN: bind to a **named** variable — `let _site = ...;`. `let _ = ...`
+/// drops the guard immediately, so the body runs with the site already
+/// restored (no provenance, or the caller's site). `#[must_use]` does not
+/// catch the `let _` form.
+#[must_use = "binding to `let _` drops the guard immediately; use `let _site = ...`"]
 pub(crate) struct ErrorSiteGuard {
     m: *mut Machine,
     saved: u32,

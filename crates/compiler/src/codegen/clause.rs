@@ -247,14 +247,14 @@ impl CodeGen<'_> {
                 .unwrap();
                 r
             }
-            LGoalKind::RtDet { sym, args } => {
+            LGoalKind::RtDet { sym, args, raises } => {
                 let mut words = Vec::with_capacity(args.len());
                 for a in args {
                     words.push(self.emit_term(b, a, vars)?);
                 }
                 let mut arglist: Vec<String> = words.iter().map(|w| format!(", i64 {w}")).collect();
                 // Raising det builtins take a trailing site_id (SPANS Layer 3).
-                if lower::det_builtin_raises(sym) {
+                if *raises {
                     let site = self.site_id(span);
                     arglist.push(format!(", i32 {site}"));
                 }
