@@ -7,6 +7,7 @@
 
 pub mod atom;
 pub mod builtins;
+pub mod cell;
 pub mod interner;
 pub mod span;
 pub mod stdlib;

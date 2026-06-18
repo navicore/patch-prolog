@@ -1,7 +1,13 @@
 # Fact-table compilation
 
-**Status: design (2026-06-17).** The first post-parity feature (ROADMAP
-"Future" → "Likely the first post-parity feature").
+**Status: implemented (Stages A–C, 2026-06-18).** The first post-parity
+feature (ROADMAP "Future" → "Likely the first post-parity feature").
+Stage A: immediate (atom/int) columns + the generic lookup. Stage B: the
+first-arg index (binary search on an immediate column 0). Stage C: ground
+compound / list / float / big-int columns via a serialized `.rodata` blob
+restored through `copyterm`. Still deferred: multi-argument indexing,
+float-keyed indexing (the caveat under Constraints), and the `unsafe`
+bounds-elision seam (gated on a profile).
 
 ## Intent
 
@@ -51,13 +57,24 @@ Fact-table is a **safe feature**; it does not justify new `unsafe`:
   rejects it), multi-argument indexing (first-arg only for v1 — the
   `iddqd`/multi-index question is a *later* compiler-side optimization),
   runtime `--facts` loading (rejected), the deferred `unsafe` seam.
-- **Float-column indexing (Stage C caveat):** the Stage B index sorts and
-  searches column 0 by raw `u64` (Word) comparison, which is correct for the
-  atom/int domain. If Stage C admits float columns, the index must NOT reuse
-  the same `equal_range`: floats have no total order over `u64` bits (`NaN`
-  isn't ordered; `-0.0 == 0.0` but their bit patterns differ; quiet vs
-  signaling `NaN`). Float-keyed lookup needs a normalized bit representation
-  or a float-aware comparator, or those columns stay unindexed (full scan).
+- **Float-column indexing:** the Stage B index sorts and searches column 0 by
+  raw `u64` (Word) comparison, correct for the atom/int domain. Stage C admits
+  float columns but does NOT index them — a float column 0 is a blob-ref, so it
+  falls to full scan, and the index must never reuse `equal_range` for floats:
+  floats have no total order over `u64` bits (`NaN` isn't ordered; `-0.0 == 0.0`
+  but their bit patterns differ; quiet vs signaling `NaN`). Float-keyed lookup
+  would need a normalized bit representation or a float-aware comparator.
+- **Float equality is by IEEE-754 bit pattern.** A ground-fact float column
+  round-trips through `f64::to_bits()` ↔ blob ↔ `TAG_FLT`, and unification is
+  bit-equality (ISO `==` term identity, not numeric `=:=`). So two `NaN`s with
+  different encodings do not unify, and a query float must match the stored
+  bits exactly.
+- **Compound column 0 is unindexed (Stage C), re-indexable later.** Two facts
+  with an equal compound column 0 serialize to *different* blob offsets, so
+  their cell words differ and a `u64` sort would be semantically wrong — hence
+  full scan. Interning ground subterms in the blob (already-seen terms reuse an
+  offset) would make compound column 0 sort meaningfully and re-enable the
+  index; a future stage.
 
 ## Approach
 

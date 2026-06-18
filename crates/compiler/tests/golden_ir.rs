@@ -2,28 +2,28 @@
 //! without invoking clang. Fast regression net for codegen.
 
 #[test]
-fn fact_compiles_to_unify_and_continuation_jump() {
-    // A ground fact with a non-immediate (compound) column does NOT qualify
-    // for fact-table compilation, so it exercises the per-clause path: head
-    // unification + a tail call to the continuation. (All-immediate facts
-    // take the table path — see `fact_predicate_compiles_to_rodata_table`.)
-    let ir = plgc::compile_to_ir("parent(tom, point(1, 2)).").unwrap();
+fn per_clause_fact_compiles_to_unify_and_continuation_jump() {
+    // A fact with a variable arg is NOT ground, so it does not qualify for a
+    // fact table — it takes the per-clause path: head unification + a tail
+    // call to the continuation. (Ground facts compile to a table — see
+    // `fact_predicate_compiles_to_rodata_table`.)
+    let ir = plgc::compile_to_ir("parent(tom, X).").unwrap();
     // Entry exists and is registered.
     assert!(ir.contains("define i32 @plg_pred_"), "{ir}");
     assert!(ir.contains("@plg_registry"), "{ir}");
     assert!(ir.contains("@plg_atom_strs"), "{ir}");
-    // Head constants are immediate tagged words (no runtime atom lookup).
+    // The ground first column is unified against an immediate word.
     assert!(ir.contains("call i32 @plg_rt_unify(ptr %m"), "{ir}");
     // Solution delivery is a guaranteed tail call.
     assert!(ir.contains("musttail call i32"), "{ir}");
 }
 
 #[test]
-fn multi_clause_predicate_pushes_choice_points() {
-    // Compound columns keep this on the per-clause path; multiple clauses
-    // then lazily link choice points with chain retry functions. (The
-    // all-immediate variant compiles to a table instead.)
-    let ir = plgc::compile_to_ir("p(f(a)).\np(f(b)).\np(f(c)).").unwrap();
+fn per_clause_multi_clause_predicate_pushes_choice_points() {
+    // Rules (clauses with bodies) take the per-clause path; multiple clauses
+    // with a variable first argument share one chain and lazily link choice
+    // points with chain retry functions.
+    let ir = plgc::compile_to_ir("p(X) :- X = a.\np(X) :- X = b.\np(X) :- X = c.").unwrap();
     assert!(ir.contains("call void @plg_rt_push_cp"), "{ir}");
     // Chain functions t1, t2 for clauses 2 and 3.
     assert!(ir.contains("_t1(ptr %m"), "{ir}");
@@ -60,6 +60,30 @@ fn fact_predicate_compiles_to_rodata_table() {
     // read "(N clauses)"). The whole-IR no-unify check is confounded by the
     // embedded stdlib rules, so we assert the predicate header instead.
     assert!(ir.contains("parent/2 (3 facts \u{2192} table)"), "{ir}");
+    // All-immediate columns ⇒ no serialized-term blob.
+    assert!(!ir.contains("_blob ="), "{ir}");
+}
+
+#[test]
+fn fact_predicate_with_non_immediate_columns_emits_a_blob() {
+    // Ground compound / big-int columns can't be stored inline; they go into a
+    // serialized `.rodata` blob (Stage C), and the table cell holds a blob
+    // reference. No per-clause big-int boxing (`plg_rt_put_big`) is emitted —
+    // the big-int is a blob cell, not runtime-built.
+    let ir = plgc::compile_to_ir("data(point(1, 2)).\ndata(big(9223372036854775807)).").unwrap();
+    // The predicate is still a fact table (2 rows, 1 column).
+    assert!(ir.contains("\u{2192} table)"), "{ir}");
+    assert!(ir.contains("call i32 @plg_rt_fact_first(ptr %m"), "{ir}");
+    // A serialized-term blob is emitted for the compound/big-int columns.
+    assert!(
+        ir.contains("_blob = private unnamed_addr constant ["),
+        "{ir}"
+    );
+    // The big-int is serialized into the blob, not boxed per-clause at runtime
+    // (the `declare` line mentions the symbol; assert there's no call site).
+    assert!(!ir.contains("call i64 @plg_rt_put_big"), "{ir}");
+    // A compound column 0 is not u64-sortable, so no first-arg index is built.
+    assert!(!ir.contains("_idx ="), "{ir}");
 }
 
 #[test]
@@ -162,13 +186,14 @@ fn m3_control_compiles_natively() {
 
 #[test]
 fn first_arg_indexing_emits_switch() {
-    // Compound second columns keep these on the per-clause path; distinct
-    // atom first arguments then drive first-argument indexing as an IR
-    // `switch`. (All-immediate facts compile to a table whose first-arg index
-    // is a runtime `.rodata` array + binary search, not an IR `switch`.)
-    let ir =
-        plgc::compile_to_ir("color(red, c(warm)).\ncolor(blue, c(cool)).\ncolor(green, c(cool)).")
-            .unwrap();
+    // Rules (clauses with bodies) take the per-clause path; distinct atom
+    // first arguments then drive first-argument indexing as an IR `switch`.
+    // (A ground fact predicate compiles to a table whose first-arg index is a
+    // runtime `.rodata` array + binary search, not an IR `switch`.)
+    let ir = plgc::compile_to_ir(
+        "color(red, S) :- S = warm.\ncolor(blue, S) :- S = cool.\ncolor(green, S) :- S = cool.",
+    )
+    .unwrap();
     assert!(ir.contains("switch i64"), "{ir}");
     assert!(ir.contains(", indexed"), "{ir}");
     // Distinct keys + no var-keyed clauses: each key chain is a single
@@ -192,9 +217,10 @@ fn fail_compiles_to_immediate_failure() {
 
 #[test]
 fn big_integer_literals_box_at_runtime() {
-    // M4: beyond-immediate integers compile to a runtime BIG box
-    // (full i64 range, v1 parity).
-    let ir = plgc::compile_to_ir(&format!("big({}).", i64::MAX)).unwrap();
+    // M4: beyond-immediate integers compile to a runtime BIG box (full i64
+    // range, v1 parity). In a clause BODY (not a ground fact column, which
+    // serializes to the blob instead — see the fact-table blob test).
+    let ir = plgc::compile_to_ir(&format!("big(X) :- X = {}.", i64::MAX)).unwrap();
     assert!(
         ir.contains(&format!(
             "call i64 @plg_rt_put_big(ptr %m, i64 {})",
