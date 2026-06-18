@@ -20,25 +20,14 @@
 use super::CodeGen;
 use super::term_emit::{IMM_INT_MAX, IMM_INT_MIN, atom_word, int_word};
 use plg_frontend::CgClause;
+// Word/cell encoding for the serialized blob comes from the ONE shared source
+// (`plg-shared::cell`), the same module the runtime restores from — so the
+// table/blob ABI can't drift between codegen and runtime.
+use plg_shared::cell::{
+    TAG_ATOM, TAG_BIG, TAG_FLT, TAG_INT, TAG_LST, TAG_STR, make, pack_functor, tag_of,
+};
 use plg_shared::{AtomId, Term};
 use std::fmt::Write;
-
-// Tag constants + word/header packing, mirrored from the runtime's cell.rs —
-// the ABI contract for the serialized blob the runtime restores.
-const TAG_ATOM: u64 = 1;
-const TAG_INT: u64 = 2;
-const TAG_STR: u64 = 3;
-const TAG_LST: u64 = 4;
-const TAG_FLT: u64 = 5;
-const TAG_BIG: u64 = 6;
-
-fn mk(tag: u64, payload: u64) -> u64 {
-    (payload << 3) | tag
-}
-
-fn pack_functor(functor: u32, arity: u32) -> u64 {
-    ((functor as u64) << 32) | arity as u64
-}
 
 /// A fact table iff every clause is a bodyless fact whose head args are all
 /// ground (no variables, however deeply nested). Empty predicates and any
@@ -80,6 +69,9 @@ fn is_ground(t: &Term) -> bool {
 fn serialize_arg(root: &Term, blob: &mut Vec<u64>) -> u64 {
     let mut work: Vec<(&Term, usize)> = Vec::new();
     let r = xlate(root, blob, &mut work);
+    // LIFO processing order, but each `dst` slot is captured when the subterm
+    // is enqueued, so the order cells are *written* doesn't matter — a future
+    // switch to FIFO would be equally correct.
     while let Some((t, dst)) = work.pop() {
         let w = xlate(t, blob, &mut work);
         blob[dst] = w;
@@ -96,12 +88,12 @@ fn xlate<'a>(t: &'a Term, blob: &mut Vec<u64>, work: &mut Vec<(&'a Term, usize)>
         Term::Integer(n) => {
             let b = blob.len();
             blob.push(*n as u64); // BIG cell: raw i64 bits
-            mk(TAG_BIG, b as u64)
+            make(TAG_BIG, b as u64)
         }
         Term::Float(f) => {
             let b = blob.len();
             blob.push(f.to_bits()); // FLT cell: f64 bits
-            mk(TAG_FLT, b as u64)
+            make(TAG_FLT, b as u64)
         }
         Term::Compound { functor, args } => {
             let b = blob.len();
@@ -110,7 +102,7 @@ fn xlate<'a>(t: &'a Term, blob: &mut Vec<u64>, work: &mut Vec<(&'a Term, usize)>
             for (k, a) in args.iter().enumerate() {
                 work.push((a, b + 1 + k));
             }
-            mk(TAG_STR, b as u64)
+            make(TAG_STR, b as u64)
         }
         Term::List { head, tail } => {
             let b = blob.len();
@@ -118,7 +110,7 @@ fn xlate<'a>(t: &'a Term, blob: &mut Vec<u64>, work: &mut Vec<(&'a Term, usize)>
             blob.push(0); // [tail]
             work.push((head, b));
             work.push((tail, b + 1));
-            mk(TAG_LST, b as u64)
+            make(TAG_LST, b as u64)
         }
         Term::Var(_) => unreachable!("is_fact_predicate guarantees ground args"),
     }
@@ -200,8 +192,8 @@ impl CodeGen<'_> {
         //     all-immediate (a blob-ref column 0 can't be u64-key-sorted, and
         //     arity-0 has no first column). Row indices sorted by column 0,
         //     ties keeping program order, for an O(log n) bound-key lookup.
-        let has_index =
-            acount >= 1 && (0..nrows).all(|r| matches!(table[r * acount] & 7, TAG_ATOM | TAG_INT));
+        let has_index = acount >= 1
+            && (0..nrows).all(|r| matches!(tag_of(table[r * acount]), TAG_ATOM | TAG_INT));
         if has_index {
             let mut order: Vec<usize> = (0..nrows).collect();
             order.sort_by_key(|&r| (table[r * acount], r));

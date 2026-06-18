@@ -177,6 +177,20 @@ fn compound_column_enumerates_and_partially_binds() {
 }
 
 #[test]
+fn deep_ground_term_serializes_iteratively() {
+    // A 2000-element ground list: the iterative serializer (work queue, not
+    // recursion) must not overflow the compiler stack, and the round trip
+    // serialize → `.rodata` blob → restore → unify must reproduce the term.
+    // An exact ground query unifies the restored list against an identical one.
+    let elems: Vec<String> = (0..2000).map(|i| format!("a{i}")).collect();
+    let list = format!("[{}]", elems.join(", "));
+    let c = compile(&format!("deep({list}).\n"));
+    let (out, code) = c.query(&format!("deep({list})"), &[]);
+    assert_eq!(out, "{\"count\":1,\"exhausted\":true,\"solutions\":[{}]}\n");
+    assert_eq!(code, 1);
+}
+
+#[test]
 fn list_column_restores() {
     let (out, code) = stage_c().query("tags(a, L)", &[]);
     assert_eq!(

@@ -12,16 +12,13 @@ use plg_shared::term::VarId;
 use std::collections::HashMap;
 use std::fmt::Write;
 
-/// Tag constants mirrored from the runtime's cell.rs (the ABI contract).
-const TAG_ATOM: u64 = 1;
-const TAG_INT: u64 = 2;
+// The word/cell encoding is the ABI shared with the runtime; use the one
+// source of truth in `plg-shared` rather than re-deriving the layout here.
+pub use plg_shared::cell::{INT_MAX as IMM_INT_MAX, INT_MIN as IMM_INT_MIN};
 
 pub fn atom_word(id: u32) -> u64 {
-    ((id as u64) << 3) | TAG_ATOM
+    plg_shared::cell::make_atom(id)
 }
-
-pub const IMM_INT_MAX: i64 = (1 << 60) - 1;
-pub const IMM_INT_MIN: i64 = -(1 << 60);
 
 pub fn int_word(n: i64) -> Result<u64, String> {
     if !(IMM_INT_MIN..=IMM_INT_MAX).contains(&n) {
@@ -29,7 +26,7 @@ pub fn int_word(n: i64) -> Result<u64, String> {
             "integer literal {n} is outside the immediate range (boxed at runtime)"
         ));
     }
-    Ok(((n as u64) << 3) | TAG_INT)
+    Ok(plg_shared::cell::make_int(n))
 }
 
 impl CodeGen<'_> {
