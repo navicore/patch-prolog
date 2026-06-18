@@ -212,11 +212,19 @@ fn flatten_conj(
 
 /// Push a lowered goal, splicing a `Conj` into the flat sequence and dropping
 /// a bare `true` — preserving the IR shape the single-`,`-tree path produced.
+///
+/// Note: splicing a `Conj` discards the wrapper's own span. That is
+/// intentional and lossless for provenance — `flatten_conj` already
+/// propagated the same span down to every inner leaf, so the per-leaf spans
+/// are the source of truth after splicing. The only thing lost is "this whole
+/// parenthesized group appeared at X" as a distinct fact; no current consumer
+/// needs it (a nested-goal stack trace would be the first that might).
 fn splice_lowered(lowered: LGoal, out: &mut Vec<LGoal>) {
-    match lowered.node {
+    let Spanned { node, span } = lowered;
+    match node {
         LGoalKind::True => {}
         LGoalKind::Conj(inner) => out.extend(inner),
-        kind => out.push(Spanned::new(kind, lowered.span)),
+        kind => out.push(Spanned::new(kind, span)),
     }
 }
 
