@@ -1,7 +1,13 @@
 # Fact-table compilation
 
-**Status: design (2026-06-17).** The first post-parity feature (ROADMAP
-"Future" → "Likely the first post-parity feature").
+**Status: implemented (Stages A–C, 2026-06-18).** The first post-parity
+feature (ROADMAP "Future" → "Likely the first post-parity feature").
+Stage A: immediate (atom/int) columns + the generic lookup. Stage B: the
+first-arg index (binary search on an immediate column 0). Stage C: ground
+compound / list / float / big-int columns via a serialized `.rodata` blob
+restored through `copyterm`. Still deferred: multi-argument indexing,
+float-keyed indexing (the caveat under Constraints), and the `unsafe`
+bounds-elision seam (gated on a profile).
 
 ## Intent
 

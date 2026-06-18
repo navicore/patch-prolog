@@ -1,10 +1,12 @@
-//! Fact-table compilation (FACT_TABLE.md, Stage A): a predicate whose clauses
-//! are all bodyless facts with immediate (atom/int) columns compiles to a
-//! `.rodata` table + a generic runtime lookup instead of one function per
-//! clause. These tests pin that the observable behavior is identical to the
-//! per-clause path — solution order, ground queries, both lookup directions,
-//! choice-point backtracking, and `findall`/`call` re-entry — and that a
-//! mixed program (a compound-column fact predicate stays per-clause) works.
+//! Fact-table compilation (FACT_TABLE.md, Stages A–C): a predicate whose
+//! clauses are all bodyless facts with ground head args compiles to a `.rodata`
+//! table + a generic runtime lookup instead of one function per clause. These
+//! tests pin that the observable behavior is identical to the per-clause path —
+//! solution order, ground queries, both lookup directions, choice-point
+//! backtracking, `--limit`, `findall`/`call` re-entry — across all column kinds
+//! (immediate atom/int; serialized compound/list/float/big-int), including the
+//! first-arg index (immediate column 0) and the unindexed full scan (compound
+//! column 0).
 //!
 //! Equivalence vs the per-clause/v1 behavior is also pinned by the broader
 //! oracle-tested suites (these same fact predicates now route through the
@@ -16,8 +18,7 @@ mod harness;
 use harness::{Compiled, compile};
 use std::sync::OnceLock;
 
-/// Atom and int fact predicates, a recursive rule over a fact predicate, and
-/// one compound-column fact predicate (which must stay per-clause).
+/// Atom and int fact predicates, plus a recursive rule over a fact predicate.
 fn facts() -> &'static Compiled {
     static C: OnceLock<Compiled> = OnceLock::new();
     C.get_or_init(|| {
@@ -31,8 +32,27 @@ fn facts() -> &'static Compiled {
              edge(b, c).\n\
              edge(c, d).\n\
              path(X, X).\n\
-             path(X, Z) :- edge(X, Y), path(Y, Z).\n\
-             coords(origin, point(0, 0)).\n",
+             path(X, Z) :- edge(X, Y), path(Y, Z).\n",
+        )
+    })
+}
+
+/// Stage C: non-immediate columns (compound, list, float, big-int), a row
+/// mixing an indexed immediate column 0 with a compound column 1, and a
+/// compound column 0 (which is not indexed → full scan).
+fn stage_c() -> &'static Compiled {
+    static C: OnceLock<Compiled> = OnceLock::new();
+    C.get_or_init(|| {
+        compile(
+            "data(point(1, 2)).\n\
+             data(point(3, 4)).\n\
+             tags(a, [x, y, z]).\n\
+             pii(p, 3.14).\n\
+             big(b, 9223372036854775807).\n\
+             m(1, point(2, 3)).\n\
+             m(2, point(4, 5)).\n\
+             rel(point(1, 2), aa).\n\
+             rel(point(3, 4), bb).\n",
         )
     })
 }
@@ -137,13 +157,86 @@ fn limit_caps_table_enumeration() {
 }
 
 #[test]
-fn compound_column_predicate_stays_per_clause() {
-    // A ground fact with a compound column does NOT qualify for Stage A; it
-    // compiles per-clause and coexists in the same binary.
-    let (out, code) = facts().query("coords(origin, P)", &[]);
+fn compound_column_enumerates_and_partially_binds() {
+    // Stage C: ground compound columns are serialized into the blob and
+    // restored onto the heap before unifying.
+    let (out, code) = stage_c().query("data(P)", &[]);
     assert_eq!(
         out,
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"P\":{\"args\":[0,0],\"functor\":\"point\"}}]}\n"
+        "{\"count\":2,\"exhausted\":true,\"solutions\":[{\"P\":{\"args\":[1,2],\"functor\":\"point\"}},{\"P\":{\"args\":[3,4],\"functor\":\"point\"}}]}\n"
+    );
+    assert_eq!(code, 1);
+
+    // A partially-bound compound query unifies against the restored term.
+    let (out, code) = stage_c().query("data(point(3, X))", &[]);
+    assert_eq!(
+        out,
+        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":4}]}\n"
+    );
+    assert_eq!(code, 1);
+}
+
+#[test]
+fn list_column_restores() {
+    let (out, code) = stage_c().query("tags(a, L)", &[]);
+    assert_eq!(
+        out,
+        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"L\":[\"x\",\"y\",\"z\"]}]}\n"
+    );
+    assert_eq!(code, 1);
+}
+
+#[test]
+fn float_column_resolves_both_directions() {
+    let (out, _) = stage_c().query("pii(p, X)", &[]);
+    assert_eq!(
+        out,
+        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":3.14}]}\n"
+    );
+    // Ground float query unifies (bit-identical FLT restore).
+    let (out, code) = stage_c().query("pii(p, 3.14)", &[]);
+    assert_eq!(out, "{\"count\":1,\"exhausted\":true,\"solutions\":[{}]}\n");
+    assert_eq!(code, 1);
+}
+
+#[test]
+fn big_int_column_restores() {
+    // Beyond the i61 immediate range: a BIG blob cell, restored on lookup.
+    let (out, code) = stage_c().query("big(b, X)", &[]);
+    assert_eq!(
+        out,
+        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":9223372036854775807}]}\n"
+    );
+    assert_eq!(code, 1);
+}
+
+#[test]
+fn mixed_immediate_and_compound_columns() {
+    // Column 0 is an indexed immediate; column 1 is a restored compound.
+    let (out, code) = stage_c().query("m(1, P)", &[]);
+    assert_eq!(
+        out,
+        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"P\":{\"args\":[2,3],\"functor\":\"point\"}}]}\n"
+    );
+    assert_eq!(code, 1);
+}
+
+#[test]
+fn compound_column_zero_full_scans() {
+    // A compound column 0 has no first-arg index (not u64-sortable); a bound
+    // compound key resolves by full scan + restore + unify.
+    let (out, code) = stage_c().query("rel(point(3, 4), X)", &[]);
+    assert_eq!(
+        out,
+        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":\"bb\"}]}\n"
+    );
+    assert_eq!(code, 1);
+
+    // Partial compound key over the unindexed column.
+    let (out, code) = stage_c().query("rel(point(N, 4), Y)", &[]);
+    assert_eq!(
+        out,
+        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"N\":3,\"Y\":\"bb\"}]}\n"
     );
     assert_eq!(code, 1);
 }
