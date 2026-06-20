@@ -142,3 +142,61 @@ Tier 2 unlocks the global-edge story and shares the I/O-free-core refactor with
 the resident-mode lever. Target the portable artifact and exploit the edge fabric
 that already exists — the model is shaped to run on it today; native keeps the
 container world. Protect the shape; that is the moat, not the wasm checkbox.
+
+## Tier 2 — gate result & productization brief (2026-06-20)
+
+The Tier 2 gate spike (throwaway: `crates/runtime/src/reactor.rs` + an IR `awk`
+transform + a workerd Worker in `/tmp`) **passed on workerd** (real Workers
+runtime, V8 isolate, over HTTP):
+
+- No-WASI viable: the I/O-free `run_query` path never touches the
+  stdout/argv/exit stubs `wasm32-unknown-unknown` provides.
+- **`musttail` → `return_call` lowers and runs on V8 at depth** — a 1,000,000-deep
+  `call/1` recursion returns in a V8 isolate (constant stack). The load-bearing
+  finding: the PR #20/#24 IR investment carries to Workers with no rework.
+- Buffer ABI round-trips byte-identical to native, including the
+  `existence_error` path (so the JSON + error rendering need no parallel impl).
+- Module size 1.65 MB raw (compresses well under the Workers budget).
+
+Productization is now "engineering, no existential unknowns." Disposition: keep
+`reactor.rs` as the seed; do **not** extract the I/O-free core until
+productization (both call sites — the WASI shell and the reactor — exist now, so
+the abstraction is shaped by two real consumers, not one and a guess).
+
+Productization checklist (gate findings to carry forward):
+
+1. **Allocator ABI rule.** Any host-freed buffer must be
+   `alloc::alloc(Layout::from_size_align(len, 1))`, never `Vec::with_capacity(len)`:
+   the host frees by *requested* length, so an actual-capacity > requested-length
+   (which `Vec` may produce) corrupts the allocator. This bug is what made the
+   spike's deep query abort; the next contributor will reach for `Vec` reflexively.
+2. **Concurrency contract.** The single `static AtomicPtr` `MACHINE` is
+   single-in-flight per isolate. V8 isolates are single-threaded, but one Worker
+   can interleave async tasks. Pick: (a) document "one in-flight query per
+   isolate" (simple, matches typical Worker use — recommended), or (b) move
+   per-request state out of `MACHINE` and through the buffer ABI.
+3. **`reset_per_query`.** The spike's `reset()` clears each per-query field by
+   name; it silently knows the Machine's field set. Make it a
+   `Machine::reset_per_query()` next to the field declarations so a future field
+   added without reset coverage is a *local* question — the leak class only
+   surfaces under sustained traffic, never in single-query smoke tests.
+4. **`exhausted` from the limit.** The spike hard-codes `"exhausted":true` (no
+   `--limit`). Productization takes the limit over the ABI and computes it like
+   `entry.rs`: `limit.is_none_or(|l| count < l)`.
+5. **Per-request step + metacall-depth limits** over the ABI, mirroring
+   `PLG_MAX_STEPS` / `PLG_METACALL_DEPTH`. The depth one matters: a wasm engine's
+   ~1 MB stack is smaller than native's ~8 MB (see Tier 1 docs).
+6. **I/O-free core extraction.** `entry.rs` (≈ the `output_json`/`output_error`
+   block) and `reactor.rs`'s `solutions_json`/`error_json` are nearly the same
+   code with different output sinks. The shared core wants three knobs:
+   limit-aware `exhausted`, error JSON shape, success JSON shape — an `io::Write`
+   parameter is enough. Shared with INVOCATION.md's resident-mode lever.
+7. **Packed return assumes wasm32.** `(len << 32) | ptr` is correct on the target
+   but would need rethinking on wasm64 (an emerging target).
+8. **`MACHINE` is never freed** — correct for cold-start-per-isolate. A teardown
+   entry point is only needed if a live isolate must swap its embedded program.
+9. **`# Safety` doc convention:** every `no_mangle` entry documents its safety
+   except the genuinely-safe `plg_rt_alloc` — keep "no Safety doc = safe" true.
+10. **`len == 0` sentinel convention:** `raw_alloc(0)` returns a dangling pointer
+    and `plg_rt_free` no-ops on `len == 0`; the two halves agree by convention,
+    not by API. Keep them paired.
