@@ -159,6 +159,20 @@ fn native_target_emits_main_not_plg_init() {
 }
 
 #[test]
+fn tier1_wasm_target_emits_argc_argv_entry() {
+    // Pin the third entry shape (the restructured match has all three): the
+    // Tier-1 `wasm32-wasi` CLI module bridges via `__main_argc_argv` (the
+    // symbol wasi-libc's `__main_void` calls), still driving `plg_rt_main` —
+    // and emits neither the native `@main` nor the reactor `@plg_init`.
+    let ir = plgc::compile_to_ir_target("p(a).", plgc::Target::Wasm).unwrap();
+    assert!(ir.contains("target triple = \"wasm32-wasi\""), "{ir}");
+    assert!(ir.contains("define i32 @__main_argc_argv("), "{ir}");
+    assert!(ir.contains("call i32 @plg_rt_main("), "{ir}");
+    assert!(!ir.contains("define i32 @main("), "{ir}");
+    assert!(!ir.contains("define void @plg_init()"), "{ir}");
+}
+
+#[test]
 fn dynamic_only_predicates_register_fail_stub() {
     let ir = plgc::compile_to_ir(":- dynamic(extra/2).\np(a).").unwrap();
     assert!(

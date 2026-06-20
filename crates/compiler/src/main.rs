@@ -187,11 +187,14 @@ fn main() -> ExitCode {
                     return ExitCode::from(3);
                 }
             };
-            // Default output stem; for wasm give it a `.wasm` extension.
+            // Default output stem. Distinct wasm extensions so compiling one
+            // source to both wasm targets without an explicit `-o` doesn't
+            // silently overwrite (`prog.wasm` vs `prog.worker.wasm`).
             let output = output.unwrap_or_else(|| {
                 let stem = PathBuf::from(inputs[0].file_stem().unwrap_or_default());
                 match target {
-                    plgc::Target::Wasm | plgc::Target::Worker => stem.with_extension("wasm"),
+                    plgc::Target::Wasm => stem.with_extension("wasm"),
+                    plgc::Target::Worker => stem.with_extension("worker.wasm"),
                     plgc::Target::Native => stem,
                 }
             });
