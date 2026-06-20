@@ -5,10 +5,11 @@
 //!   0 = no solutions, 1 = solutions found,
 //!   2 = query parse error, 3 = runtime error
 
+use crate::core::{self, QueryResult};
 use crate::machine::{Machine, RegistryEntry, SrcLoc};
-use crate::{query, render, solve};
 use plg_shared::StringInterner;
 use std::ffi::CStr;
+use std::io::{self, Write};
 use std::os::raw::c_char;
 
 /// Build the Machine from the tables codegen baked into the binary.
@@ -108,34 +109,23 @@ fn parse_args(argv: Vec<String>) -> Result<Args, String> {
 }
 
 /// v1's output_error: JSON errors go to stdout, text errors to stderr.
+/// The JSON shape is the shared core's; only the routing is CLI-specific.
 fn output_error(format: &str, message: &str) {
     if format == "json" {
-        println!("{{\"error\":\"{}\"}}", render::json_escape(message));
+        let mut out = io::stdout().lock();
+        let _ = core::write_error_json(&mut out, message);
+        let _ = out.write_all(b"\n");
     } else {
         eprintln!("Error: {message}");
     }
 }
 
 fn output_json(m: &Machine, exhausted: bool) {
-    let solutions: Vec<String> = m
-        .solutions
-        .iter()
-        .map(|sol| {
-            let fields: Vec<String> = sol
-                .bindings
-                .iter()
-                .map(|(name, json, _)| format!("\"{}\":{}", render::json_escape(name), json))
-                .collect();
-            format!("{{{}}}", fields.join(","))
-        })
-        .collect();
-    // serde_json sorted keys: count < exhausted < solutions
-    println!(
-        "{{\"count\":{},\"exhausted\":{},\"solutions\":[{}]}}",
-        m.solutions.len(),
-        exhausted,
-        solutions.join(",")
-    );
+    let mut out = io::stdout().lock();
+    // `None` output: the CLI streamed any `write/1` bytes to stdout already, so
+    // its JSON stays byte-identical to v1 (no `output` field).
+    let _ = core::write_solutions_json(&mut out, m, exhausted, None);
+    let _ = out.write_all(b"\n");
 }
 
 fn output_text(m: &Machine) {
@@ -204,23 +194,18 @@ pub unsafe extern "C" fn plg_rt_main(
         m.metacall_depth_limit = n;
     }
 
-    let goal = match query::parse_query(m, &args.query) {
-        Ok(g) => g,
-        Err(e) => {
-            output_error(&args.format, &format!("Parse error: {e}"));
-            return 2;
+    match core::run_query(m, &args.query) {
+        QueryResult::ParseError(msg) => {
+            output_error(&args.format, &msg);
+            2
         }
-    };
-
-    match solve::solve(m, goal) {
-        solve::Outcome::Error => {
-            let msg = m.error.take().map(|e| e.message).unwrap_or_default();
-            output_error(&args.format, &format!("Runtime error: {msg}"));
+        QueryResult::RuntimeError(msg) => {
+            output_error(&args.format, &msg);
             3
         }
-        solve::Outcome::Done => {
+        QueryResult::Solutions => {
             let count = m.solutions.len();
-            let exhausted = args.limit.is_none_or(|l| count < l);
+            let exhausted = core::exhausted(m);
             match args.format.as_str() {
                 "json" => output_json(m, exhausted),
                 _ => output_text(m),

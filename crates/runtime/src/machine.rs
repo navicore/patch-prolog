@@ -107,6 +107,17 @@ impl Drop for MetacallDepthGuard {
     }
 }
 
+/// Where `write/1`/`writeln/1`/`nl/0` send their bytes. The CLI/WASI shell
+/// streams to process stdout (the v1 contract); the Tier-2 reactor has no
+/// stdout in a V8 isolate, so it captures losslessly into a buffer that the
+/// result JSON carries back to the host (docs/design/WASM_TIER2_PLAN.md D4).
+pub enum OutputSink {
+    /// Stream to process stdout immediately (native CLI / WASI).
+    Stdout,
+    /// Capture into a buffer (reactor) — returned as the result's `output`.
+    Capture(String),
+}
+
 /// Catch frames participate in error unwinding (drive() in solve.rs)
 /// and stop cut truncation (v1 rule: catch is opaque to cut).
 #[derive(Clone, Copy, PartialEq)]
@@ -183,6 +194,9 @@ pub struct Machine {
     /// Solutions captured by the print continuation, already rendered.
     pub solutions: Vec<crate::render::RenderedSolution>,
     pub solution_limit: Option<usize>,
+    /// Sink for `write/1`/`writeln/1`/`nl/0`. Defaults to `Stdout`; the
+    /// reactor swaps in `Capture` so output survives an isolate with no stdout.
+    pub output: OutputSink,
 }
 
 unsafe extern "C" fn no_continuation(_m: *mut Machine, _env: u64) -> i32 {
@@ -220,7 +234,60 @@ impl Machine {
             qbarrier: 0,
             solutions: Vec::new(),
             solution_limit: None,
+            output: OutputSink::Stdout,
         })
+    }
+
+    /// Reset per-query accumulated state, preserving the program (atoms,
+    /// registry, provenance) and the caller-set per-query limits
+    /// (`step_limit`, `metacall_depth_limit`, `solution_limit` — the caller
+    /// sets those each query). Lives next to the field declarations on
+    /// purpose: adding a field without resetting it here is then a *local*
+    /// review question. The leak class this guards only surfaces under
+    /// sustained reuse (the reactor serving many queries on one Machine),
+    /// never in a single-query CLI run (WASM_TIER2_PLAN.md A2 / finding #3).
+    pub fn reset_per_query(&mut self) {
+        self.heap.clear();
+        self.trail.clear();
+        self.cps.clear();
+        self.areg = [0; MAX_ARGS];
+        self.breg = [0; MAX_ARGS];
+        self.k_fn = no_continuation;
+        self.k_env = 0;
+        self.steps = 0;
+        self.metacall_depth = 0;
+        self.error = None;
+        self.error_site = NO_SITE;
+        self.query_vars.clear();
+        self.findall_stack.clear();
+        self.qbarrier = 0;
+        self.solutions.clear();
+        if let OutputSink::Capture(buf) = &mut self.output {
+            buf.clear();
+        }
+    }
+
+    /// Append `s` to the current output sink: stream to stdout (CLI/WASI) or
+    /// accumulate in the capture buffer (reactor). The single seam every
+    /// `write`-family builtin goes through.
+    pub fn write_out(&mut self, s: &str) {
+        match &mut self.output {
+            OutputSink::Stdout => {
+                use std::io::Write;
+                print!("{s}");
+                let _ = std::io::stdout().flush();
+            }
+            OutputSink::Capture(buf) => buf.push_str(s),
+        }
+    }
+
+    /// The captured output for this query, or `None` when streaming to stdout
+    /// (the CLI never carries output in its JSON — it already went to stdout).
+    pub fn captured_output(&self) -> Option<&str> {
+        match &self.output {
+            OutputSink::Capture(s) => Some(s.as_str()),
+            OutputSink::Stdout => None,
+        }
     }
 
     /// Allocate a fresh unbound variable cell; returns its REF word.
