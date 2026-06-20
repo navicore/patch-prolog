@@ -40,10 +40,21 @@ build-runtime-wasm:
     cargo build --locked --release -p patch-prolog-runtime --target wasm32-wasip1
     @echo "✅ Wasm runtime built: target/wasm32-wasip1/release/libplg_runtime.a"
 
-# Install a wasm-capable plgc: builds the wasm runtime, then installs plgc with
-# the `wasm` feature so it can emit `--target wasm32-wasi` modules. Also needs
-# the rustup llvm-tools (llc/wasm-ld): rustup component add llvm-tools-preview
-install-wasm: build-runtime-wasm
+# Build the runtime for wasm32-unknown-unknown (Tier 2 reactor,
+# docs/design/WASM_TIER2_PLAN.md). The archive
+# (target/wasm32-unknown-unknown/release/libplg_runtime.a) is embedded into a
+# wasm-enabled plgc by build.rs under `--features wasm`. Needs the target:
+#   rustup target add wasm32-unknown-unknown
+build-runtime-wasm-reactor:
+    @echo "Building reactor runtime (wasm32-unknown-unknown)..."
+    cargo build --locked --release -p patch-prolog-runtime --target wasm32-unknown-unknown
+    @echo "✅ Reactor runtime built: target/wasm32-unknown-unknown/release/libplg_runtime.a"
+
+# Install a wasm-capable plgc: builds BOTH wasm runtimes, then installs plgc
+# with the `wasm` feature so it can emit `--target wasm32-wasi` (Tier 1) and
+# `--target worker` (Tier 2 reactor) modules. Also needs the rustup llvm-tools
+# (llc/wasm-ld): rustup component add llvm-tools-preview
+install-wasm: build-runtime-wasm build-runtime-wasm-reactor
     @echo "Installing wasm-capable compiler (plgc --features wasm)..."
     cargo install --path crates/compiler --features wasm --force
     @echo "✅ Installed plgc with wasm support"
@@ -86,6 +97,51 @@ wasm-smoke: build-runtime-wasm
         echo "✅ constant stack: 1,000,000-deep call/1 under a 1MB wasm stack"
     else
         echo "❌ deep recursion expected 'true.', got '$deep'"; fail=1
+    fi
+    exit $fail
+
+# Tier 2 reactor smoke test (LOCAL only — not in CI yet). Needs: the
+# wasm32-unknown-unknown target, llvm-tools-preview, and node on PATH. Compiles
+# an example to a reactor module, instantiates it under Node's V8 (the Workers
+# engine), asserts the four host exports exist, and round-trips queries
+# byte-identically to native — modulo the reactor's always-present "output"
+# field (D4), which is stripped before the compare. Then proves the
+# musttail→return_call lowering holds on V8 at 1,000,000-deep recursion.
+reactor-smoke: build-runtime-wasm-reactor
+    #!/usr/bin/env bash
+    set -euo pipefail
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+    driver=scripts/reactor-smoke.mjs
+    echo "Compiling examples/deps.pl (native + reactor)..."
+    cargo run -q -p patch-prolog-compiler --bin plgc -- \
+        build examples/deps.pl -o "$work/deps-native"
+    cargo run -q --features wasm -p patch-prolog-compiler --bin plgc -- \
+        build examples/deps.pl -o "$work/deps.worker.wasm" --target worker
+    fail=0
+    # `--query` exits 1 when solutions are found (the wire contract), so the
+    # native capture must not trip `set -e`; the byte comparison is the check.
+    for q in "needs(app, X)" "depends_on(app, D)" "shared_deps(auth, render, Ds)"; do
+        native=$("$work/deps-native" --query "$q" --format json || true)
+        reactor=$(node "$driver" "$work/deps.worker.wasm" "$q" | sed 's/,"output":""//')
+        if [ "$native" = "$reactor" ]; then
+            echo "✅ $q"
+        else
+            echo "❌ $q"; echo "   native:  $native"; echo "   reactor: $reactor"; fail=1
+        fi
+    done
+    # Constant-stack proof on V8 (the headline gate finding): 1,000,000-deep
+    # call/1 recursion returns in a V8 isolate via return_call. A high
+    # per-request step_limit is passed over the ABI (4th arg) so the step
+    # ceiling doesn't trip before the recursion completes.
+    printf 'count(0).\ncount(N) :- N > 0, N1 is N - 1, call(count(N1)).\n' > "$work/rec.pl"
+    cargo run -q --features wasm -p patch-prolog-compiler --bin plgc -- \
+        build "$work/rec.pl" -o "$work/rec.worker.wasm" --target worker
+    deep=$(node "$driver" "$work/rec.worker.wasm" "count(1000000)" 100000000)
+    if [ "$deep" = '{"count":1,"exhausted":true,"output":"","solutions":[{}]}' ]; then
+        echo "✅ constant stack: 1,000,000-deep call/1 in a V8 isolate (return_call)"
+    else
+        echo "❌ deep recursion unexpected: $deep"; fail=1
     fi
     exit $fail
 

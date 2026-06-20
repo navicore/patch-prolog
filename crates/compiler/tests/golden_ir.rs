@@ -113,6 +113,66 @@ fn every_musttail_is_followed_by_ret() {
 }
 
 #[test]
+fn reactor_target_emits_plg_init_and_no_main() {
+    // Tier-2 reactor entry shape (WASM_TIER2_PLAN.md B2/B3): the module exports
+    // `plg_init` (build Machine → hand to the reactor), and carries NONE of the
+    // CLI `main`/argv machinery — the JS host drives the buffer ABI instead.
+    let ir = plgc::compile_to_ir_target("p(a).", plgc::Target::Worker).unwrap();
+    assert!(
+        ir.contains("target triple = \"wasm32-unknown-unknown\""),
+        "reactor must target wasm32-unknown-unknown: {ir}"
+    );
+    assert!(ir.contains("define void @plg_init() {"), "{ir}");
+    assert!(
+        ir.contains("call void @plg_rt_set_machine(ptr %m)"),
+        "plg_init must hand the Machine to the reactor: {ir}"
+    );
+    // No CLI entry, and the runtime's CLI driver is never called.
+    assert!(
+        !ir.contains("define i32 @main("),
+        "reactor must not emit a native main: {ir}"
+    );
+    assert!(
+        !ir.contains("define i32 @__main_argc_argv("),
+        "reactor must not emit the wasi CLI entry: {ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @plg_rt_main("),
+        "reactor must not call the CLI driver: {ir}"
+    );
+    // The shared init call (atom table, registry, provenance) is still emitted.
+    assert!(ir.contains("call ptr @plg_rt_init("), "{ir}");
+    assert!(ir.contains("@plg_registry"), "{ir}");
+}
+
+#[test]
+fn native_target_emits_main_not_plg_init() {
+    // The complement of the reactor test: native keeps the C `main` driving
+    // `plg_rt_main`, and emits no reactor `plg_init`.
+    let ir = plgc::compile_to_ir("p(a).").unwrap();
+    assert!(ir.contains("define i32 @main("), "{ir}");
+    assert!(ir.contains("call i32 @plg_rt_main("), "{ir}");
+    assert!(
+        !ir.contains("define void @plg_init()"),
+        "native must not emit the reactor entry: {ir}"
+    );
+}
+
+#[test]
+fn tier1_wasm_target_emits_argc_argv_entry() {
+    // Pin the third entry shape (the restructured match has all three): the
+    // Tier-1 `wasm32-wasi` CLI module bridges via `__main_argc_argv` (the
+    // symbol wasi-libc's `__main_void` calls), still driving `plg_rt_main` —
+    // and emits neither the native `@main` nor the reactor `@plg_init`.
+    let ir = plgc::compile_to_ir_target("p(a).", plgc::Target::Wasm).unwrap();
+    assert!(ir.contains("target triple = \"wasm32-wasi\""), "{ir}");
+    assert!(ir.contains("define i32 @__main_argc_argv("), "{ir}");
+    assert!(ir.contains("call i32 @plg_rt_main("), "{ir}");
+    assert!(!ir.contains("define i32 @main("), "{ir}");
+    assert!(!ir.contains("define void @plg_init()"), "{ir}");
+}
+
+#[test]
 fn dynamic_only_predicates_register_fail_stub() {
     let ir = plgc::compile_to_ir(":- dynamic(extra/2).\np(a).").unwrap();
     assert!(
