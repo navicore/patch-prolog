@@ -40,13 +40,17 @@ pub enum OptLevel {
 }
 
 /// Compilation target. `Native` (the host) is the default; `Wasm` emits a
-/// standalone `wasm32-wasi` module (Tier 1 — see docs/design/WASM.md), which
-/// requires plgc built `--features wasm`.
+/// standalone `wasm32-wasi` CLI module (Tier 1 — see docs/design/WASM.md);
+/// `Worker` emits a `wasm32-unknown-unknown` *reactor* module (Tier 2 —
+/// no `main`, exports a `plg_init` + the `plg_rt_*` buffer ABI a JS host
+/// drives, see docs/design/WASM_TIER2_PLAN.md). Both wasm targets require
+/// plgc built `--features wasm`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Target {
     #[default]
     Native,
     Wasm,
+    Worker,
 }
 
 /// The embedded standard library source now lives in `plg-shared`
@@ -155,6 +159,13 @@ pub fn compile_files(
     let result = match target {
         Target::Native => link::link_ir(&ir_path, output_path, opt),
         Target::Wasm => link::link_wasm(&ir_path, output_path, opt),
+        // The reactor link step (wasm-ld --no-entry, no crt/libc) lands in
+        // Phase C (WASM_TIER2_PLAN.md C1). The IR above is already correct —
+        // `--keep-ir` lets you inspect it meanwhile.
+        Target::Worker => Err(
+            "the `worker` target's link step is not wired yet (WASM_TIER2_PLAN.md Phase C)"
+                .to_string(),
+        ),
     };
     if !keep_ir {
         std::fs::remove_file(&ir_path).ok();
@@ -162,8 +173,15 @@ pub fn compile_files(
     result
 }
 
-/// Compile source text to LLVM IR (golden-IR tests; no clang needed).
+/// Compile source text to native LLVM IR (golden-IR tests; no clang needed).
 pub fn compile_to_ir(source: &str) -> Result<String, String> {
+    compile_to_ir_target(source, Target::Native)
+}
+
+/// Compile source text to LLVM IR for a specific [`Target`] (golden-IR tests;
+/// no clang/wasm-ld needed). Lets the reactor entry shape be pinned the same
+/// way the native entry is.
+pub fn compile_to_ir_target(source: &str, target: Target) -> Result<String, String> {
     let mut interner = StringInterner::new();
     let (clauses, directives) = Parser::parse_program_cg(source, &mut interner, 0)
         .map_err(|e| format!("parse error: {e}"))?;
@@ -171,13 +189,7 @@ pub fn compile_to_ir(source: &str) -> Result<String, String> {
         path: "<source>".to_string(),
         text: source.to_string(),
     }];
-    codegen::codegen_program(
-        &clauses,
-        &directives,
-        &interner,
-        &cg_sources,
-        Target::Native,
-    )
+    codegen::codegen_program(&clauses, &directives, &interner, &cg_sources, target)
 }
 
 /// Parse and statically check .pl sources without producing a binary.

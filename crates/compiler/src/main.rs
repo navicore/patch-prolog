@@ -188,7 +188,7 @@ fn main() -> ExitCode {
             let output = output.unwrap_or_else(|| {
                 let stem = PathBuf::from(inputs[0].file_stem().unwrap_or_default());
                 match target {
-                    plgc::Target::Wasm => stem.with_extension("wasm"),
+                    plgc::Target::Wasm | plgc::Target::Worker => stem.with_extension("wasm"),
                     plgc::Target::Native => stem,
                 }
             });
