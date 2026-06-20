@@ -22,7 +22,7 @@
 use crate::core::{self, QueryResult};
 use crate::machine::{Machine, OutputSink};
 use std::alloc::{Layout, alloc, dealloc};
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 
 /// Exact-`Layout` allocation keyed by byte length, so the host can free a
 /// buffer with just its length. NEVER `Vec::with_capacity`: a `Vec` may
@@ -44,14 +44,30 @@ fn raw_alloc(len: usize) -> *mut u8 {
 /// wasm is single-threaded, so `Relaxed` is sufficient.
 static MACHINE: AtomicPtr<Machine> = AtomicPtr::new(std::ptr::null_mut());
 
+/// Module-default limits, captured from the Machine at init. A per-request `0`
+/// means "use the module default" — and because the reactor reuses ONE Machine
+/// across every request (and `reset_per_query` deliberately leaves the limit
+/// fields alone, correct for the CLI's set-once use), we must restore these
+/// explicitly each request. Otherwise `0` would inherit the *previous*
+/// request's value — a cross-request latch in exactly the reuse scenario this
+/// module exists for.
+static DEFAULT_STEP_LIMIT: AtomicU64 = AtomicU64::new(0);
+static DEFAULT_DEPTH_LIMIT: AtomicU64 = AtomicU64::new(0);
+
 /// # Safety
 /// Called once from the generated `plg_init` with the `plg_rt_init` result.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn plg_rt_set_machine(m: *mut Machine) {
     // No stdout in a V8 isolate: capture `write/1` output into the result JSON
-    // (D4) instead of streaming it nowhere. Per-query limits arrive with each
-    // `plg_rt_run_query`, so nothing else is configured here.
+    // (D4) instead of streaming it nowhere.
     unsafe { (*m).output = OutputSink::Capture(String::new()) };
+    // Snapshot the limits codegen/`plg_init` baked in, so a per-request `0`
+    // restores them rather than latching the prior request's override.
+    DEFAULT_STEP_LIMIT.store(unsafe { (*m).step_limit }, Ordering::Relaxed);
+    DEFAULT_DEPTH_LIMIT.store(
+        unsafe { (*m).metacall_depth_limit } as u64,
+        Ordering::Relaxed,
+    );
     MACHINE.store(m, Ordering::Relaxed);
 }
 
@@ -99,17 +115,25 @@ pub unsafe extern "C" fn plg_rt_run_query(
 ) -> u64 {
     let m = unsafe { &mut *MACHINE.load(Ordering::Relaxed) };
     m.reset_per_query();
+    // Assign all three limits UNCONDITIONALLY: `reset_per_query` doesn't touch
+    // the limit fields (set-once for the CLI), so on the reused reactor Machine
+    // a non-zero arg overrides and `0` restores the module default — never the
+    // previous request's value.
     m.solution_limit = if limit == 0 {
         None
     } else {
         Some(limit as usize)
     };
-    if step_limit != 0 {
-        m.step_limit = step_limit;
-    }
-    if depth_limit != 0 {
-        m.metacall_depth_limit = depth_limit as usize;
-    }
+    m.step_limit = if step_limit != 0 {
+        step_limit
+    } else {
+        DEFAULT_STEP_LIMIT.load(Ordering::Relaxed)
+    };
+    m.metacall_depth_limit = if depth_limit != 0 {
+        depth_limit as usize
+    } else {
+        DEFAULT_DEPTH_LIMIT.load(Ordering::Relaxed) as usize
+    };
 
     let q = std::str::from_utf8(unsafe { std::slice::from_raw_parts(qptr, qlen as usize) })
         .unwrap_or("");
@@ -122,6 +146,10 @@ pub unsafe extern "C" fn plg_rt_run_query(
         }
         QueryResult::Solutions => {
             let exhausted = core::exhausted(m);
+            // Capture mode → `captured_output()` is always `Some` (`""` when
+            // nothing was written), so the result always carries an `output`
+            // field. Intended D4 contract: a stable shape for hosts, present
+            // even when empty.
             let _ = core::write_solutions_json(&mut buf, m, exhausted, m.captured_output());
         }
     }
@@ -130,4 +158,55 @@ pub unsafe extern "C" fn plg_rt_run_query(
     let out = raw_alloc(buf.len());
     unsafe { std::ptr::copy_nonoverlapping(buf.as_ptr(), out, buf.len()) };
     ((buf.len() as u64) << 32) | (out as u32 as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use plg_shared::StringInterner;
+
+    /// Build and register a Machine the way the generated `plg_init` does.
+    /// Leaks the Machine and any result buffers — fine for a test, and only
+    /// this test touches the `MACHINE`/`DEFAULT_*` statics, so no race.
+    fn install() -> *mut Machine {
+        let m = Box::into_raw(Machine::new(StringInterner::new(), Vec::new()));
+        // SAFETY: mirrors `plg_init` handing us a freshly built Machine.
+        unsafe { plg_rt_set_machine(m) };
+        m
+    }
+
+    fn run(q: &str, limit: u32, step: u64, depth: u32) {
+        let b = q.as_bytes();
+        // SAFETY: `b` is a valid UTF-8 buffer; a Machine is installed above.
+        let _ = unsafe { plg_rt_run_query(b.as_ptr(), b.len() as u32, limit, step, depth) };
+    }
+
+    #[test]
+    fn zero_limits_restore_module_default_not_previous_request() {
+        let m = install();
+        // The module defaults `plg_init`/`Machine::new` baked in.
+        let (def_step, def_depth) = unsafe { ((*m).step_limit, (*m).metacall_depth_limit) };
+
+        // Request 1: explicit non-default per-request limits.
+        run("x", 0, 5_000, 50);
+        unsafe {
+            assert_eq!((*m).step_limit, 5_000);
+            assert_eq!((*m).metacall_depth_limit, 50);
+        }
+
+        // Request 2: `0` => module default, NOT request 1's latched values.
+        run("x", 0, 0, 0);
+        unsafe {
+            assert_eq!(
+                (*m).step_limit,
+                def_step,
+                "step_limit must revert to the module default"
+            );
+            assert_eq!(
+                (*m).metacall_depth_limit,
+                def_depth,
+                "metacall_depth_limit must revert to the module default"
+            );
+        }
+    }
 }
