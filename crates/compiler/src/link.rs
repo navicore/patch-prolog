@@ -366,6 +366,10 @@ pub fn link_wasm(ir_path: &Path, output_path: &Path, opt: OptLevel) -> Result<()
         .arg(&obj)
         .arg(&runtime)
         .arg("-lc")
+        // Runtime imports (the wasi syscalls the runtime calls) resolve at
+        // instantiation, not link — so a genuinely missing import surfaces
+        // when the module is *run*, not here. `just wasm-smoke` runs the
+        // module, which is what verifies the imports end to end.
         .arg("--allow-undefined")
         .arg("-o")
         .arg(output_path)
@@ -385,9 +389,16 @@ pub fn link_wasm(ir_path: &Path, output_path: &Path, opt: OptLevel) -> Result<()
 /// `wasm32-wasip1` self-contained wasi-libc, all under `rustc --print sysroot`.
 /// Returns `(llc, rust-lld, self-contained-dir)`. Errors with the exact rustup
 /// command to run when a piece is missing.
+///
+/// STRATEGY: this tracks rustup's `<sysroot>/lib/rustlib/<host>/bin/` and
+/// `.../<target>/lib/self-contained/` layout. That layout has been stable for
+/// years and Rust is unlikely to move it without notice, but if it ever does,
+/// the failure here is a "file not found" that reads like a broken install.
+/// The fallback, should that happen, is to discover the tools via `llvm-config`
+/// or switch the wasm link path to the wasi-sdk distribution.
 fn wasm_toolchain() -> Result<(PathBuf, PathBuf, PathBuf), String> {
     let sysroot = rustc_print(&["--print", "sysroot"])?;
-    let host = rustc_host()?;
+    let host = rustc_print(&["--print", "host-tuple"])?;
     let bin = Path::new(&sysroot)
         .join("lib/rustlib")
         .join(&host)
@@ -403,10 +414,20 @@ fn wasm_toolchain() -> Result<(PathBuf, PathBuf, PathBuf), String> {
         ));
     }
     let self_contained = Path::new(&sysroot).join("lib/rustlib/wasm32-wasip1/lib/self-contained");
-    if !self_contained.join("libc.a").exists() {
-        return Err("wasm target needs the wasm32-wasip1 std (wasi-libc):\n  \
+    // Distinguish "target not added" from "target partially installed" so the
+    // recovery hint is right for each.
+    if !self_contained.exists() {
+        return Err("wasm target not installed (wasm32-wasip1 std):\n  \
              rustup target add wasm32-wasip1"
             .to_string());
+    }
+    if !self_contained.join("libc.a").exists() {
+        return Err(format!(
+            "wasm32-wasip1 std looks partially installed — wasi-libc (libc.a) \
+             missing under {}.\n  \
+             Try: rustup target remove wasm32-wasip1 && rustup target add wasm32-wasip1",
+            self_contained.display()
+        ));
     }
     Ok((llc, lld, self_contained))
 }
@@ -420,15 +441,4 @@ fn rustc_print(args: &[&str]) -> Result<String, String> {
         return Err(format!("rustc {args:?} failed"));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-fn rustc_host() -> Result<String, String> {
-    let out = Command::new("rustc")
-        .arg("-vV")
-        .output()
-        .map_err(|e| format!("Failed to run rustc: {e}"))?;
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .find_map(|l| l.strip_prefix("host: ").map(str::to_string))
-        .ok_or_else(|| "could not determine the rustc host triple".to_string())
 }

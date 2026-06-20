@@ -73,6 +73,20 @@ wasm-smoke: build-runtime-wasm
             echo "❌ $q"; echo "   native: $native"; echo "   wasm:   $wasm"; fail=1
         fi
     done
+    # Constant-stack proof (the wasm analog of PR #24's native ulimit test):
+    # deep call/1 recursion must run under a *small* wasm stack via return_call
+    # — without the musttail lowering it would overflow. PLG_MAX_STEPS must be
+    # passed with --env because WASI does not inherit the host environment.
+    printf 'count(0).\ncount(N) :- N > 0, N1 is N - 1, call(count(N1)).\n' > "$work/rec.pl"
+    cargo run -q --features wasm -p patch-prolog-compiler --bin plgc -- \
+        build "$work/rec.pl" -o "$work/rec.wasm" --target wasm32-wasi
+    deep=$(wasmtime run --env PLG_MAX_STEPS=100000000 -W max-wasm-stack=1048576 \
+        "$work/rec.wasm" --query "count(1000000)" --format text || true)
+    if [ "$deep" = "true." ]; then
+        echo "✅ constant stack: 1,000,000-deep call/1 under a 1MB wasm stack"
+    else
+        echo "❌ deep recursion expected 'true.', got '$deep'"; fail=1
+    fi
     exit $fail
 
 # Build the compiler

@@ -31,8 +31,11 @@ just install-wasm
 The default `cargo install` / `just install` is unchanged — wasm support is
 opt-in at build time and adds nothing to a native-only `plgc`.
 
-To *run* a module you need a WASI engine, e.g. `wasmtime` (`brew install
-wasmtime`, or see wasmtime.dev).
+To *run* a module you need a WASI engine **with the tail-call proposal** —
+recent `wasmtime` (≥ ~0.40), recent `wasmer`, or any current WASI runtime
+(`brew install wasmtime`, or see wasmtime.dev). The constant-stack guarantee
+relies on wasm `return_call`; an engine without tail-call support rejects the
+module at instantiation with a clear `tail-call` error.
 
 ## Usage
 
@@ -65,10 +68,21 @@ present.
 ## Tuning
 
 The metacall depth bound (`PLG_METACALL_DEPTH`) and step limit
-(`PLG_MAX_STEPS`) work the same under WASI as natively. A wasm engine's default
-stack is smaller than a native one (~1 MB vs ~8 MB), so for programs that lean
-on deeply nested runtime-walked metacalls you may want a lower
-`PLG_METACALL_DEPTH`.
+(`PLG_MAX_STEPS`) work the same under WASI as natively — but **WASI does not
+inherit the host environment**, so pass them explicitly to the engine:
+
+```sh
+wasmtime run --env PLG_MAX_STEPS=100000000 prog.wasm --query "..."
+```
+
+A wasm engine's default stack is smaller than a native one (~1 MB vs ~8 MB), so
+for programs that lean on deeply nested *runtime-walked* metacalls you may want
+a lower `PLG_METACALL_DEPTH`. Ordinary recursion and `call/1` tail recursion are
+constant-stack and unaffected (a 1,000,000-deep `call/1` runs under a 1 MB wasm
+stack).
+
+Wasm builds optimize at LLVM `-O2` (`--debug` drops to `-O0`); the `-O3` the
+native path uses buys little for this IR.
 
 ## Edge / serverless (not yet)
 
