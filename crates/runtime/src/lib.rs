@@ -17,6 +17,7 @@ pub mod entry;
 pub mod errors;
 pub mod machine;
 pub mod query;
+pub mod reactor;
 pub mod render;
 pub mod solve;
 pub mod unify;
