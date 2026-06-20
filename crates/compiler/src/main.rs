@@ -17,7 +17,13 @@ fn run_script(source: &str, args: &[String]) -> ExitCode {
     };
     let bin = dir.path().join("plg-script");
     let src = std::path::Path::new(source);
-    if let Err(e) = plgc::compile_files(&[src], &bin, false, plgc::OptLevel::O3) {
+    if let Err(e) = plgc::compile_files(
+        &[src],
+        &bin,
+        false,
+        plgc::OptLevel::O3,
+        plgc::Target::Native,
+    ) {
         eprintln!("error: {e}");
         return ExitCode::from(3);
     }
@@ -59,6 +65,10 @@ enum Commands {
         /// Treat calls to undefined predicates as errors, not warnings
         #[arg(long)]
         deny_undefined: bool,
+        /// Compilation target: the host (default) or `wasm32-wasi` (a
+        /// standalone .wasm module; needs plgc built with `--features wasm`)
+        #[arg(long)]
+        target: Option<String>,
     },
     /// Compile to a temp binary and run it immediately (never interprets)
     Run {
@@ -131,6 +141,18 @@ fn is_parse_error(msg: &str) -> bool {
     })
 }
 
+/// Map the `--target` string to a [`plgc::Target`]. `None` and the host
+/// triple mean native; only `wasm32-wasi`/`wasm32-wasip1` select wasm.
+fn parse_target(target: Option<&str>) -> Result<plgc::Target, String> {
+    match target {
+        None | Some("native") => Ok(plgc::Target::Native),
+        Some("wasm32-wasi") | Some("wasm32-wasip1") => Ok(plgc::Target::Wasm),
+        Some(other) => Err(format!(
+            "unknown target `{other}` (supported: native, wasm32-wasi)"
+        )),
+    }
+}
+
 fn main() -> ExitCode {
     // Script mode (`#!/usr/bin/env plgc`): `plgc prog.pl [binary args…]`
     // compiles to a temp binary and execs it — same path as `plgc run`,
@@ -149,13 +171,27 @@ fn main() -> ExitCode {
             keep_ir,
             debug,
             deny_undefined,
+            target,
         } => {
             if inputs.is_empty() {
                 eprintln!("error: no input files");
                 return ExitCode::from(3);
             }
-            let output =
-                output.unwrap_or_else(|| PathBuf::from(inputs[0].file_stem().unwrap_or_default()));
+            let target = match parse_target(target.as_deref()) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(3);
+                }
+            };
+            // Default output stem; for wasm give it a `.wasm` extension.
+            let output = output.unwrap_or_else(|| {
+                let stem = PathBuf::from(inputs[0].file_stem().unwrap_or_default());
+                match target {
+                    plgc::Target::Wasm => stem.with_extension("wasm"),
+                    plgc::Target::Native => stem,
+                }
+            });
             let sources: Vec<&std::path::Path> = inputs.iter().map(|p| p.as_path()).collect();
             if let Err(code) = lint_undefined(&sources, deny_undefined) {
                 return ExitCode::from(code);
@@ -165,7 +201,7 @@ fn main() -> ExitCode {
             } else {
                 plgc::OptLevel::O3
             };
-            match plgc::compile_files(&sources, &output, keep_ir, opt) {
+            match plgc::compile_files(&sources, &output, keep_ir, opt, target) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
                     eprintln!("error: {e}");
@@ -199,7 +235,13 @@ fn main() -> ExitCode {
                 }
             };
             let bin = dir.path().join("plg-run");
-            if let Err(e) = plgc::compile_files(&sources, &bin, false, plgc::OptLevel::O0) {
+            if let Err(e) = plgc::compile_files(
+                &sources,
+                &bin,
+                false,
+                plgc::OptLevel::O0,
+                plgc::Target::Native,
+            ) {
                 eprintln!("error: {e}");
                 // Parse errors carry file:line:col; map them to exit 2.
                 let code = if is_parse_error(&e) { 2 } else { 3 };

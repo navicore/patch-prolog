@@ -31,6 +31,50 @@ build-runtime:
     cargo build --locked --release -p patch-prolog-runtime
     @echo "✅ Runtime built: target/release/libplg_runtime.a"
 
+# Build the runtime for wasm32-wasip1 (Tier 1, docs/design/WASM.md). The
+# archive (target/wasm32-wasip1/release/libplg_runtime.a) is embedded into a
+# wasm-enabled plgc by build.rs under `--features wasm`. Needs the wasm target:
+#   rustup target add wasm32-wasip1
+build-runtime-wasm:
+    @echo "Building wasm runtime (wasm32-wasip1)..."
+    cargo build --locked --release -p patch-prolog-runtime --target wasm32-wasip1
+    @echo "✅ Wasm runtime built: target/wasm32-wasip1/release/libplg_runtime.a"
+
+# Install a wasm-capable plgc: builds the wasm runtime, then installs plgc with
+# the `wasm` feature so it can emit `--target wasm32-wasi` modules. Also needs
+# the rustup llvm-tools (llc/wasm-ld): rustup component add llvm-tools-preview
+install-wasm: build-runtime-wasm
+    @echo "Installing wasm-capable compiler (plgc --features wasm)..."
+    cargo install --path crates/compiler --features wasm --force
+    @echo "✅ Installed plgc with wasm support"
+
+# Tier 1 wasm smoke test (LOCAL only — not in CI yet). Needs: the
+# wasm32-wasip1 target, llvm-tools-preview, and wasmtime on PATH. Compiles an
+# example to wasm and asserts it answers --query byte-identically to native.
+wasm-smoke: build-runtime-wasm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+    echo "Compiling examples/deps.pl (native + wasm)..."
+    cargo run -q -p patch-prolog-compiler --bin plgc -- \
+        build examples/deps.pl -o "$work/deps-native"
+    cargo run -q --features wasm -p patch-prolog-compiler --bin plgc -- \
+        build examples/deps.pl -o "$work/deps.wasm" --target wasm32-wasi
+    fail=0
+    # `--query` exits 1 when solutions are found (the wire contract), so the
+    # captures must not trip `set -e`; the byte comparison is the real check.
+    for q in "needs(app, X)" "depends_on(app, D)" "shared_deps(auth, render, Ds)"; do
+        native=$("$work/deps-native" --query "$q" --format json || true)
+        wasm=$(wasmtime run "$work/deps.wasm" --query "$q" --format json || true)
+        if [ "$native" = "$wasm" ]; then
+            echo "✅ $q"
+        else
+            echo "❌ $q"; echo "   native: $native"; echo "   wasm:   $wasm"; fail=1
+        fi
+    done
+    exit $fail
+
 # Build the compiler
 build-compiler:
     @echo "Building compiler..."

@@ -14,6 +14,13 @@ path = "src/main.rs"
 name = "plgc"
 path = "src/lib.rs"
 
+[features]
+# Embeds the wasm32-wasip1 runtime archive so plgc can emit `--target
+# wasm32-wasi` modules (Tier 1, docs/design/WASM.md). Off by default: the
+# standard `cargo install plgc` is unchanged and needs no wasm toolchain.
+# Requires `just build-runtime-wasm` to have produced the archive first.
+wasm = []
+
 [dependencies]
 plg-shared = { path = "../shared", version = "=0.2.0", package = "patch-prolog-shared" }
 plg-frontend = { path = "../frontend", version = "=0.2.0", package = "patch-prolog-frontend" }

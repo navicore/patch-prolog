@@ -210,6 +210,30 @@ Gate results:
   float-keyed indexing, compound-column-0 interning, the `unsafe`
   bounds-elision seam (gated on a profile).
 
+## M10 — WASM Tier 1 (`wasm32-wasi`) ✅ (2026-06-20)
+
+`plgc build --target wasm32-wasi` emits a standalone WASI module from the same
+LLVM IR as native, preserving the `--query` wire contract verbatim. The engine
+runtime compiles to `wasm32-wasip1` unchanged; `llc -mattr=+tail-call` lowers
+the `musttail` chains to `return_call`/`return_call_indirect`, so recursion and
+backtracking stay constant-stack on wasm. Built with the Rust toolchain's own
+LLVM tools (`llc`/`wasm-ld`) + the wasm target's self-contained wasi-libc — no
+wasi-sdk. The wasm runtime archive is embedded behind a `wasm` cargo feature,
+so the default `cargo install plgc` is byte-for-byte unchanged. User guide:
+[WASM Target](wasm-target.md).
+
+Gate results:
+- Stack safety (Checkpoint 0): 5,000,000-deep recursion runs in bounded stack
+  under wasmtime; a missing `+tail-call` is a loud `llc` build error, never a
+  silent overflow.
+- Equivalence: a compiled example answers `--query` (atoms, ints, `findall`)
+  byte-identically to the native build (`just wasm-smoke`).
+- Footprint asymmetry preserved: the toolchain cost is build-side only; the
+  shipped `.wasm` runs with only a wasm engine present.
+- Deferred: CI wiring (local-only for now — `just wasm-smoke`), and `plgc run
+  --target wasm32-wasi` via a bundled engine. Tier 2 (V8 isolates / Cloudflare
+  Workers) remains design-only (docs/design/WASM.md).
+
 ## Future (explicitly out of scope)
 
 - Bundled backend ("the Zig route") only if compiles must happen ON
@@ -222,6 +246,8 @@ Gate results:
 - REPL (`plgr`) enhancements: an LLVM-IR visualization pane, LSP-client-backed
   completion, and cross-session caching of compiled binaries (all optional)
 - `assert/retract` beyond the silent-fail dynamic contract
-- Cross-compilation (`--target`)
+- WASM Tier 2: `wasm32-unknown-unknown` for V8 isolates / Cloudflare Workers
+  (a host-call entry, not a CLI — design-only in docs/design/WASM.md). Native
+  cross-compilation to other host arches.
 - bagof/setof, DCG, modules, `op/3` (v1 scope decisions — the language
   definition excludes them deliberately)

@@ -17,6 +17,16 @@ use std::path::Path;
 /// Embedded runtime library (built by build.rs from plg-runtime).
 pub static RUNTIME_LIB: &[u8] = include_bytes!(env!("PLG_RUNTIME_LIB_PATH"));
 
+/// Embedded `wasm32-wasip1` runtime archive — present only when plgc is built
+/// `--features wasm` (build.rs sets `PLG_WASM_RUNTIME_LIB_PATH`). `None`
+/// otherwise, so a `--target wasm32-wasi` request fails with a clear "rebuild
+/// with --features wasm" message instead of a missing symbol.
+#[cfg(feature = "wasm")]
+pub static WASM_RUNTIME_LIB: Option<&[u8]> =
+    Some(include_bytes!(env!("PLG_WASM_RUNTIME_LIB_PATH")));
+#[cfg(not(feature = "wasm"))]
+pub static WASM_RUNTIME_LIB: Option<&[u8]> = None;
+
 /// Arity ceiling for the argument-register ABI (mirrors the runtime's
 /// MAX_ARGS).
 pub const MAX_GOAL_ARITY: usize = 16;
@@ -27,6 +37,16 @@ pub enum OptLevel {
     O0,
     #[default]
     O3,
+}
+
+/// Compilation target. `Native` (the host) is the default; `Wasm` emits a
+/// standalone `wasm32-wasi` module (Tier 1 — see docs/design/WASM.md), which
+/// requires plgc built `--features wasm`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Target {
+    #[default]
+    Native,
+    Wasm,
 }
 
 /// The embedded standard library source now lives in `plg-shared`
@@ -124,14 +144,18 @@ pub fn compile_files(
     output_path: &Path,
     keep_ir: bool,
     opt: OptLevel,
+    target: Target,
 ) -> Result<(), String> {
     let (clauses, directives, interner, cg_sources) = parse_sources_cg(sources)?;
-    let ir = codegen::codegen_program(&clauses, &directives, &interner, &cg_sources)?;
+    let ir = codegen::codegen_program(&clauses, &directives, &interner, &cg_sources, target)?;
 
     let ir_path = output_path.with_extension("ll");
     std::fs::write(&ir_path, &ir).map_err(|e| format!("Failed to write IR file: {e}"))?;
 
-    let result = link::link_ir(&ir_path, output_path, opt);
+    let result = match target {
+        Target::Native => link::link_ir(&ir_path, output_path, opt),
+        Target::Wasm => link::link_wasm(&ir_path, output_path, opt),
+    };
     if !keep_ir {
         std::fs::remove_file(&ir_path).ok();
     }
@@ -147,7 +171,13 @@ pub fn compile_to_ir(source: &str) -> Result<String, String> {
         path: "<source>".to_string(),
         text: source.to_string(),
     }];
-    codegen::codegen_program(&clauses, &directives, &interner, &cg_sources)
+    codegen::codegen_program(
+        &clauses,
+        &directives,
+        &interner,
+        &cg_sources,
+        Target::Native,
+    )
 }
 
 /// Parse and statically check .pl sources without producing a binary.
