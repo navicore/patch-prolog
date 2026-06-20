@@ -18,7 +18,6 @@ use crate::cell::*;
 use crate::machine::Machine;
 use crate::render::term_to_string;
 use crate::unify::unify;
-use std::io::Write as _;
 
 #[inline]
 fn mref<'a>(m: *mut Machine) -> &'a mut Machine {
@@ -242,12 +241,13 @@ fn occurs(m: &Machine, var: usize, term: Word) -> bool {
 }
 
 /// `write/1`: print the term (v1 `term_to_string`), no trailing newline.
+/// Output goes through the Machine's sink (stdout for CLI/WASI, a capture
+/// buffer for the reactor) so an isolate with no stdout loses nothing.
 #[unsafe(no_mangle)]
 pub extern "C" fn plg_rt_b_write_1(m: *mut Machine, term: u64) -> i32 {
     let m = mref(m);
     let s = term_to_string(m, term);
-    print!("{s}");
-    let _ = std::io::stdout().flush();
+    m.write_out(&s);
     1
 }
 
@@ -255,15 +255,16 @@ pub extern "C" fn plg_rt_b_write_1(m: *mut Machine, term: u64) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn plg_rt_b_writeln_1(m: *mut Machine, term: u64) -> i32 {
     let m = mref(m);
-    let s = term_to_string(m, term);
-    println!("{s}");
+    let mut s = term_to_string(m, term);
+    s.push('\n');
+    m.write_out(&s);
     1
 }
 
 /// `nl/0`: print a newline. Always succeeds.
 #[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_b_nl_0(_m: *mut Machine) -> i32 {
-    println!();
+pub extern "C" fn plg_rt_b_nl_0(m: *mut Machine) -> i32 {
+    mref(m).write_out("\n");
     1
 }
 

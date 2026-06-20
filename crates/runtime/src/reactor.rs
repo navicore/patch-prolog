@@ -1,25 +1,35 @@
-//! THROWAWAY Tier 2 gate spike (docs/design/WASM.md): a reactor-module ABI for
-//! `wasm32-unknown-unknown` (Cloudflare Workers / V8 isolates). No WASI, no
-//! stdio/argv — the module exports functions a JS host calls over linear
-//! memory:
+//! Tier-2 reactor ABI for `wasm32-unknown-unknown` (Cloudflare Workers / V8
+//! isolates). No WASI, no stdio/argv — the module *exports* functions a JS
+//! host calls over linear memory (docs/design/WASM_TIER2_PLAN.md A3):
 //!
-//!   plg_init            (emitted by the generated module) → hands us the Machine
-//!   plg_rt_alloc(len)   → ptr        host writes the query bytes here
-//!   plg_rt_run_query(ptr,len) → u64  packed (len<<32 | ptr) of a JSON buffer
-//!   plg_rt_free(ptr,len)             host frees the result
+//!   plg_init                       (emitted by the generated module) → builds
+//!                                  the Machine, hands it to `plg_rt_set_machine`
+//!   plg_rt_alloc(len) → ptr        host writes the query bytes here
+//!   plg_rt_run_query(ptr,len,…) → u64   packed (len<<32 | ptr) of a JSON buffer
+//!   plg_rt_free(ptr,len)           host frees the result (or the query buffer)
 //!
-//! This proves the query path runs in an isolate with no WASI. It duplicates
-//! the JSON formatting from `entry.rs` on purpose — productization extracts a
-//! single I/O-free core shared by the WASI shell and this one.
+//! JSON formatting and the query path are NOT duplicated here — both go
+//! through `crate::core`, the single I/O-free core the WASI shell shares.
+//!
+//! ## Concurrency contract (D3 / WASM.md finding #2)
+//!
+//! **One in-flight query per isolate.** The program Machine is a single
+//! `static`; a V8 isolate is single-threaded, but one Worker can interleave
+//! async tasks, so the host must not call `plg_rt_run_query` again before the
+//! prior call returns. This matches typical Worker use (a request maps to a
+//! query) and avoids threading per-request state through the ABI.
 
-use crate::machine::Machine;
-use crate::{query, render, solve};
+use crate::core::{self, QueryResult};
+use crate::machine::{Machine, OutputSink};
 use std::alloc::{Layout, alloc, dealloc};
 use std::sync::atomic::{AtomicPtr, Ordering};
 
 /// Exact-`Layout` allocation keyed by byte length, so the host can free a
-/// buffer with just its length — `Vec::with_capacity` may over-allocate, and
-/// freeing with the requested (not actual) size corrupts the allocator.
+/// buffer with just its length. NEVER `Vec::with_capacity`: a `Vec` may
+/// over-allocate, and the host frees by *requested* length, so an actual
+/// capacity > requested length corrupts the allocator (WASM.md finding #1 —
+/// this is the bug that aborted the spike's deep query; the reflexive reach
+/// for `Vec` is the trap).
 fn raw_alloc(len: usize) -> *mut u8 {
     if len == 0 {
         return std::ptr::NonNull::<u8>::dangling().as_ptr();
@@ -28,17 +38,20 @@ fn raw_alloc(len: usize) -> *mut u8 {
     unsafe { alloc(Layout::from_size_align_unchecked(len, 1)) }
 }
 
-/// The program Machine, built once by the generated `plg_init`. wasm is
-/// single-threaded, so `Relaxed` is sufficient.
+/// The program Machine, built once by the generated `plg_init` and reused for
+/// every query (cold-start-per-isolate; never freed — a teardown entry point
+/// would only be needed to swap a live isolate's program, WASM.md finding #8).
+/// wasm is single-threaded, so `Relaxed` is sufficient.
 static MACHINE: AtomicPtr<Machine> = AtomicPtr::new(std::ptr::null_mut());
 
 /// # Safety
 /// Called once from the generated `plg_init` with the `plg_rt_init` result.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn plg_rt_set_machine(m: *mut Machine) {
-    // Spike: the reactor doesn't wire a per-request step ceiling yet, so lift
-    // it for the session (productization passes it alongside the query).
-    unsafe { (*m).step_limit = 1_000_000_000 };
+    // No stdout in a V8 isolate: capture `write/1` output into the result JSON
+    // (D4) instead of streaming it nowhere. Per-query limits arrive with each
+    // `plg_rt_run_query`, so nothing else is configured here.
+    unsafe { (*m).output = OutputSink::Capture(String::new()) };
     MACHINE.store(m, Ordering::Relaxed);
 }
 
@@ -60,78 +73,61 @@ pub unsafe extern "C" fn plg_rt_free(ptr: *mut u8, len: u32) {
     unsafe { dealloc(ptr, Layout::from_size_align_unchecked(len as usize, 1)) };
 }
 
-/// Run one query (UTF-8 at `qptr..qptr+qlen`); return packed `(len << 32) | ptr`
-/// of a JSON byte buffer the host reads then frees via `plg_rt_free`. The packed
-/// return assumes wasm32 (the pointer fits in the low 32 bits); wasm64 would
-/// need a wider/two-value result.
+/// Run one query (UTF-8 at `qptr..qptr+qlen`) and return packed
+/// `(len << 32) | ptr` of a JSON byte buffer the host reads then frees via
+/// `plg_rt_free`. The packed return assumes **wasm32** (the pointer fits in the
+/// low 32 bits); wasm64 would need a wider/two-value result (WASM.md finding #7).
+///
+/// Per-request limits bound the query before the platform's CPU/wall limit does
+/// (WASM.md finding #5). All three mirror the CLI's knobs:
+/// - `limit`: max solutions; `0` = unbounded.
+/// - `step_limit`: step ceiling (`PLG_MAX_STEPS`); `0` = keep the module default.
+/// - `depth_limit`: metacall depth bound (`PLG_METACALL_DEPTH`); `0` = keep the
+///   default. Depth matters more on wasm: its ~1 MB stack is far smaller than
+///   native's ~8 MB.
 ///
 /// # Safety
-/// Requires `plg_init` to have run first; `qptr`/`qlen` a valid buffer.
+/// Requires `plg_init` to have run first; `qptr`/`qlen` a valid buffer. See the
+/// module's single-in-flight concurrency contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn plg_rt_run_query(qptr: *const u8, qlen: u32) -> u64 {
+pub unsafe extern "C" fn plg_rt_run_query(
+    qptr: *const u8,
+    qlen: u32,
+    limit: u32,
+    step_limit: u64,
+    depth_limit: u32,
+) -> u64 {
     let m = unsafe { &mut *MACHINE.load(Ordering::Relaxed) };
-    reset(m);
+    m.reset_per_query();
+    m.solution_limit = if limit == 0 {
+        None
+    } else {
+        Some(limit as usize)
+    };
+    if step_limit != 0 {
+        m.step_limit = step_limit;
+    }
+    if depth_limit != 0 {
+        m.metacall_depth_limit = depth_limit as usize;
+    }
+
     let q = std::str::from_utf8(unsafe { std::slice::from_raw_parts(qptr, qlen as usize) })
         .unwrap_or("");
-    let json = run_core(m, q);
-    // Copy into an exact-Layout buffer so the host frees it with just `len`.
-    let bytes = json.as_bytes();
-    let out = raw_alloc(bytes.len());
-    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
-    ((bytes.len() as u64) << 32) | (out as u32 as u64)
-}
 
-/// Clear per-query state, keeping the program (atoms/registry/srcmap/limits).
-/// The spike rebuilds nothing — a fresh `Machine::new` has exactly this state.
-fn reset(m: &mut Machine) {
-    m.heap.clear();
-    m.trail.clear();
-    m.cps.clear();
-    m.steps = 0;
-    m.error = None;
-    m.error_site = crate::machine::NO_SITE;
-    m.query_vars.clear();
-    m.findall_stack.clear();
-    m.qbarrier = 0;
-    m.metacall_depth = 0;
-    m.solutions.clear();
-    m.solution_limit = None;
-}
-
-fn run_core(m: &mut Machine, q: &str) -> String {
-    let goal = match query::parse_query(m, q) {
-        Ok(g) => g,
-        Err(e) => return error_json(&format!("Parse error: {e}")),
-    };
-    match solve::solve(m, goal) {
-        solve::Outcome::Error => {
-            let msg = m.error.take().map(|e| e.message).unwrap_or_default();
-            error_json(&format!("Runtime error: {msg}"))
+    let mut buf = Vec::new();
+    // Writes never fail (a `Vec` sink), so the `io::Result`s are infallible.
+    match core::run_query(m, q) {
+        QueryResult::ParseError(msg) | QueryResult::RuntimeError(msg) => {
+            let _ = core::write_error_json(&mut buf, &msg);
         }
-        solve::Outcome::Done => solutions_json(m),
+        QueryResult::Solutions => {
+            let exhausted = core::exhausted(m);
+            let _ = core::write_solutions_json(&mut buf, m, exhausted, m.captured_output());
+        }
     }
-}
 
-fn error_json(message: &str) -> String {
-    format!("{{\"error\":\"{}\"}}", render::json_escape(message))
-}
-
-fn solutions_json(m: &Machine) -> String {
-    let solutions: Vec<String> = m
-        .solutions
-        .iter()
-        .map(|sol| {
-            let fields: Vec<String> = sol
-                .bindings
-                .iter()
-                .map(|(name, json, _)| format!("\"{}\":{}", render::json_escape(name), json))
-                .collect();
-            format!("{{{}}}", fields.join(","))
-        })
-        .collect();
-    format!(
-        "{{\"count\":{},\"exhausted\":true,\"solutions\":[{}]}}",
-        m.solutions.len(),
-        solutions.join(",")
-    )
+    // Copy into an exact-Layout buffer so the host frees it with just `len`.
+    let out = raw_alloc(buf.len());
+    unsafe { std::ptr::copy_nonoverlapping(buf.as_ptr(), out, buf.len()) };
+    ((buf.len() as u64) << 32) | (out as u32 as u64)
 }

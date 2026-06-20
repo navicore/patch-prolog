@@ -13,6 +13,7 @@ pub mod builtins;
 pub mod cell;
 pub mod control;
 pub mod copyterm;
+pub mod core;
 pub mod entry;
 pub mod errors;
 pub mod machine;
