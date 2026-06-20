@@ -385,6 +385,95 @@ pub fn link_wasm(ir_path: &Path, output_path: &Path, opt: OptLevel) -> Result<()
     Ok(())
 }
 
+/// The reactor's host-facing exports. `plg_init` builds the Machine (the JS
+/// host calls it once); `plg_rt_alloc`/`plg_rt_free` manage linear-memory
+/// buffers; `plg_rt_run_query` answers a query. `plg_rt_set_machine` is NOT
+/// here — it's internal to `plg_init`. wasm-ld treats these as the only roots
+/// (`--no-entry`), GCing everything else they don't reach.
+const REACTOR_EXPORTS: &[&str] = &[
+    "plg_init",
+    "plg_rt_run_query",
+    "plg_rt_alloc",
+    "plg_rt_free",
+];
+
+/// Link an LLVM IR file into a `wasm32-unknown-unknown` *reactor* module
+/// (Tier 2 — docs/design/WASM_TIER2_PLAN.md C1): no WASI, no crt, no libc — the
+/// module exports `plg_init` + the buffer ABI a JS host (Cloudflare Workers /
+/// V8) drives. Reuses the same Rust-bundled `llc`/`wasm-ld` as Tier 1; only the
+/// archive and the link flags differ (`--no-entry` + the explicit exports).
+///
+/// As with Tier 1, `-mattr=+tail-call` is what lowers the musttail chains to
+/// `return_call`; without it `llc` errors at build time rather than emitting a
+/// stack-overflowing module. This was the load-bearing finding the gate proved
+/// on V8 at 1,000,000-deep recursion.
+pub fn link_wasm_reactor(ir_path: &Path, output_path: &Path, opt: OptLevel) -> Result<(), String> {
+    let worker_runtime = crate::WORKER_RUNTIME_LIB.ok_or_else(|| {
+        "this plgc was built without wasm support.\n\
+         Reinstall with the wasm runtimes embedded:  just install-wasm\n\
+         (or: cargo install --features wasm --path crates/compiler)"
+            .to_string()
+    })?;
+    let (llc, lld) = llvm_tools()?;
+
+    let work = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {e}"))?;
+    let obj = work.path().join("prog.o");
+    let runtime = work.path().join("libplg_runtime.a");
+    fs::write(&runtime, worker_runtime)
+        .map_err(|e| format!("Failed to write reactor runtime: {e}"))?;
+
+    let opt_flag = match opt {
+        OptLevel::O0 => "-O0",
+        OptLevel::O3 => "-O2",
+    };
+
+    // 1) IR → wasm object, tail calls enabled.
+    let llc_out = Command::new(&llc)
+        .args([
+            "-mtriple=wasm32-unknown-unknown",
+            "-mattr=+tail-call",
+            "-filetype=obj",
+        ])
+        .arg(opt_flag)
+        .arg(ir_path)
+        .arg("-o")
+        .arg(&obj)
+        .output()
+        .map_err(|e| format!("Failed to run llc: {e}"))?;
+    if !llc_out.status.success() {
+        return Err(format!(
+            "llc (wasm reactor) failed:\n{}",
+            String::from_utf8_lossy(&llc_out.stderr)
+        ));
+    }
+
+    // 2) Link the object + reactor runtime into a reactor module. No crt/libc:
+    // `--no-entry` means the module has no `_start`; the host drives the
+    // exports directly. `--allow-undefined` defers any runtime import to
+    // instantiation (mirrors Tier 1) — a genuinely missing import then surfaces
+    // when the host instantiates the module, which the reactor smoke test runs.
+    let mut lld_cmd = Command::new(&lld);
+    lld_cmd.args(["-flavor", "wasm", "--no-entry", "--allow-undefined"]);
+    for sym in REACTOR_EXPORTS {
+        lld_cmd.arg(format!("--export={sym}"));
+    }
+    let lld_out = lld_cmd
+        .arg(&obj)
+        .arg(&runtime)
+        .arg("-o")
+        .arg(output_path)
+        .output()
+        .map_err(|e| format!("Failed to run wasm-ld (rust-lld): {e}"))?;
+    if !lld_out.status.success() {
+        return Err(format!(
+            "wasm-ld (reactor) failed:\n{}",
+            String::from_utf8_lossy(&lld_out.stderr)
+        ));
+    }
+
+    Ok(())
+}
+
 /// Locate the Rust-bundled LLVM tools (`llc`, `rust-lld`) and the
 /// `wasm32-wasip1` self-contained wasi-libc, all under `rustc --print sysroot`.
 /// Returns `(llc, rust-lld, self-contained-dir)`. Errors with the exact rustup
@@ -396,7 +485,11 @@ pub fn link_wasm(ir_path: &Path, output_path: &Path, opt: OptLevel) -> Result<()
 /// the failure here is a "file not found" that reads like a broken install.
 /// The fallback, should that happen, is to discover the tools via `llvm-config`
 /// or switch the wasm link path to the wasi-sdk distribution.
-fn wasm_toolchain() -> Result<(PathBuf, PathBuf, PathBuf), String> {
+/// Locate the Rust-bundled LLVM tools (`llc`, `rust-lld`) under
+/// `<sysroot>/lib/rustlib/<host>/bin/`. Shared by both wasm link paths — Tier 1
+/// (`wasm_toolchain`, which also needs wasi-libc) and the Tier-2 reactor
+/// (`link_wasm_reactor`, which needs no libc at all).
+fn llvm_tools() -> Result<(PathBuf, PathBuf), String> {
     let sysroot = rustc_print(&["--print", "sysroot"])?;
     let host = rustc_print(&["--print", "host-tuple"])?;
     let bin = Path::new(&sysroot)
@@ -413,6 +506,12 @@ fn wasm_toolchain() -> Result<(PathBuf, PathBuf, PathBuf), String> {
             bin.display()
         ));
     }
+    Ok((llc, lld))
+}
+
+fn wasm_toolchain() -> Result<(PathBuf, PathBuf, PathBuf), String> {
+    let (llc, lld) = llvm_tools()?;
+    let sysroot = rustc_print(&["--print", "sysroot"])?;
     let self_contained = Path::new(&sysroot).join("lib/rustlib/wasm32-wasip1/lib/self-contained");
     // Distinguish "target not added" from "target partially installed" so the
     // recovery hint is right for each.

@@ -40,10 +40,21 @@ build-runtime-wasm:
     cargo build --locked --release -p patch-prolog-runtime --target wasm32-wasip1
     @echo "✅ Wasm runtime built: target/wasm32-wasip1/release/libplg_runtime.a"
 
-# Install a wasm-capable plgc: builds the wasm runtime, then installs plgc with
-# the `wasm` feature so it can emit `--target wasm32-wasi` modules. Also needs
-# the rustup llvm-tools (llc/wasm-ld): rustup component add llvm-tools-preview
-install-wasm: build-runtime-wasm
+# Build the runtime for wasm32-unknown-unknown (Tier 2 reactor,
+# docs/design/WASM_TIER2_PLAN.md). The archive
+# (target/wasm32-unknown-unknown/release/libplg_runtime.a) is embedded into a
+# wasm-enabled plgc by build.rs under `--features wasm`. Needs the target:
+#   rustup target add wasm32-unknown-unknown
+build-runtime-wasm-reactor:
+    @echo "Building reactor runtime (wasm32-unknown-unknown)..."
+    cargo build --locked --release -p patch-prolog-runtime --target wasm32-unknown-unknown
+    @echo "✅ Reactor runtime built: target/wasm32-unknown-unknown/release/libplg_runtime.a"
+
+# Install a wasm-capable plgc: builds BOTH wasm runtimes, then installs plgc
+# with the `wasm` feature so it can emit `--target wasm32-wasi` (Tier 1) and
+# `--target worker` (Tier 2 reactor) modules. Also needs the rustup llvm-tools
+# (llc/wasm-ld): rustup component add llvm-tools-preview
+install-wasm: build-runtime-wasm build-runtime-wasm-reactor
     @echo "Installing wasm-capable compiler (plgc --features wasm)..."
     cargo install --path crates/compiler --features wasm --force
     @echo "✅ Installed plgc with wasm support"

@@ -27,6 +27,16 @@ pub static WASM_RUNTIME_LIB: Option<&[u8]> =
 #[cfg(not(feature = "wasm"))]
 pub static WASM_RUNTIME_LIB: Option<&[u8]> = None;
 
+/// Embedded `wasm32-unknown-unknown` reactor archive (Tier 2). Per D5 the one
+/// `wasm` feature embeds *both* wasm archives, so this is `Some` exactly when
+/// [`WASM_RUNTIME_LIB`] is — a `--target worker` request on a non-wasm build
+/// fails with the same "rebuild with --features wasm" message.
+#[cfg(feature = "wasm")]
+pub static WORKER_RUNTIME_LIB: Option<&[u8]> =
+    Some(include_bytes!(env!("PLG_WORKER_RUNTIME_LIB_PATH")));
+#[cfg(not(feature = "wasm"))]
+pub static WORKER_RUNTIME_LIB: Option<&[u8]> = None;
+
 /// Arity ceiling for the argument-register ABI (mirrors the runtime's
 /// MAX_ARGS).
 pub const MAX_GOAL_ARITY: usize = 16;
@@ -159,13 +169,7 @@ pub fn compile_files(
     let result = match target {
         Target::Native => link::link_ir(&ir_path, output_path, opt),
         Target::Wasm => link::link_wasm(&ir_path, output_path, opt),
-        // The reactor link step (wasm-ld --no-entry, no crt/libc) lands in
-        // Phase C (WASM_TIER2_PLAN.md C1). The IR above is already correct —
-        // `--keep-ir` lets you inspect it meanwhile.
-        Target::Worker => Err(
-            "the `worker` target's link step is not wired yet (WASM_TIER2_PLAN.md Phase C)"
-                .to_string(),
-        ),
+        Target::Worker => link::link_wasm_reactor(&ir_path, output_path, opt),
     };
     if !keep_ir {
         std::fs::remove_file(&ir_path).ok();

@@ -65,8 +65,9 @@ enum Commands {
         /// Treat calls to undefined predicates as errors, not warnings
         #[arg(long)]
         deny_undefined: bool,
-        /// Compilation target: the host (default) or `wasm32-wasi` (a
-        /// standalone .wasm module; needs plgc built with `--features wasm`)
+        /// Compilation target: the host (default), `wasm32-wasi` (a standalone
+        /// CLI .wasm module), or `worker` (a Cloudflare Workers / V8 reactor
+        /// .wasm). Both wasm targets need plgc built with `--features wasm`.
         #[arg(long)]
         target: Option<String>,
     },
@@ -142,13 +143,15 @@ fn is_parse_error(msg: &str) -> bool {
 }
 
 /// Map the `--target` string to a [`plgc::Target`]. `None` and the host
-/// triple mean native; only `wasm32-wasi`/`wasm32-wasip1` select wasm.
+/// triple mean native; `wasm32-wasi`/`wasm32-wasip1` select the Tier-1 CLI
+/// module; `worker`/`wasm32-unknown-unknown` select the Tier-2 reactor.
 fn parse_target(target: Option<&str>) -> Result<plgc::Target, String> {
     match target {
         None | Some("native") => Ok(plgc::Target::Native),
         Some("wasm32-wasi") | Some("wasm32-wasip1") => Ok(plgc::Target::Wasm),
+        Some("worker") | Some("wasm32-unknown-unknown") => Ok(plgc::Target::Worker),
         Some(other) => Err(format!(
-            "unknown target `{other}` (supported: native, wasm32-wasi)"
+            "unknown target `{other}` (supported: native, wasm32-wasi, worker)"
         )),
     }
 }
@@ -282,5 +285,39 @@ fn main() -> ExitCode {
             clap_complete::generate(shell, &mut cmd, name, &mut std::io::stdout());
             ExitCode::SUCCESS
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_target_maps_known_targets() {
+        assert_eq!(parse_target(None).unwrap(), plgc::Target::Native);
+        assert_eq!(parse_target(Some("native")).unwrap(), plgc::Target::Native);
+        assert_eq!(
+            parse_target(Some("wasm32-wasi")).unwrap(),
+            plgc::Target::Wasm
+        );
+        assert_eq!(
+            parse_target(Some("wasm32-wasip1")).unwrap(),
+            plgc::Target::Wasm
+        );
+        // Tier 2 reactor: both the friendly name and the triple select Worker.
+        assert_eq!(parse_target(Some("worker")).unwrap(), plgc::Target::Worker);
+        assert_eq!(
+            parse_target(Some("wasm32-unknown-unknown")).unwrap(),
+            plgc::Target::Worker
+        );
+    }
+
+    #[test]
+    fn parse_target_rejects_unknown_and_lists_supported() {
+        let err = parse_target(Some("wasm64")).unwrap_err();
+        assert!(
+            err.contains("worker"),
+            "supported list must mention worker: {err}"
+        );
     }
 }

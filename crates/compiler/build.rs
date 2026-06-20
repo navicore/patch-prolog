@@ -84,20 +84,36 @@ fn main() {
     // uplifted top-level name is reliable (unlike the native deps/ case above).
     if env::var_os("CARGO_FEATURE_WASM").is_some() {
         let target_root = target_dir.parent().expect("target root");
-        let wasm_lib = target_root.join("wasm32-wasip1/release/libplg_runtime.a");
-        if !wasm_lib.exists() {
-            panic!(
-                "feature `wasm` is enabled but the wasm runtime archive is missing:\n  {}\n\
-                 Build it first:  just build-runtime-wasm",
-                wasm_lib.display()
-            );
-        }
-        println!(
-            "cargo:rustc-env=PLG_WASM_RUNTIME_LIB_PATH={}",
-            wasm_lib.display()
+        embed_wasm_archive(
+            &target_root.join("wasm32-wasip1/release/libplg_runtime.a"),
+            "PLG_WASM_RUNTIME_LIB_PATH",
+            "just build-runtime-wasm",
         );
-        println!("cargo:rerun-if-changed={}", wasm_lib.display());
+        // Tier 2 (WASM_TIER2_PLAN.md C2 / D5): the same `wasm` feature also
+        // embeds the `wasm32-unknown-unknown` reactor archive, so one install
+        // story covers both wasm targets. Build-time cost only.
+        embed_wasm_archive(
+            &target_root.join("wasm32-unknown-unknown/release/libplg_runtime.a"),
+            "PLG_WORKER_RUNTIME_LIB_PATH",
+            "just build-runtime-wasm-reactor",
+        );
     }
+}
+
+/// Point an `include_bytes!` env var at a primary-build wasm runtime archive,
+/// failing with the recipe that produces it when absent. (These are *primary*
+/// builds of plg-runtime, so the uplifted top-level name is reliable — unlike
+/// the native deps/ case handled by `newest_runtime_lib`.)
+fn embed_wasm_archive(lib: &Path, env_var: &str, build_recipe: &str) {
+    if !lib.exists() {
+        panic!(
+            "feature `wasm` is enabled but a wasm runtime archive is missing:\n  {}\n\
+             Build it first:  {build_recipe}",
+            lib.display()
+        );
+    }
+    println!("cargo:rustc-env={env_var}={}", lib.display());
+    println!("cargo:rerun-if-changed={}", lib.display());
 }
 
 /// FNV-1a, 64-bit: tiny, dependency-free, and deterministic across builds,
