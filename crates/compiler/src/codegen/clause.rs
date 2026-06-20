@@ -276,6 +276,11 @@ impl CodeGen<'_> {
     /// full Rust walker via `plg_rt_metacall`, which the runtime depth guard
     /// bounds. Both branches `ret`; emit only in tail position. `g` is the
     /// SSA value already holding the goal term.
+    ///
+    /// Note the slow path is `call + ret`, NOT `musttail` (the goal there is a
+    /// builtin/control construct, not a single resolvable entry). That is
+    /// deliberate: the runtime depth guard — not last-call optimisation — is
+    /// what keeps it from overflowing. Don't "fix" it to `musttail`.
     pub(crate) fn emit_metacall(&mut self, b: &mut String, g: &str) {
         let fp = self.fresh();
         let z = self.fresh();

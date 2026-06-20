@@ -562,7 +562,9 @@ pub unsafe extern "C" fn plg_rt_metacall(m: *mut Machine, goal: u64) -> i32 {
 /// `plg_rt_metacall`, which is bounded by the depth guard in `call_goal`.
 ///
 /// Sets `qbarrier` exactly as `plg_rt_metacall` does, so cut-transparency of
-/// `call/N` is identical on both paths.
+/// `call/N` is identical on both paths. The fast path does NOT bump
+/// `metacall_depth`: a `musttail` into the resolved entry leaves no walker
+/// frame to bound (only the slow path re-enters `call_goal`, which guards).
 ///
 /// # Safety
 /// Called from generated code with the live Machine pointer.
@@ -576,22 +578,27 @@ pub unsafe extern "C" fn plg_rt_metacall_resolve(m: *mut Machine, goal: u64) -> 
     }
 }
 
-fn resolve_goal_ptr(m: &mut Machine, goal: Word) -> Option<ContFn> {
-    let goal = m.deref(goal);
-    match tag_of(goal) {
-        TAG_ATOM => crate::solve::resolve_simple(m, atom_id(goal), 0, 0),
-        TAG_STR => {
-            let idx = payload(goal) as usize;
-            let (f, n) = unpack_functor(m.heap[idx]);
-            // Peel a single `call/1` wrapper so `call(pred(..))` trampolines.
-            // `call/N` with extras (and deeper/nested wrappers) go to the
-            // walker, which builds the extended goal in `metacall_extend`.
-            if n == 1 && m.atoms.resolve(f) == "call" {
-                return resolve_goal_ptr(m, m.heap[idx + 1]);
+fn resolve_goal_ptr(m: &mut Machine, mut goal: Word) -> Option<ContFn> {
+    loop {
+        goal = m.deref(goal);
+        match tag_of(goal) {
+            TAG_ATOM => return crate::solve::resolve_simple(m, atom_id(goal), 0, 0),
+            TAG_STR => {
+                let idx = payload(goal) as usize;
+                let (f, n) = unpack_functor(m.heap[idx]);
+                // Peel `call/1` wrappers *iteratively* so `call(pred(..))`
+                // trampolines — and so even a pathological `call(call(...))`
+                // chain can't overflow the resolver's own stack. `call/N` with
+                // extras (and other shapes) go to the walker, which builds the
+                // extended goal in `metacall_extend`.
+                if n == 1 && m.atoms.resolve(f) == "call" {
+                    goal = m.heap[idx + 1];
+                    continue;
+                }
+                return crate::solve::resolve_simple(m, f, n, idx + 1);
             }
-            crate::solve::resolve_simple(m, f, n, idx + 1)
+            _ => return None,
         }
-        _ => None,
     }
 }
 

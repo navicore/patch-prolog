@@ -82,6 +82,31 @@ impl Drop for ErrorSiteGuard {
     }
 }
 
+/// RAII bound on `metacall_depth` (#23): increments on `enter`, decrements on
+/// `Drop`, so the count unwinds on *every* exit path of `call_goal` — early
+/// return on the limit, normal return, or a panic. Same discipline as
+/// `ErrorSiteGuard`; matters once a Machine outlives a single query (the
+/// embedding designs), where a leaked `+1` would tighten the ceiling on reuse.
+#[must_use = "binding to `let _` drops the guard immediately; use `let _g = ...`"]
+pub(crate) struct MetacallDepthGuard {
+    m: *mut Machine,
+}
+
+impl MetacallDepthGuard {
+    pub(crate) fn enter(m: *mut Machine) -> Self {
+        // SAFETY: `m` is the live Machine pointer `call_goal` was entered with;
+        // the `Drop` write runs after its `&mut Machine` borrows have ended.
+        unsafe { (*m).metacall_depth += 1 };
+        MetacallDepthGuard { m }
+    }
+}
+
+impl Drop for MetacallDepthGuard {
+    fn drop(&mut self) {
+        unsafe { (*self.m).metacall_depth -= 1 };
+    }
+}
+
 /// Catch frames participate in error unwinding (drive() in solve.rs)
 /// and stop cut truncation (v1 rule: catch is opaque to cut).
 #[derive(Clone, Copy, PartialEq)]

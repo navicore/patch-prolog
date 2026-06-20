@@ -129,9 +129,10 @@ unsafe extern "C" fn capture_k(m: *mut Machine, _env: u64) -> i32 {
 /// the native C stack. Compiled tail recursion reaches the callee via the
 /// resolve trampoline and never passes through here.
 pub fn call_goal(m: &mut Machine, goal: Word) -> i32 {
-    m.metacall_depth += 1;
+    // The guard increments now and decrements on every exit path (incl. panic
+    // unwind), so the depth can't leak — see `MetacallDepthGuard`.
+    let _depth = crate::machine::MetacallDepthGuard::enter(m as *mut Machine);
     if m.metacall_depth > m.metacall_depth_limit {
-        m.metacall_depth -= 1;
         let ctx = format!(
             "Maximum metacall recursion depth exceeded ({})",
             m.metacall_depth_limit
@@ -139,9 +140,7 @@ pub fn call_goal(m: &mut Machine, goal: Word) -> i32 {
         crate::errors::resource(m, "metacall_depth", &ctx, true);
         return 0;
     }
-    let r = call_goal_inner(m, goal);
-    m.metacall_depth -= 1;
-    r
+    call_goal_inner(m, goal)
 }
 
 fn call_goal_inner(m: &mut Machine, goal: Word) -> i32 {

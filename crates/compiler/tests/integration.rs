@@ -471,3 +471,26 @@ fn metacall_depth_error_is_uncatchable() {
         "stdout: {stdout}"
     );
 }
+
+#[test]
+fn metacall_depth_limit_is_env_configurable() {
+    // #23 review: the depth bound is tunable via PLG_METACALL_DEPTH, mirroring
+    // PLG_MAX_STEPS, so it can be matched to the stack the binary runs under.
+    // A low value makes the guard fire earlier and the message reflects it.
+    let src = "loop(0).\nloop(N) :- N > 0, N1 is N - 1, call((true, loop(N1))).\n";
+    let c = compile(src);
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "PLG_MAX_STEPS=1000000000 PLG_METACALL_DEPTH=50 {} --query 'loop(100000)'",
+            c.bin.display()
+        ))
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(3), "stdout: {stdout}");
+    assert!(
+        stdout.contains("Maximum metacall recursion depth exceeded (50)"),
+        "stdout: {stdout}"
+    );
+}
