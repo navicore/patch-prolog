@@ -31,6 +31,64 @@ build-runtime:
     cargo build --locked --release -p patch-prolog-runtime
     @echo "✅ Runtime built: target/release/libplg_runtime.a"
 
+# Build the runtime for wasm32-wasip1 (Tier 1, docs/design/WASM.md). The
+# archive (target/wasm32-wasip1/release/libplg_runtime.a) is embedded into a
+# wasm-enabled plgc by build.rs under `--features wasm`. Needs the wasm target:
+#   rustup target add wasm32-wasip1
+build-runtime-wasm:
+    @echo "Building wasm runtime (wasm32-wasip1)..."
+    cargo build --locked --release -p patch-prolog-runtime --target wasm32-wasip1
+    @echo "✅ Wasm runtime built: target/wasm32-wasip1/release/libplg_runtime.a"
+
+# Install a wasm-capable plgc: builds the wasm runtime, then installs plgc with
+# the `wasm` feature so it can emit `--target wasm32-wasi` modules. Also needs
+# the rustup llvm-tools (llc/wasm-ld): rustup component add llvm-tools-preview
+install-wasm: build-runtime-wasm
+    @echo "Installing wasm-capable compiler (plgc --features wasm)..."
+    cargo install --path crates/compiler --features wasm --force
+    @echo "✅ Installed plgc with wasm support"
+
+# Tier 1 wasm smoke test (LOCAL only — not in CI yet). Needs: the
+# wasm32-wasip1 target, llvm-tools-preview, and wasmtime on PATH. Compiles an
+# example to wasm and asserts it answers --query byte-identically to native.
+wasm-smoke: build-runtime-wasm
+    #!/usr/bin/env bash
+    set -euo pipefail
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+    echo "Compiling examples/deps.pl (native + wasm)..."
+    cargo run -q -p patch-prolog-compiler --bin plgc -- \
+        build examples/deps.pl -o "$work/deps-native"
+    cargo run -q --features wasm -p patch-prolog-compiler --bin plgc -- \
+        build examples/deps.pl -o "$work/deps.wasm" --target wasm32-wasi
+    fail=0
+    # `--query` exits 1 when solutions are found (the wire contract), so the
+    # captures must not trip `set -e`; the byte comparison is the real check.
+    for q in "needs(app, X)" "depends_on(app, D)" "shared_deps(auth, render, Ds)"; do
+        native=$("$work/deps-native" --query "$q" --format json || true)
+        wasm=$(wasmtime run "$work/deps.wasm" --query "$q" --format json || true)
+        if [ "$native" = "$wasm" ]; then
+            echo "✅ $q"
+        else
+            echo "❌ $q"; echo "   native: $native"; echo "   wasm:   $wasm"; fail=1
+        fi
+    done
+    # Constant-stack proof (the wasm analog of PR #24's native ulimit test):
+    # deep call/1 recursion must run under a *small* wasm stack via return_call
+    # — without the musttail lowering it would overflow. PLG_MAX_STEPS must be
+    # passed with --env because WASI does not inherit the host environment.
+    printf 'count(0).\ncount(N) :- N > 0, N1 is N - 1, call(count(N1)).\n' > "$work/rec.pl"
+    cargo run -q --features wasm -p patch-prolog-compiler --bin plgc -- \
+        build "$work/rec.pl" -o "$work/rec.wasm" --target wasm32-wasi
+    deep=$(wasmtime run --env PLG_MAX_STEPS=100000000 -W max-wasm-stack=1048576 \
+        "$work/rec.wasm" --query "count(1000000)" --format text || true)
+    if [ "$deep" = "true." ]; then
+        echo "✅ constant stack: 1,000,000-deep call/1 under a 1MB wasm stack"
+    else
+        echo "❌ deep recursion expected 'true.', got '$deep'"; fail=1
+    fi
+    exit $fail
+
 # Build the compiler
 build-compiler:
     @echo "Building compiler..."

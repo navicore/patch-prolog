@@ -75,6 +75,29 @@ fn main() {
 
     // Rerun if the runtime library changes
     println!("cargo:rerun-if-changed={}", runtime_lib.display());
+
+    // Wasm Tier 1 (docs/design/WASM.md): when built `--features wasm`, also
+    // embed the `wasm32-wasip1` runtime archive, built out-of-band by
+    // `just build-runtime-wasm`. Behind the feature so the default
+    // `cargo install plgc` is byte-for-byte unchanged and needs no wasm
+    // toolchain. The wasm archive is a *primary* build of plg-runtime, so its
+    // uplifted top-level name is reliable (unlike the native deps/ case above).
+    if env::var_os("CARGO_FEATURE_WASM").is_some() {
+        let target_root = target_dir.parent().expect("target root");
+        let wasm_lib = target_root.join("wasm32-wasip1/release/libplg_runtime.a");
+        if !wasm_lib.exists() {
+            panic!(
+                "feature `wasm` is enabled but the wasm runtime archive is missing:\n  {}\n\
+                 Build it first:  just build-runtime-wasm",
+                wasm_lib.display()
+            );
+        }
+        println!(
+            "cargo:rustc-env=PLG_WASM_RUNTIME_LIB_PATH={}",
+            wasm_lib.display()
+        );
+        println!("cargo:rerun-if-changed={}", wasm_lib.display());
+    }
 }
 
 /// FNV-1a, 64-bit: tiny, dependency-free, and deterministic across builds,
