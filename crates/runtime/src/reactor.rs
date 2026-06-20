@@ -50,6 +50,8 @@ pub extern "C" fn plg_rt_alloc(len: u32) -> *mut u8 {
 
 /// # Safety
 /// `ptr`/`len` must be exactly a prior `plg_rt_alloc`/`plg_rt_run_query` pair.
+/// `len == 0` no-ops to pair with `raw_alloc(0)`'s dangling sentinel (which was
+/// never really allocated); the two halves agree by convention, not by API.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn plg_rt_free(ptr: *mut u8, len: u32) {
     if len == 0 {
@@ -59,7 +61,9 @@ pub unsafe extern "C" fn plg_rt_free(ptr: *mut u8, len: u32) {
 }
 
 /// Run one query (UTF-8 at `qptr..qptr+qlen`); return packed `(len << 32) | ptr`
-/// of a JSON byte buffer the host reads then frees via `plg_rt_free`.
+/// of a JSON byte buffer the host reads then frees via `plg_rt_free`. The packed
+/// return assumes wasm32 (the pointer fits in the low 32 bits); wasm64 would
+/// need a wider/two-value result.
 ///
 /// # Safety
 /// Requires `plg_init` to have run first; `qptr`/`qlen` a valid buffer.
