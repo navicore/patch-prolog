@@ -166,9 +166,7 @@ impl CodeGen<'_> {
                     let rest_after = self.rest_after(rest, after, ctx, cut_slot);
                     self.emit_set_k(b, &rest_after, &bf);
                     let g = self.emit_term(b, t, vars)?;
-                    let r = self.fresh();
-                    writeln!(b, "  {r} = call i32 @plg_rt_metacall(ptr %m, i64 {g})").unwrap();
-                    writeln!(b, "  ret i32 {r}").unwrap();
+                    self.emit_metacall(b, &g);
                     return Ok(());
                 }
                 LGoalKind::Disj(a, b2) => {

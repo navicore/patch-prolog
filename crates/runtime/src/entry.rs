@@ -194,6 +194,15 @@ pub unsafe extern "C" fn plg_rt_main(
     {
         m.step_limit = n;
     }
+    // Same knob for the metacall depth bound (#23): tune it to the stack the
+    // binary will run under — lower it for a small `ulimit -s`, raise it on a
+    // generous stack. Mirrors `PLG_MAX_STEPS`; the default (1000) is set in
+    // `Machine::new`.
+    if let Ok(s) = std::env::var("PLG_METACALL_DEPTH")
+        && let Ok(n) = s.parse::<usize>()
+    {
+        m.metacall_depth_limit = n;
+    }
 
     let goal = match query::parse_query(m, &args.query) {
         Ok(g) => g,
