@@ -229,3 +229,22 @@ fn big_integer_literals_box_at_runtime() {
         "{ir}"
     );
 }
+
+#[test]
+fn metacall_compiles_to_resolve_trampoline() {
+    // #23: call/N in a clause body resolves the goal to a compiled entry and
+    // `musttail`s into it (constant C stack for `call(pred(..))` tail
+    // recursion), with a fallback branch to the full Rust walker for
+    // builtins / control constructs. The resolve call and the walker fallback
+    // are the load-bearing markers of the trampoline shape.
+    let ir = plgc::compile_to_ir("p(X) :- call(q(X)).\nq(a).").unwrap();
+    // fast path: resolve to a fn ptr, branch on it, indirect musttail jump
+    assert!(
+        ir.contains("call i64 @plg_rt_metacall_resolve(ptr %m"),
+        "{ir}"
+    );
+    assert!(ir.contains("inttoptr i64"), "{ir}");
+    assert!(ir.contains("musttail call i32"), "{ir}");
+    // slow path: fall back to the full walker (depth-guarded at runtime)
+    assert!(ir.contains("call i32 @plg_rt_metacall(ptr %m"), "{ir}");
+}

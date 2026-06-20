@@ -268,6 +268,38 @@ impl CodeGen<'_> {
         Ok(())
     }
 
+    /// Emit a runtime metacall in tail position (`call/N`, or a variable
+    /// goal). Fast path: resolve the goal to a compiled predicate entry and
+    /// `musttail` into it, so `call(pred(...))` tail recursion keeps constant
+    /// C stack (#23) — exactly like a direct call. Slow path (builtins,
+    /// control constructs, `call/N` with extras, errors): fall back to the
+    /// full Rust walker via `plg_rt_metacall`, which the runtime depth guard
+    /// bounds. Both branches `ret`; emit only in tail position. `g` is the
+    /// SSA value already holding the goal term.
+    pub(crate) fn emit_metacall(&mut self, b: &mut String, g: &str) {
+        let fp = self.fresh();
+        let z = self.fresh();
+        let jump = self.fresh_label();
+        let complex = self.fresh_label();
+        let fpp = self.fresh();
+        let r = self.fresh();
+        let r2 = self.fresh();
+        writeln!(
+            b,
+            "  {fp} = call i64 @plg_rt_metacall_resolve(ptr %m, i64 {g})"
+        )
+        .unwrap();
+        writeln!(b, "  {z} = icmp eq i64 {fp}, 0").unwrap();
+        writeln!(b, "  br i1 {z}, label %{complex}, label %{jump}").unwrap();
+        writeln!(b, "{jump}:").unwrap();
+        writeln!(b, "  {fpp} = inttoptr i64 {fp} to ptr").unwrap();
+        writeln!(b, "  {r} = musttail call i32 {fpp}(ptr %m, i64 0)").unwrap();
+        writeln!(b, "  ret i32 {r}").unwrap();
+        writeln!(b, "{complex}:").unwrap();
+        writeln!(b, "  {r2} = call i32 @plg_rt_metacall(ptr %m, i64 {g})").unwrap();
+        writeln!(b, "  ret i32 {r2}").unwrap();
+    }
+
     /// Emit a predicate call in tail position: load argument registers
     /// and `musttail` into the callee (the installed k continues).
     pub fn emit_call_tail(
@@ -330,9 +362,7 @@ impl CodeGen<'_> {
                     args: args.to_vec(),
                 };
                 let g = self.emit_term(b, &goal, vars)?;
-                let r = self.fresh();
-                writeln!(b, "  {r} = call i32 @plg_rt_metacall(ptr %m, i64 {g})").unwrap();
-                writeln!(b, "  ret i32 {r}").unwrap();
+                self.emit_metacall(b, &g);
                 return Ok(());
             }
             ("between", 3) => {

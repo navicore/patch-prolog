@@ -119,6 +119,14 @@ pub struct Machine {
     pub k_env: u64,
     pub steps: u64,
     pub step_limit: u64,
+    /// Live nesting depth of the runtime goal-walker (`call_goal`). Compiled
+    /// predicate-to-predicate transfers `musttail` and never touch this; only
+    /// runtime-walked goals (queries, `call/N`, `findall/3`, `catch/3`
+    /// recovery) recurse the C stack here. Bounded by `metacall_depth_limit`
+    /// so a deep non-trampolined metacall fails gracefully instead of
+    /// overflowing the native stack (#23).
+    pub metacall_depth: usize,
+    pub metacall_depth_limit: usize,
     pub error: Option<RtError>,
     pub atoms: StringInterner,
     pub registry: Vec<RegistryEntry>,
@@ -170,6 +178,12 @@ impl Machine {
             k_env: 0,
             steps: 0,
             step_limit: 10_000, // v1 default
+            metacall_depth: 0,
+            // Conservative: well below the native C-stack capacity (~5-6k
+            // walker frames overflow an 8MB stack). The trampoline keeps the
+            // common `call(pred)` tail recursion off this path entirely, so
+            // this only bounds rare control-construct / findall recursion.
+            metacall_depth_limit: 1000,
             error: None,
             atoms,
             registry,

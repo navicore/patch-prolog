@@ -368,3 +368,106 @@ fn deep_recursion_runs_in_constant_c_stack() {
     );
     assert_eq!(out.status.code(), Some(1));
 }
+
+#[test]
+fn call1_recursion_runs_in_constant_c_stack() {
+    // #23: tail recursion through call/1 must trampoline (resolve + musttail)
+    // to constant C stack. Before the fix this SIGSEGV'd at ~5k deep on an 8MB
+    // stack; 100k deep under a 512KB stack would have no chance. It now runs
+    // exactly like the direct-recursion case above.
+    let src = "count(0).\ncount(N) :- N > 0, N1 is N - 1, call(count(N1)).\n";
+    let c = compile(src);
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "ulimit -s 512; PLG_MAX_STEPS=100000000 {} --query 'count(100000)' --format text",
+            c.bin.display()
+        ))
+        .output()
+        .expect("run with ulimit");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "true.\n",
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(1));
+}
+
+#[test]
+fn metacall_depth_guard_fails_gracefully_not_sigsegv() {
+    // #23: a control construct as the recursive goal every level is NOT
+    // trampolinable; it must hit the runtime depth guard and fail with a clean
+    // resource_error instead of overflowing the native stack. The key
+    // assertion is the exit code: 3 (clean runtime error), never 139 (SIGSEGV)
+    // or a signal. Steps are raised so the depth guard, not the step limit,
+    // is what fires.
+    let src = "loop(0).\nloop(N) :- N > 0, N1 is N - 1, call((true, loop(N1))).\n";
+    let c = compile(src);
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "PLG_MAX_STEPS=1000000000 {} --query 'loop(1000000)'",
+            c.bin.display()
+        ))
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "must be a clean runtime error, not a crash. stdout: {stdout} stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains("resource_error(metacall_depth)"),
+        "stdout: {stdout}"
+    );
+}
+
+#[test]
+fn deep_findall_goal_fails_gracefully() {
+    // The depth guard sits at the single call_goal chokepoint, so it also
+    // bounds findall/3's goal re-entry: a deep non-trampolined goal inside
+    // findall fails cleanly (exit 3) rather than crashing the process.
+    let src = "g(0).\ng(N) :- N > 0, N1 is N - 1, call((true, g(N1))).\n";
+    let c = compile(src);
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "PLG_MAX_STEPS=1000000000 {} --query 'findall(x, g(1000000), _)'",
+            c.bin.display()
+        ))
+        .output()
+        .expect("run");
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "stdout: {} stderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn metacall_depth_error_is_uncatchable() {
+    // Like the step limit, the depth guard is a safety bound: catch/3 must NOT
+    // swallow it (else a program could trap its own near-overflow and keep
+    // recursing). The catch is present yet the query still exits 3.
+    let src = "loop(0).\nloop(N) :- N > 0, N1 is N - 1, call((true, loop(N1))).\n";
+    let c = compile(src);
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "PLG_MAX_STEPS=1000000000 {} --query 'catch(loop(1000000), _, true)'",
+            c.bin.display()
+        ))
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(3), "stdout: {stdout}");
+    assert!(
+        stdout.contains("resource_error(metacall_depth)"),
+        "stdout: {stdout}"
+    );
+}

@@ -122,7 +122,29 @@ unsafe extern "C" fn capture_k(m: *mut Machine, _env: u64) -> i32 {
 /// go through `control::try_builtin`; everything else is a registry
 /// lookup into compiled code. Also used by control continuations (and
 /// later by call/1 and findall/3).
+///
+/// Wraps the walk in a depth guard (#23): runtime-walked recursion that is
+/// not trampolined (control-construct metacalls, deep `findall/3` or `catch/3`
+/// recovery) fails with an uncatchable resource error instead of overflowing
+/// the native C stack. Compiled tail recursion reaches the callee via the
+/// resolve trampoline and never passes through here.
 pub fn call_goal(m: &mut Machine, goal: Word) -> i32 {
+    m.metacall_depth += 1;
+    if m.metacall_depth > m.metacall_depth_limit {
+        m.metacall_depth -= 1;
+        let ctx = format!(
+            "Maximum metacall recursion depth exceeded ({})",
+            m.metacall_depth_limit
+        );
+        crate::errors::resource(m, "metacall_depth", &ctx, true);
+        return 0;
+    }
+    let r = call_goal_inner(m, goal);
+    m.metacall_depth -= 1;
+    r
+}
+
+fn call_goal_inner(m: &mut Machine, goal: Word) -> i32 {
     let goal = m.deref(goal);
     match tag_of(goal) {
         TAG_ATOM => {
@@ -152,19 +174,39 @@ pub fn call_goal(m: &mut Machine, goal: Word) -> i32 {
     }
 }
 
-fn dispatch(m: &mut Machine, functor: u32, arity: u32, args_idx: usize) -> i32 {
-    let Some(f) = m.registry_lookup(functor, arity) else {
-        let name = m.atoms.resolve(functor).to_string();
-        // Query-side / metacall undefined goals have no compiled call site;
-        // `m.error_site` stays `NO_SITE`, so no provenance suffix is added.
-        crate::errors::existence_procedure(m, &name, arity);
-        return 0;
-    };
+/// Resolve a goal's functor/arity to a compiled predicate entry, marshalling
+/// its arguments into the arg registers. Returns `None` when no such predicate
+/// is registered — builtins and control constructs are never in the registry,
+/// so they fall through here too (the caller routes them to the walker).
+///
+/// Single source of the lookup+marshal, shared by `dispatch` (a Rust call) and
+/// `plg_rt_metacall_resolve` (the IR `musttail` trampoline), so the two paths
+/// cannot drift.
+pub(crate) fn resolve_simple(
+    m: &mut Machine,
+    functor: u32,
+    arity: u32,
+    args_idx: usize,
+) -> Option<crate::machine::ContFn> {
+    let f = m.registry_lookup(functor, arity)?;
     debug_assert!(arity as usize <= MAX_ARGS);
     for i in 0..arity as usize {
         m.areg[i] = m.heap[args_idx + i];
     }
-    unsafe { f(m as *mut Machine, 0) }
+    Some(f)
+}
+
+fn dispatch(m: &mut Machine, functor: u32, arity: u32, args_idx: usize) -> i32 {
+    match resolve_simple(m, functor, arity, args_idx) {
+        Some(f) => unsafe { f(m as *mut Machine, 0) },
+        None => {
+            let name = m.atoms.resolve(functor).to_string();
+            // Query-side / metacall undefined goals have no compiled call site;
+            // `m.error_site` stays `NO_SITE`, so no provenance suffix is added.
+            crate::errors::existence_procedure(m, &name, arity);
+            0
+        }
+    }
 }
 
 #[cfg(test)]
