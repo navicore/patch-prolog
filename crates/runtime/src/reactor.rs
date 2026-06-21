@@ -1,6 +1,6 @@
 //! Tier-2 reactor ABI for `wasm32-unknown-unknown` (Cloudflare Workers / V8
 //! isolates). No WASI, no stdio/argv — the module *exports* functions a JS
-//! host calls over linear memory (docs/design/WASM_TIER2_PLAN.md A3):
+//! host calls over linear memory (docs/design/done/WASM_TIER2_PLAN.md A3):
 //!
 //!   plg_init                       (emitted by the generated module) → builds
 //!                                  the Machine, hands it to `plg_rt_set_machine`

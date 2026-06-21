@@ -1,11 +1,11 @@
-// Reactor smoke harness (Tier 2, docs/design/WASM_TIER2_PLAN.md). Instantiates
+// Reactor smoke harness (Tier 2, docs/design/done/WASM_TIER2_PLAN.md). Instantiates
 // a `--target worker` module under Node's V8 — the same engine Cloudflare
 // Workers use — and round-trips ONE query through the buffer ABI.
 //
 // IMPORTANT: the marshalling itself is NOT duplicated here. This harness imports
 // the *emitted* `reactor.mjs` sitting next to the module — the exact file
-// `worker.js` deploys — so `just reactor-smoke` exercises the shipped code, not
-// a parallel copy. The harness only does the host-specific parts Node and
+// `worker.js` deploys — so `just wasm-reactor-smoke` exercises the shipped code,
+// not a parallel copy. The harness only does the host-specific parts Node and
 // workerd don't share: read the bytes, instantiate, and print the result.
 //
 // Usage: node reactor-smoke.mjs <module.wasm> <query> [step_limit]

@@ -1,11 +1,11 @@
-//! Worker glue emission (Tier 2, docs/design/WASM_TIER2_PLAN.md D1g).
+//! Worker glue emission (Tier 2, docs/design/done/WASM_TIER2_PLAN.md D1g).
 //!
 //! `plgc build --target worker prog.pl` drops four overrideable scaffolding
 //! files next to the reactor `.wasm` so it "just works" (D2):
 //!
 //! - `reactor.mjs` — the buffer-ABI marshalling (`runQuery`/`assertExports`).
 //!   This is the ONE copy of the ABI dance; both the deployed `worker.js` and
-//!   the `reactor-smoke` test driver import it, so the tested code is the
+//!   the `wasm-reactor-smoke` test driver import it, so the tested code is the
 //!   shipped code and the 5-arg `plg_rt_run_query` call can't drift between them.
 //! - `worker.js` — a Cloudflare/`workerd` fetch handler that instantiates the
 //!   module and calls `reactor.mjs`'s `runQuery`.

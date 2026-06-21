@@ -16,8 +16,8 @@ path = "src/lib.rs"
 
 [features]
 # Embeds BOTH wasm runtime archives so plgc can emit `--target wasm32-wasi`
-# (Tier 1, docs/design/WASM.md) and `--target worker` (Tier 2 reactor,
-# docs/design/WASM_TIER2_PLAN.md) modules. Off by default: the standard
+# (Tier 1, docs/design/done/WASM.md) and `--target worker` (Tier 2 reactor,
+# docs/design/done/WASM_TIER2_PLAN.md) modules. Off by default: the standard
 # `cargo install plgc` is unchanged and needs no wasm toolchain. Requires
 # `just build-runtime-wasm` and `just build-runtime-wasm-reactor` to have
 # produced the archives first (both run by `just install-wasm`).

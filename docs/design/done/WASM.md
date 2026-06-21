@@ -1,9 +1,10 @@
 # Design: WASM target (edge / scale-to-zero)
 
-Status: **exploratory** — a real intended track, not yet a milestone. Gated
-behind one make-or-break risk (see Checkpoint 0). Sibling of `INVOCATION.md`:
-WASM is the *distribution / scale-to-zero* axis, distinct from native per-node
-throughput.
+Status: **SHIPPED** — both tiers landed (Tier 1 = ROADMAP M10, Tier 2 = M11).
+Archived here for the design rationale and the Checkpoint-0 / gate record; the
+user-facing guides are `docs/wasm-target.md` (Tier 1) and `docs/wasm-worker.md`
+(Tier 2). Sibling of `INVOCATION.md`: WASM is the *distribution / scale-to-zero*
+axis, distinct from native per-node throughput.
 
 ## Intent
 

@@ -232,7 +232,42 @@ Gate results:
   shipped `.wasm` runs with only a wasm engine present.
 - Deferred: CI wiring (local-only for now — `just wasm-smoke`), and `plgc run
   --target wasm32-wasi` via a bundled engine. Tier 2 (V8 isolates / Cloudflare
-  Workers) remains design-only (docs/design/WASM.md).
+  Workers) remains design-only (docs/design/done/WASM.md).
+
+## M11 — WASM Tier 2 (`--target worker`) ✅ (2026-06-20)
+
+`plgc build --target worker` emits a **reactor** module for
+`wasm32-unknown-unknown` — no `main`, no WASI: it exports `plg_init` plus a
+linear-memory buffer ABI a V8 isolate (Cloudflare Workers / `workerd`) calls per
+request. The same LLVM IR as native and Tier 1 is retargeted, so a query is a
+warm in-isolate call answering byte-identically to native. The I/O-free query
+core (`runtime/src/core.rs`) is factored out and shared by the WASI shell and
+the reactor — one JSON wire shape, no duplication. The reactor takes per-request
+solution/step/metacall-depth limits over the ABI, captures `write/1` output
+losslessly (no stdout in an isolate), and reuses one Machine per isolate via
+`Machine::reset_per_query`. The one `wasm` feature now embeds both wasm archives
+(`wasm32-wasip1` + `wasm32-unknown-unknown`); `plgc` also drops overrideable
+deploy glue (`worker.js` + `reactor.mjs` + `wrangler.toml` + `config.capnp`)
+next to the `.wasm`. User guide: [WASM Worker](wasm-worker.md).
+
+Gate results:
+- HTTP equivalence on **`workerd`** (the real Workers runtime, V8 isolate):
+  `--query` over GET/POST answers byte-identically to native, **including the
+  `existence_error` path** (`just wasm-worker-serve` + curl).
+- Constant stack on V8: a 1,000,000-deep `call/1` returns in the isolate via
+  `return_call` — **automated** (`just wasm-reactor-smoke`, run under Node's V8).
+- Self-contained module: zero imports, exactly the four host exports
+  (`plg_init`/`plg_rt_run_query`/`plg_rt_alloc`/`plg_rt_free`) + `memory`, no
+  `_start`; ~1.7 MB raw for the `deps` example.
+- Default `cargo install plgc` byte-for-byte unchanged — the reactor archive and
+  glue live behind the `wasm` feature.
+- Single-sourced glue: the buffer-ABI marshalling lives once in the emitted
+  `reactor.mjs`, imported by both the deployed `worker.js` and the smoke test,
+  so the tested code is the shipped code.
+- CI: both tiers' gates run in a **separate wasm workflow**
+  (`just wasm-ci` = `wasm-lint` + `wasm-smoke` + `wasm-reactor-smoke`), so a
+  runner missing the wasm toolchain never breaks the core `just ci` — closing
+  M10's deferred CI item for Tier 1 too.
 
 ## Future (explicitly out of scope)
 
@@ -246,8 +281,7 @@ Gate results:
 - REPL (`plgr`) enhancements: an LLVM-IR visualization pane, LSP-client-backed
   completion, and cross-session caching of compiled binaries (all optional)
 - `assert/retract` beyond the silent-fail dynamic contract
-- WASM Tier 2: `wasm32-unknown-unknown` for V8 isolates / Cloudflare Workers
-  (a host-call entry, not a CLI — design-only in docs/design/WASM.md). Native
-  cross-compilation to other host arches.
+- Native cross-compilation to other host arches. (WASM Tier 2 — V8 isolates /
+  Cloudflare Workers — shipped in M11.)
 - bagof/setof, DCG, modules, `op/3` (v1 scope decisions — the language
   definition excludes them deliberately)

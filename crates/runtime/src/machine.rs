@@ -110,7 +110,7 @@ impl Drop for MetacallDepthGuard {
 /// Where `write/1`/`writeln/1`/`nl/0` send their bytes. The CLI/WASI shell
 /// streams to process stdout (the v1 contract); the Tier-2 reactor has no
 /// stdout in a V8 isolate, so it captures losslessly into a buffer that the
-/// result JSON carries back to the host (docs/design/WASM_TIER2_PLAN.md D4).
+/// result JSON carries back to the host (docs/design/done/WASM_TIER2_PLAN.md D4).
 pub enum OutputSink {
     /// Stream to process stdout immediately (native CLI / WASI).
     Stdout,
