@@ -1,0 +1,67 @@
+name: WASM Gates
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+# DELIBERATELY SEPARATE from ci-linux.yml (WASM_TIER2_PLAN.md E2). The wasm
+# gates need a toolchain the core build does not — the wasm rustup targets,
+# llvm-tools-preview, wasmtime, and node — so they run in their own job. A
+# runner missing a piece fails THIS workflow without breaking `just ci`.
+#
+# Like ci-linux.yml, this ONLY calls `just` (the justfile is the source of
+# truth). The setup steps below double as the spec for provisioning the
+# navicore-rust image (E1): once the image carries these, they become no-ops
+# and the job just runs faster.
+#
+# `runs-on: navicore-rust` is the custom image
+# (git.navicore.tech/navicore/navicore-forgejo-runner:latest) with Rust,
+# clang-19, just, and node pre-installed.
+
+jobs:
+  wasm-gates:
+    name: WASM gates (Tier 1 wasi + Tier 2 reactor)
+    runs-on: navicore-rust
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Add wasm targets + LLVM tools
+      run: |
+        rustup target add wasm32-wasip1 wasm32-unknown-unknown
+        rustup component add llvm-tools-preview
+
+    - name: Install wasmtime (Tier 1 engine)
+      run: |
+        if ! command -v wasmtime >/dev/null 2>&1; then
+          curl -sSf https://wasmtime.dev/install.sh | bash
+          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+        fi
+
+    - name: Verify toolchain
+      run: |
+        rustc --version
+        clang --version
+        just --version
+        node --version          # Tier 2 reactor smoke runs the module under V8
+        rustup target list --installed | grep wasm
+
+    - name: Cache cargo registry
+      uses: actions/cache@v5
+      with:
+        path: ~/.cargo/registry
+        key: linux-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo index
+      uses: actions/cache@v5
+      with:
+        path: ~/.cargo/git
+        key: linux-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+    # As in ci-linux.yml, target/ is intentionally NOT cached: stale compiled
+    # test binaries embed language semantics and cause false failures.
+
+    - name: Run wasm gates (just wasm-ci)
+      run: just wasm-ci

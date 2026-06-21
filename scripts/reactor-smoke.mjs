@@ -4,8 +4,8 @@
 //
 // IMPORTANT: the marshalling itself is NOT duplicated here. This harness imports
 // the *emitted* `reactor.mjs` sitting next to the module — the exact file
-// `worker.js` deploys — so `just reactor-smoke` exercises the shipped code, not
-// a parallel copy. The harness only does the host-specific parts Node and
+// `worker.js` deploys — so `just wasm-reactor-smoke` exercises the shipped code,
+// not a parallel copy. The harness only does the host-specific parts Node and
 // workerd don't share: read the bytes, instantiate, and print the result.
 //
 // Usage: node reactor-smoke.mjs <module.wasm> <query> [step_limit]

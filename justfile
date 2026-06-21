@@ -59,9 +59,10 @@ install-wasm: build-runtime-wasm build-runtime-wasm-reactor
     cargo install --path crates/compiler --features wasm --force
     @echo "✅ Installed plgc with wasm support"
 
-# Tier 1 wasm smoke test (LOCAL only — not in CI yet). Needs: the
-# wasm32-wasip1 target, llvm-tools-preview, and wasmtime on PATH. Compiles an
-# example to wasm and asserts it answers --query byte-identically to native.
+# Tier 1 wasm smoke gate (run in the separate wasm workflow, not main `just
+# ci`). Needs: the wasm32-wasip1 target, llvm-tools-preview, and wasmtime on
+# PATH. Compiles an example to wasm and asserts it answers --query
+# byte-identically to native.
 wasm-smoke: build-runtime-wasm
     #!/usr/bin/env bash
     set -euo pipefail
@@ -100,14 +101,14 @@ wasm-smoke: build-runtime-wasm
     fi
     exit $fail
 
-# Tier 2 reactor smoke test (LOCAL only — not in CI yet). Needs: the
-# wasm32-unknown-unknown target, llvm-tools-preview, and node on PATH. Compiles
-# an example to a reactor module, instantiates it under Node's V8 (the Workers
-# engine), asserts the four host exports exist, and round-trips queries
-# byte-identically to native — modulo the reactor's always-present "output"
-# field (D4), which is stripped before the compare. Then proves the
+# Tier 2 reactor smoke gate (run in the separate wasm workflow, not main `just
+# ci`). Needs: the wasm32-unknown-unknown target, llvm-tools-preview, and node
+# on PATH. Compiles an example to a reactor module, instantiates it under Node's
+# V8 (the Workers engine), asserts the four host exports exist, and round-trips
+# queries byte-identically to native — modulo the reactor's always-present
+# "output" field (D4), which is stripped before the compare. Then proves the
 # musttail→return_call lowering holds on V8 at 1,000,000-deep recursion.
-reactor-smoke: build-runtime-wasm-reactor
+wasm-reactor-smoke: build-runtime-wasm-reactor
     #!/usr/bin/env bash
     set -euo pipefail
     work=$(mktemp -d)
@@ -164,6 +165,21 @@ wasm-worker-serve prog: build-runtime-wasm-reactor
     echo "  try:  curl 'http://localhost:8080/?query=<goal>'"
     cd "$out"
     exec workerd serve config.capnp
+
+# All wasm gates, both tiers (Tier 1 wasi + Tier 2 reactor). The separate wasm
+# CI workflow (.forgejo/workflows/wasm.yml) calls this; it is NOT part of the
+# main `just ci` because it needs a wasm toolchain (wasm rustup targets,
+# llvm-tools-preview, wasmtime, node) the base CI image may lack — so a missing
+# piece fails THIS gate without breaking the core build/test/lint.
+wasm-ci: wasm-lint wasm-smoke wasm-reactor-smoke
+    @echo "✅ wasm gates passed (Tier 1 wasi + Tier 2 reactor)"
+
+# Clippy over the wasm-feature-gated compiler code (worker glue, reactor link,
+# embedded archives) — the default `just lint` doesn't enable the feature, so
+# this is the only thing that type-checks/lints those paths.
+wasm-lint:
+    @echo "Linting wasm-feature code..."
+    cargo clippy --locked --features wasm -p patch-prolog-compiler --all-targets -- -D warnings
 
 # Build the compiler
 build-compiler:

@@ -451,9 +451,10 @@ pub fn link_wasm_reactor(ir_path: &Path, output_path: &Path, opt: OptLevel) -> R
     // `--no-entry` means the module has no `_start`; the host drives the
     // exports directly. `--allow-undefined` defers any runtime import to
     // instantiation (mirrors Tier 1) — a genuinely missing import then surfaces
-    // when the host instantiates the module, which `just reactor-smoke` does
-    // (it also asserts the four exports are present, since `--allow-undefined`
-    // would otherwise degrade a missing export to a silent import).
+    // when the host instantiates the module, which `just wasm-reactor-smoke`
+    // does (it also asserts the four exports are present, since
+    // `--allow-undefined` would otherwise degrade a missing export to a silent
+    // import).
     let mut lld_cmd = Command::new(&lld);
     lld_cmd.args(["-flavor", "wasm", "--no-entry", "--allow-undefined"]);
     for sym in REACTOR_EXPORTS {
