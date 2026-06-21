@@ -145,6 +145,26 @@ reactor-smoke: build-runtime-wasm-reactor
     fi
     exit $fail
 
+# Compile a .pl to a reactor module and serve it on local workerd (Tier 2,
+# WASM_TIER2_PLAN.md D2g). Needs: wasm32-unknown-unknown, llvm-tools-preview,
+# and `workerd` on PATH (npm i -g workerd). Emits the glue (worker.js /
+# wrangler.toml / config.capnp) into target/worker/<stem>/ and serves from
+# there. Query it with:  curl 'http://localhost:8080/?query=<goal>'
+# Example:  just wasm-worker-serve examples/deps.pl
+wasm-worker-serve prog: build-runtime-wasm-reactor
+    #!/usr/bin/env bash
+    set -euo pipefail
+    stem=$(basename "{{prog}}" .pl)
+    out="target/worker/$stem"
+    mkdir -p "$out"
+    echo "Compiling {{prog}} → $out/$stem.worker.wasm ..."
+    cargo run -q --features wasm -p patch-prolog-compiler --bin plgc -- \
+        build "{{prog}}" -o "$out/$stem.worker.wasm" --target worker
+    echo "Serving $stem on http://localhost:8080"
+    echo "  try:  curl 'http://localhost:8080/?query=<goal>'"
+    cd "$out"
+    exec workerd serve config.capnp
+
 # Build the compiler
 build-compiler:
     @echo "Building compiler..."
