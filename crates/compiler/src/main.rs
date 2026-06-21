@@ -156,6 +156,27 @@ fn parse_target(target: Option<&str>) -> Result<plgc::Target, String> {
     }
 }
 
+/// Emit the reactor deploy scaffolding and report what landed. A glue failure
+/// is a warning, not a build failure — the `.wasm` is already produced and the
+/// glue is regenerable.
+fn emit_worker_glue(output: &std::path::Path) {
+    match plgc::worker_glue::emit(output) {
+        Ok(written) if written.is_empty() => {
+            eprintln!("note: kept existing worker glue (worker.js / wrangler.toml / config.capnp)");
+        }
+        Ok(written) => {
+            eprintln!(
+                "note: wrote {} next to {}",
+                written.join(", "),
+                output.display()
+            );
+            eprintln!("      serve locally:  just wasm-worker-serve <prog.pl>");
+            eprintln!("      deploy:         wrangler deploy");
+        }
+        Err(e) => eprintln!("warning: reactor built, but writing worker glue failed: {e}"),
+    }
+}
+
 fn main() -> ExitCode {
     // Script mode (`#!/usr/bin/env plgc`): `plgc prog.pl [binary args…]`
     // compiles to a temp binary and execs it — same path as `plgc run`,
@@ -208,7 +229,15 @@ fn main() -> ExitCode {
                 plgc::OptLevel::O3
             };
             match plgc::compile_files(&sources, &output, keep_ir, opt, target) {
-                Ok(()) => ExitCode::SUCCESS,
+                Ok(()) => {
+                    // Drop deploy scaffolding next to a reactor module (D1g):
+                    // worker.js + wrangler.toml + config.capnp, written only if
+                    // absent so a rebuild never clobbers user edits.
+                    if target == plgc::Target::Worker {
+                        emit_worker_glue(&output);
+                    }
+                    ExitCode::SUCCESS
+                }
                 Err(e) => {
                     eprintln!("error: {e}");
                     ExitCode::from(3)

@@ -8,6 +8,7 @@
 
 pub mod codegen;
 pub mod link;
+pub mod worker_glue;
 
 use codegen::CgSource;
 use plg_frontend::{CgClause, ParseError, Parser, ProgramDirectives, SourceMap};
