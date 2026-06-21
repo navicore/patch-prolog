@@ -1,4 +1,4 @@
-// Reactor smoke harness (Tier 2, docs/design/WASM_TIER2_PLAN.md). Instantiates
+// Reactor smoke harness (Tier 2, docs/design/done/WASM_TIER2_PLAN.md). Instantiates
 // a `--target worker` module under Node's V8 — the same engine Cloudflare
 // Workers use — and round-trips ONE query through the buffer ABI.
 //

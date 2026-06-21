@@ -3,7 +3,7 @@
 //! sink = stdout) and the Tier-2 reactor (`reactor.rs`, sink = a linear-memory
 //! buffer) call into here, so the JSON shape and the `exhausted` rule have a
 //! single source and can't drift between the two transports
-//! (docs/design/WASM_TIER2_PLAN.md A1 / WASM.md finding #6). The shared core
+//! (docs/design/done/WASM_TIER2_PLAN.md A1 / WASM.md finding #6). The shared core
 //! INVOCATION.md's resident mode also wants is the same one.
 
 use crate::machine::Machine;

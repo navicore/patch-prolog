@@ -31,7 +31,7 @@ build-runtime:
     cargo build --locked --release -p patch-prolog-runtime
     @echo "✅ Runtime built: target/release/libplg_runtime.a"
 
-# Build the runtime for wasm32-wasip1 (Tier 1, docs/design/WASM.md). The
+# Build the runtime for wasm32-wasip1 (Tier 1, docs/design/done/WASM.md). The
 # archive (target/wasm32-wasip1/release/libplg_runtime.a) is embedded into a
 # wasm-enabled plgc by build.rs under `--features wasm`. Needs the wasm target:
 #   rustup target add wasm32-wasip1
@@ -41,7 +41,7 @@ build-runtime-wasm:
     @echo "✅ Wasm runtime built: target/wasm32-wasip1/release/libplg_runtime.a"
 
 # Build the runtime for wasm32-unknown-unknown (Tier 2 reactor,
-# docs/design/WASM_TIER2_PLAN.md). The archive
+# docs/design/done/WASM_TIER2_PLAN.md). The archive
 # (target/wasm32-unknown-unknown/release/libplg_runtime.a) is embedded into a
 # wasm-enabled plgc by build.rs under `--features wasm`. Needs the target:
 #   rustup target add wasm32-unknown-unknown
@@ -50,11 +50,17 @@ build-runtime-wasm-reactor:
     cargo build --locked --release -p patch-prolog-runtime --target wasm32-unknown-unknown
     @echo "✅ Reactor runtime built: target/wasm32-unknown-unknown/release/libplg_runtime.a"
 
+# Build BOTH wasm archives. build.rs embeds both whenever `--features wasm` is
+# set, panicking if either is missing — so EVERY `--features wasm` consumer
+# (lint, both smokes) must depend on this, not just the archive it happens to
+# use. `just` dedups the shared prereq, so each archive still builds once.
+build-runtime-wasm-all: build-runtime-wasm build-runtime-wasm-reactor
+
 # Install a wasm-capable plgc: builds BOTH wasm runtimes, then installs plgc
 # with the `wasm` feature so it can emit `--target wasm32-wasi` (Tier 1) and
 # `--target worker` (Tier 2 reactor) modules. Also needs the rustup llvm-tools
 # (llc/wasm-ld): rustup component add llvm-tools-preview
-install-wasm: build-runtime-wasm build-runtime-wasm-reactor
+install-wasm: build-runtime-wasm-all
     @echo "Installing wasm-capable compiler (plgc --features wasm)..."
     cargo install --path crates/compiler --features wasm --force
     @echo "✅ Installed plgc with wasm support"
@@ -63,7 +69,7 @@ install-wasm: build-runtime-wasm build-runtime-wasm-reactor
 # ci`). Needs: the wasm32-wasip1 target, llvm-tools-preview, and wasmtime on
 # PATH. Compiles an example to wasm and asserts it answers --query
 # byte-identically to native.
-wasm-smoke: build-runtime-wasm
+wasm-smoke: build-runtime-wasm-all
     #!/usr/bin/env bash
     set -euo pipefail
     work=$(mktemp -d)
@@ -108,7 +114,7 @@ wasm-smoke: build-runtime-wasm
 # queries byte-identically to native — modulo the reactor's always-present
 # "output" field (D4), which is stripped before the compare. Then proves the
 # musttail→return_call lowering holds on V8 at 1,000,000-deep recursion.
-wasm-reactor-smoke: build-runtime-wasm-reactor
+wasm-reactor-smoke: build-runtime-wasm-all
     #!/usr/bin/env bash
     set -euo pipefail
     work=$(mktemp -d)
@@ -177,7 +183,7 @@ wasm-ci: wasm-lint wasm-smoke wasm-reactor-smoke
 # Clippy over the wasm-feature-gated compiler code (worker glue, reactor link,
 # embedded archives) — the default `just lint` doesn't enable the feature, so
 # this is the only thing that type-checks/lints those paths.
-wasm-lint:
+wasm-lint: build-runtime-wasm-all
     @echo "Linting wasm-feature code..."
     cargo clippy --locked --features wasm -p patch-prolog-compiler --all-targets -- -D warnings
 

@@ -26,12 +26,13 @@ native binary.
 | `--debug` | Build at `-O0` with debug-friendly output and DWARF. |
 | `--keep-ir` | Keep the generated `.ll` LLVM IR next to the output, for inspection. |
 | `--deny-undefined` | Treat calls to undefined predicates as **errors**, not warnings (see below). |
-| `--target <TARGET>` | `native` (default) or `wasm32-wasi` — a standalone `.wasm` module. See [WASM Target](wasm-target.md). |
+| `--target <TARGET>` | `native` (default), `wasm32-wasi` — a standalone `.wasm` CLI module ([WASM Target](wasm-target.md)) — or `worker` — a V8-isolate reactor for the edge ([WASM Worker](wasm-worker.md)). |
 
 ```sh
 plgc build rules.pl -o my-linter
 plgc build base.pl rules.pl -o app      # inputs concatenated in order
 plgc build rules.pl --target wasm32-wasi -o rules.wasm   # needs a wasm-enabled plgc
+plgc build rules.pl --target worker      # reactor .wasm + deploy glue (edge)
 ```
 
 ## `plgc run`

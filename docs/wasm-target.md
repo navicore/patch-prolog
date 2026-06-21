@@ -84,9 +84,11 @@ stack).
 Wasm builds optimize at LLVM `-O2` (`--debug` drops to `-O0`); the `-O3` the
 native path uses buys little for this IR.
 
-## Edge / serverless (not yet)
+## Edge / serverless (Tier 2)
 
 Running inside V8 isolates (Cloudflare Workers and similar) needs a different
-build than Tier 1 — those targets are `wasm32-unknown-unknown` with no WASI and
-a host-call entry instead of a CLI. That work is planned but not yet available;
-Tier 1 covers WASI runtimes today.
+build than Tier 1 — `wasm32-unknown-unknown` with no WASI and a host-call entry
+instead of a CLI. That is **Tier 2**, available via `--target worker`: see the
+[WASM Worker](wasm-worker.md) guide for usage, the buffer ABI, tuning, and a
+Cloudflare deployment tutorial. Tier 1 (this page) covers WASI runtimes;
+Tier 2 covers the edge.

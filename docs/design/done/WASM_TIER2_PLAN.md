@@ -1,9 +1,9 @@
 # WASM Tier 2 — productization plan
 
-Status: **execution plan** (working doc; delete when Tier 2 ships). The *why*
-and the gate findings live in `WASM.md` (Tier 2 section + productization brief);
-this is the *how/do-this*, concrete enough to execute without the spike author's
-session context.
+Status: **SHIPPED** — Tier 2 landed as ROADMAP M11 (`--target worker`).
+Archived here for the record; the user-facing guide is `docs/wasm-worker.md`.
+The *why* and the gate findings live in `WASM.md` (Tier 2 section +
+productization brief); this was the *how/do-this* execution plan.
 
 ## Where we are
 
