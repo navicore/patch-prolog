@@ -955,9 +955,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.32"
+version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
+checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "lru"
@@ -1176,7 +1176,7 @@ dependencies = [
 
 [[package]]
 name = "patch-prolog-compiler"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -1189,14 +1189,14 @@ dependencies = [
 
 [[package]]
 name = "patch-prolog-frontend"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "patch-prolog-shared",
 ]
 
 [[package]]
 name = "patch-prolog-lsp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "patch-prolog-frontend",
  "patch-prolog-shared",
@@ -1210,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "patch-prolog-repl"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "crossterm",
@@ -1224,14 +1224,14 @@ dependencies = [
 
 [[package]]
 name = "patch-prolog-runtime"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "patch-prolog-shared",
 ]
 
 [[package]]
 name = "patch-prolog-shared"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "percent-encoding"
