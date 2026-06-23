@@ -1,5 +1,5 @@
 //! Miscellaneous deterministic builtins: `succ/2`, `plus/3`,
-//! `unify_with_occurs_check/2`, `write/1`, `writeln/1`, `nl/0`.
+//! `unify_with_occurs_check/2`, `write/1`, `writeq/1`, `writeln/1`, `nl/0`.
 //!
 //! Ported byte-for-byte from patch-prolog v1 (`solver.rs` arms,
 //! `unify.rs` occurs-check unifier). Notes:
@@ -11,12 +11,13 @@
 //! - `unify_with_occurs_check/2` uses a LOCAL occurs-checking unifier
 //!   (iterative; does not touch the shared `unify.rs`).
 //! - `write/1` / `writeln/1` use v1's `term_to_string` (infix operators,
-//!   `[a, b]` lists, floats via `{}`), printed immediately. `write` adds
-//!   no newline; `writeln` and `nl` add one.
+//!   `[a, b]` lists, whole-valued floats keep their `.0` so they read back as
+//!   floats — issue #32), printed immediately. `write` adds no newline;
+//!   `writeln` and `nl` add one.
 
 use crate::cell::*;
 use crate::machine::Machine;
-use crate::render::term_to_string;
+use crate::render::{term_to_string, term_to_string_quoted};
 use crate::unify::unify;
 
 #[inline]
@@ -247,6 +248,17 @@ fn occurs(m: &Machine, var: usize, term: Word) -> bool {
 pub extern "C" fn plg_rt_b_write_1(m: *mut Machine, term: u64) -> i32 {
     let m = mref(m);
     let s = term_to_string(m, term);
+    m.write_out(&s);
+    1
+}
+
+/// `writeq/1`: like `write/1` but quotes atoms that wouldn't read back
+/// unquoted (issue #33), e.g. `writeq('hello world')` → `'hello world'`.
+/// No trailing newline. Routed through the Machine's sink like `write/1`.
+#[unsafe(no_mangle)]
+pub extern "C" fn plg_rt_b_writeq_1(m: *mut Machine, term: u64) -> i32 {
+    let m = mref(m);
+    let s = term_to_string_quoted(m, term);
     m.write_out(&s);
     1
 }

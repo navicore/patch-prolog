@@ -213,6 +213,10 @@ fn eval_struct(m: &mut Machine, w: Word) -> Result<ArithValue, ()> {
             let a = eval(m, a0)?;
             Ok(sign(a))
         }
+        ("\\", 1) => {
+            let a = eval(m, a0)?;
+            bit_not(m, a)
+        }
         _ => {
             // Unknown operator → type_error(evaluable, name/arity).
             let slash = m.atoms.intern("/");
@@ -522,6 +526,19 @@ fn abs(m: &mut Machine, a: ArithValue) -> Result<ArithValue, ()> {
     }
 }
 
+/// `\(I)` — bitwise complement (issue #33). Integer-only, like the binary
+/// bitwise operators; `\ 0` evaluates to `-1`.
+fn bit_not(m: &mut Machine, a: ArithValue) -> Result<ArithValue, ()> {
+    use ArithValue::*;
+    match a {
+        Int(n) => Ok(Int(!n)),
+        Float(_) => {
+            int_args_required(m, "\\");
+            Err(())
+        }
+    }
+}
+
 fn sign(a: ArithValue) -> ArithValue {
     match a {
         ArithValue::Int(n) => ArithValue::Int(n.signum()),
@@ -604,6 +621,12 @@ mod tests {
         assert_eq!(eval(&mut m, e), Ok(ArithValue::Int(-1)));
         let e = un_str(&mut m, "-", make_int(3));
         assert_eq!(eval(&mut m, e), Ok(ArithValue::Int(-3)));
+
+        // \(I): unary bitwise complement (issue #33). \ 0 = -1, \ 5 = -6.
+        let e = un_str(&mut m, "\\", make_int(0));
+        assert_eq!(eval(&mut m, e), Ok(ArithValue::Int(-1)));
+        let e = un_str(&mut m, "\\", make_int(5));
+        assert_eq!(eval(&mut m, e), Ok(ArithValue::Int(-6)));
 
         let e = bin_str(&mut m, "/\\", make_int(5), make_int(3));
         assert_eq!(eval(&mut m, e), Ok(ArithValue::Int(1)));
