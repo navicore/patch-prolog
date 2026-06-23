@@ -269,7 +269,10 @@ fn format_term_v(m: &Machine, w: Word, out: &mut String, visiting: &mut Vec<usiz
         TAG_ATOM => out.push_str(m.atoms.resolve(atom_id(w))),
         TAG_INT => out.push_str(&int_value(w).to_string()),
         TAG_BIG => out.push_str(&(m.heap[payload(w) as usize] as i64).to_string()),
-        TAG_FLT => out.push_str(&f64::from_bits(m.heap[payload(w) as usize]).to_string()),
+        // Route through `fmt_float` so a whole-valued float embedded in an
+        // error term keeps its ".0" too (issue #32): a `2.0` culprit must not
+        // print as `2`, indistinguishable from the integer.
+        TAG_FLT => out.push_str(&fmt_float(f64::from_bits(m.heap[payload(w) as usize]))),
         TAG_REF => {
             out.push('_');
             out.push_str(&payload(w).to_string());
@@ -403,6 +406,11 @@ mod tests {
         let two = push_flt(&mut m, 2.0);
         assert_eq!(term_to_string(&m, two), "2.0");
         assert_eq!(term_to_json(&m, two), "2.0");
+        // format_term (error-message byte contract) keeps the ".0" too, so a
+        // float culprit in an error term doesn't read back as an integer.
+        let mut em = String::new();
+        format_term(&m, two, &mut em);
+        assert_eq!(em, "2.0");
         let big = push_flt(&mut m, 1024.0);
         assert_eq!(term_to_string(&m, big), "1024.0");
         // Non-whole floats are unaffected.
