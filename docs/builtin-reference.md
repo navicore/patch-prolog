@@ -93,7 +93,7 @@ predicates; see the [Language Guide](language-guide.md) and the
 | Predicate | Description |
 |---|---|
 | `atom_length/2` | `atom_length(A, L)` — bind L to the length of atom A. |
-| `atom_concat/3` | `atom_concat(A, B, C)` — concatenate atoms A and B into C. |
+| `atom_concat/3` | `atom_concat(A, B, C)` — concatenate A and B into C, or, with C bound and A/B unbound, nondeterministically split C into every prefix/suffix pair. |
 | `atom_chars/2` | `atom_chars(A, Chars)` — convert between an atom and a list of single-char atoms. |
 | `number_chars/2` | `number_chars(N, Chars)` — convert between a number and a list of single-char atoms. |
 | `number_codes/2` | `number_codes(N, Codes)` — convert between a number and a list of character codes. |

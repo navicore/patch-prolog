@@ -47,6 +47,7 @@ declare i32 @plg_rt_b_throw_1(ptr, i64)
 declare i32 @plg_rt_b_catch_3(ptr, i64, i64, i64)
 declare i32 @plg_rt_b_findall_3(ptr, i64, i64, i64)
 declare i32 @plg_rt_pred_between_3(ptr, i64)
+declare i32 @plg_rt_pred_atom_concat_3(ptr, i64)
 declare i32 @plg_rt_fact_first(ptr, i64, i64, i64, i64, i64, i64, i64)
 declare i32 @plg_rt_fact_next(ptr, i64)
 ";

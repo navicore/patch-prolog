@@ -60,6 +60,7 @@ pub fn try_builtin(m: &mut Machine, name: &str, args_idx: usize, arity: u32) -> 
         ("findall", 3) => findall_impl(m, arg(0), arg(1), arg(2)),
         ("call", n) if n >= 1 => metacall_extend(m, arg(0), &a[1..]),
         ("between", 3) => between_impl(m, arg(0), arg(1), arg(2)),
+        ("atom_concat", 3) => atom_concat_impl(m, arg(0), arg(1), arg(2), NO_SITE),
         ("=", 2) => {
             let ok = unify(m, arg(0), arg(1));
             det(m, ok)
@@ -119,7 +120,6 @@ fn det_builtin(mp: *mut Machine, name: &str, arity: u32, a: &[Word]) -> Option<b
         ("=..", 2) => termops::plg_rt_b_univ_2(mp, a[0], a[1], NO_SITE),
         ("copy_term", 2) => termops::plg_rt_b_copy_term_2(mp, a[0], a[1]),
         ("atom_length", 2) => atomops::plg_rt_b_atom_length_2(mp, a[0], a[1], NO_SITE),
-        ("atom_concat", 3) => atomops::plg_rt_b_atom_concat_3(mp, a[0], a[1], a[2], NO_SITE),
         ("atom_chars", 2) => atomops::plg_rt_b_atom_chars_2(mp, a[0], a[1], NO_SITE),
         ("number_chars", 2) => atomops::plg_rt_b_number_chars_2(mp, a[0], a[1], NO_SITE),
         ("number_codes", 2) => atomops::plg_rt_b_number_codes_2(mp, a[0], a[1], NO_SITE),
@@ -541,6 +541,145 @@ pub unsafe extern "C" fn plg_rt_pred_between_3(m: *mut Machine, _env: u64) -> i3
     between_impl(m, lo, hi, x)
 }
 
+/// The atom name of `w` if it is an atom, else `None` (owned so the caller can
+/// then borrow `m` mutably to intern results).
+fn atom_str_opt(m: &Machine, w: Word) -> Option<String> {
+    (tag_of(w) == TAG_ATOM).then(|| m.atoms.resolve(atom_id(w)).to_string())
+}
+
+/// Bind `a_w`/`b_w` to the prefix/suffix of `sc` split before its `i`-th
+/// character (split on char boundaries so multi-byte atoms are safe). Returns
+/// whether both unified — `false` only when the two args alias one variable
+/// and this split's halves differ (e.g. `atom_concat(X, X, abcd)` at a split
+/// where prefix ≠ suffix), which is a normal per-alternative miss, not an error.
+fn bind_split(m: &mut Machine, a_w: Word, b_w: Word, sc: &str, i: usize) -> bool {
+    let byte = sc.char_indices().nth(i).map_or(sc.len(), |(b, _)| b);
+    let (pre, suf) = sc.split_at(byte);
+    let pid = m.atoms.intern(pre);
+    let sid = m.atoms.intern(suf);
+    unify(m, a_w, make_atom(pid)) && unify(m, b_w, make_atom(sid))
+}
+
+/// `atom_concat(A, B, C)` — ISO 8.16.2, all modes (issue #35). Forward when A
+/// and B are atoms (concatenate, unify with C); otherwise C must be a bound
+/// atom and this is the relational splitter: a known prefix (A bound) or suffix
+/// (B bound) selects the one matching decomposition, and A and B both unbound
+/// enumerate every decomposition on backtracking — the same multi-mode shape
+/// `append/3` has for lists. `site` carries the compiled call site for error
+/// provenance (NO_SITE on the query/metacall path).
+fn atom_concat_impl(m: &mut Machine, a_w: Word, b_w: Word, c_w: Word, site: u32) -> i32 {
+    m.error_site = site;
+    let wa = m.deref(a_w);
+    let wb = m.deref(b_w);
+    let a_atom = atom_str_opt(m, wa);
+    let b_atom = atom_str_opt(m, wb);
+    // A bound non-atom (number, compound, …) is a type_error — ISO admits only
+    // atoms here. An unbound var is fine (it's a split-mode output).
+    if a_atom.is_none() && tag_of(wa) != TAG_REF {
+        crate::errors::type_error(m, "atom", wa, "atom_concat/3: arguments must be atoms");
+        return 0;
+    }
+    if b_atom.is_none() && tag_of(wb) != TAG_REF {
+        crate::errors::type_error(m, "atom", wb, "atom_concat/3: arguments must be atoms");
+        return 0;
+    }
+    // Forward: both bound atoms → concatenate and unify with C.
+    if let (Some(sa), Some(sb)) = (&a_atom, &b_atom) {
+        let id = m.atoms.intern(&format!("{sa}{sb}"));
+        m.error_site = NO_SITE;
+        let ok = unify(m, c_w, make_atom(id));
+        return det(m, ok);
+    }
+    // Split modes need C to be a bound atom.
+    let wc = m.deref(c_w);
+    let Some(sc) = atom_str_opt(m, wc) else {
+        if tag_of(wc) == TAG_REF {
+            // (A or B unbound) and C unbound → not enough to proceed.
+            crate::errors::instantiation(
+                m,
+                "atom_concat/3: arguments not sufficiently instantiated",
+            );
+        } else {
+            crate::errors::type_error(m, "atom", wc, "atom_concat/3: arguments must be atoms");
+        }
+        return 0;
+    };
+    m.error_site = NO_SITE; // no further raises past this point
+    // Known prefix: A bound, B unbound → unique split iff C starts with A.
+    if let Some(sa) = &a_atom {
+        return match sc.strip_prefix(sa.as_str()) {
+            Some(rest) => {
+                let id = m.atoms.intern(rest);
+                let ok = unify(m, b_w, make_atom(id));
+                det(m, ok)
+            }
+            None => 0,
+        };
+    }
+    // Known suffix: B bound, A unbound → unique split iff C ends with B.
+    if let Some(sb) = &b_atom {
+        return match sc.strip_suffix(sb.as_str()) {
+            Some(pre) => {
+                let id = m.atoms.intern(pre);
+                let ok = unify(m, a_w, make_atom(id));
+                det(m, ok)
+            }
+            None => 0,
+        };
+    }
+    // A and B both unbound → enumerate every decomposition of C.
+    // Frame: [a_w, b_w, c_atom_id, cur_index, nchars, k_fn, k_env, qbarrier].
+    let nchars = sc.chars().count();
+    let frame = m.frame_alloc(8);
+    m.heap[frame] = a_w;
+    m.heap[frame + 1] = b_w;
+    m.heap[frame + 2] = atom_id(wc) as u64;
+    m.heap[frame + 3] = 0;
+    m.heap[frame + 4] = nchars as u64;
+    save_k(m, frame, 5);
+    if nchars >= 1 {
+        m.push_cp(atom_concat_retry, frame as u64);
+    }
+    if bind_split(m, a_w, b_w, &sc, 0) {
+        invoke_k(m)
+    } else {
+        0 // alias miss at split 0 → engine backtracks into the retry
+    }
+}
+
+unsafe extern "C" fn atom_concat_retry(m: *mut Machine, env: u64) -> i32 {
+    let m = unsafe { &mut *m };
+    let frame = env as usize;
+    let cur = m.heap[frame + 3] as usize + 1;
+    let nchars = m.heap[frame + 4] as usize;
+    m.heap[frame + 3] = cur as u64;
+    if cur < nchars {
+        m.push_cp(atom_concat_retry, frame as u64);
+    }
+    let (kf, ke) = load_k(m, frame, 5);
+    m.k_fn = kf;
+    m.k_env = ke;
+    let (a_w, b_w) = (m.heap[frame], m.heap[frame + 1]);
+    let sc = m.atoms.resolve(m.heap[frame + 2] as u32).to_string();
+    if bind_split(m, a_w, b_w, &sc, cur) {
+        invoke_k(m)
+    } else {
+        0
+    }
+}
+
+/// Compiled-code entry for atom_concat/3 (nondeterministic in split mode, so —
+/// like between/3 — dispatched as a predicate with args in the A registers).
+/// `env` carries the call-site id for error provenance (SPANS.md Layer 3).
+/// # Safety
+/// Called from generated code with the live Machine pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn plg_rt_pred_atom_concat_3(m: *mut Machine, env: u64) -> i32 {
+    let m = unsafe { &mut *m };
+    let (a, b, c) = (m.areg[0], m.areg[1], m.areg[2]);
+    atom_concat_impl(m, a, b, c, env as u32)
+}
+
 /// Compiled-code entries for control builtins taking goal terms.
 /// # Safety
 /// Called from generated code with the live Machine pointer.
@@ -858,7 +997,7 @@ mod vocab_invariant {
     const DET_DISPATCH: &[(&str, u32)] = &[
         ("var", 1), ("nonvar", 1), ("atom", 1), ("number", 1), ("integer", 1),
         ("float", 1), ("compound", 1), ("is_list", 1), ("functor", 3), ("arg", 3),
-        ("=..", 2), ("copy_term", 2), ("atom_length", 2), ("atom_concat", 3),
+        ("=..", 2), ("copy_term", 2), ("atom_length", 2),
         ("atom_chars", 2), ("number_chars", 2), ("number_codes", 2), ("msort", 2),
         ("sort", 2), ("succ", 2), ("plus", 3), ("unify_with_occurs_check", 2),
         ("write", 1), ("writeq", 1), ("writeln", 1),

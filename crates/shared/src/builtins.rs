@@ -19,7 +19,9 @@
 pub enum BuiltinKind {
     /// Control construct — handled structurally in codegen/runtime
     /// (`,` `;` `->` `\+` `once` `catch` `throw` `findall` `call`
-    /// `between`).
+    /// `between`). Also covers nondeterministic builtins dispatched as
+    /// predicates (`between`, `atom_concat`): not control *flow*, but they
+    /// share the same predicate-call lowering rather than the `Det` path.
     Control,
     /// Inline goal — its own `LGoal` variant or an op-code table
     /// (`=` `\=` `is` `compare`, arithmetic and term-order comparisons).
@@ -78,7 +80,6 @@ pub const BUILTINS: &[BuiltinSpec] = &[
     b(Det, "=..", 2, "Univ: `T =.. L` decomposes T into a list of its functor and args."),
     b(Det, "copy_term", 2, "`copy_term(T, C)` — bind C to a copy of T with fresh variables."),
     b(Det, "atom_length", 2, "`atom_length(A, L)` — bind L to the length of atom A."),
-    b(Det, "atom_concat", 3, "`atom_concat(A, B, C)` — concatenate atoms A and B into C."),
     b(Det, "atom_chars", 2, "`atom_chars(A, Chars)` — convert between an atom and a list of single-char atoms."),
     b(Det, "number_chars", 2, "`number_chars(N, Chars)` — convert between a number and a list of single-char atoms."),
     b(Det, "number_codes", 2, "`number_codes(N, Codes)` — convert between a number and a list of character codes."),
@@ -119,6 +120,7 @@ pub const BUILTINS: &[BuiltinSpec] = &[
     b(Control, "findall", 3, "`findall(Template, Goal, List)` — collect all solutions of Goal."),
     b(Control, "call", 1, "Meta-call: execute its argument as a goal. Variadic — extra args are appended."),
     b(Control, "between", 3, "`between(Low, High, X)` — enumerate or test integers in [Low, High]."),
+    b(Control, "atom_concat", 3, "`atom_concat(A, B, C)` — concatenate A and B into C, or nondeterministically split C."),
     // --- Atom: reserved arity-0 goals ---
     b(Atom, "true", 0, "Always succeeds."),
     b(Atom, "fail", 0, "Always fails."),
@@ -171,9 +173,9 @@ mod tests {
     fn roster_size_and_partition() {
         assert_eq!(BUILTINS.len(), 56, "roster size changed — update the doc");
         let count = |k: BuiltinKind| BUILTINS.iter().filter(|s| s.kind == k).count();
-        assert_eq!(count(Det), 26);
+        assert_eq!(count(Det), 25);
         assert_eq!(count(Inline), 16);
-        assert_eq!(count(Control), 10);
+        assert_eq!(count(Control), 11);
         assert_eq!(count(Atom), 4);
     }
 

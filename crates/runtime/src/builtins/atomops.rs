@@ -1,11 +1,9 @@
-//! Atom/number-string builtins: `atom_length/2`, `atom_concat/3`,
-//! `atom_chars/2`, `number_chars/2`, `number_codes/2`.
+//! Atom/number-string builtins: `atom_length/2`, `atom_chars/2`,
+//! `number_chars/2`, `number_codes/2`.
 //!
-//! Ported byte-for-byte from patch-prolog v1 (`solver.rs` arms). Modes
-//! verified against the oracle:
-//! - `atom_concat/3` supports ONLY the deterministic both-atoms-bound
-//!   mode; an unbound prefix/suffix raises `type_error(atom, _)` (v1 is
-//!   not nondeterministic here).
+//! Modes follow ISO. Notes:
+//! - `atom_concat/3` is nondeterministic (split mode) and so lives with the
+//!   other predicate-dispatched builtins in `control.rs`, not here.
 //! - `atom_chars/2` works both directions (atom→one-char atoms,
 //!   list→atom).
 //! - `number_chars/2` and `number_codes/2` work both directions; garbage
@@ -123,40 +121,6 @@ pub extern "C" fn plg_rt_b_atom_length_2(
             "atom",
             w,
             "atom_length/2: first argument must be an atom",
-        );
-        0
-    }
-}
-
-/// `atom_concat/3`: concatenate two bound atoms. Only this mode is
-/// supported (v1 raises a type error otherwise).
-#[unsafe(no_mangle)]
-pub extern "C" fn plg_rt_b_atom_concat_3(
-    m: *mut Machine,
-    a: u64,
-    b: u64,
-    result: u64,
-    site_id: u32,
-) -> i32 {
-    let _site = crate::machine::ErrorSiteGuard::enter(m, site_id);
-    let m = mref(m);
-    let wa = m.deref(a);
-    let wb = m.deref(b);
-    if tag_of(wa) == TAG_ATOM && tag_of(wb) == TAG_ATOM {
-        let s = format!(
-            "{}{}",
-            m.atoms.resolve(atom_id(wa)),
-            m.atoms.resolve(atom_id(wb))
-        );
-        let id = m.atoms.intern(&s);
-        unify(m, result, make_atom(id)) as i32
-    } else {
-        let culprit = if tag_of(wa) == TAG_ATOM { wb } else { wa };
-        crate::errors::type_error(
-            m,
-            "atom",
-            culprit,
-            "atom_concat/3: first two arguments must be atoms",
         );
         0
     }
@@ -374,9 +338,6 @@ mod tests {
     fn alen(m: *mut Machine, a: u64, l: u64) -> i32 {
         plg_rt_b_atom_length_2(m, a, l, NO_SITE)
     }
-    fn acat(m: *mut Machine, a: u64, b: u64, r: u64) -> i32 {
-        plg_rt_b_atom_concat_3(m, a, b, r, NO_SITE)
-    }
     fn achars(m: *mut Machine, a: u64, l: u64) -> i32 {
         plg_rt_b_atom_chars_2(m, a, l, NO_SITE)
     }
@@ -420,28 +381,6 @@ mod tests {
             msg(&m),
             "error(type_error(atom, 123), atom_length/2: first argument must be an atom)"
         );
-    }
-
-    #[test]
-    fn atom_concat_both_bound_and_error() {
-        let mut m = machine();
-        let foo = atom_word(&mut m, "foo");
-        let bar = atom_word(&mut m, "bar");
-        let x = m.new_var();
-        let mp = &mut *m as *mut Machine;
-        assert_eq!(acat(mp, foo, bar, x), 1);
-        let foobar = m.atoms.lookup("foobar").unwrap();
-        assert_eq!(m.deref(x), make_atom(foobar));
-
-        // unbound prefix → type_error(atom, _N)
-        let mut m = machine();
-        let bar = atom_word(&mut m, "bar");
-        let foobar = atom_word(&mut m, "foobar");
-        let v = m.new_var();
-        let mp = &mut *m as *mut Machine;
-        assert_eq!(acat(mp, v, bar, foobar), 0);
-        assert!(msg(&m).starts_with("error(type_error(atom, _"));
-        assert!(msg(&m).ends_with("atom_concat/3: first two arguments must be atoms)"));
     }
 
     #[test]

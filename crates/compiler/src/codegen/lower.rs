@@ -49,7 +49,6 @@ pub const DET_BUILTINS: &[(&str, u32, &str, bool)] = &[
     ("=..", 2, "plg_rt_b_univ_2", true),
     ("copy_term", 2, "plg_rt_b_copy_term_2", false),
     ("atom_length", 2, "plg_rt_b_atom_length_2", true),
-    ("atom_concat", 3, "plg_rt_b_atom_concat_3", true),
     ("atom_chars", 2, "plg_rt_b_atom_chars_2", true),
     ("number_chars", 2, "plg_rt_b_number_chars_2", true),
     ("number_codes", 2, "plg_rt_b_number_codes_2", true),
@@ -332,8 +331,9 @@ mod vocab_invariant {
     use std::collections::BTreeSet;
 
     /// Names recognized by structural match arms in `lower_goal` (and
-    /// `clause.rs` for `catch`/`throw`/`findall`/`call`/`between`) — the
-    /// only hand-maintained mirror; everything else below is const data.
+    /// `clause.rs` for `catch`/`throw`/`findall`/`call`/`between`/
+    /// `atom_concat`) — the only hand-maintained mirror; everything else
+    /// below is const data.
     #[rustfmt::skip]
     const STRUCTURAL: &[(&str, u32)] = &[
         // inline specials (own LGoal variant)
@@ -341,6 +341,8 @@ mod vocab_invariant {
         // control constructs
         (",", 2), (";", 2), ("->", 2), ("\\+", 1), ("once", 1),
         ("catch", 3), ("throw", 1), ("findall", 3), ("call", 1), ("between", 3),
+        // nondeterministic builtin dispatched as a predicate (split mode)
+        ("atom_concat", 3),
         // reserved atoms
         ("true", 0), ("fail", 0), ("false", 0), ("!", 0),
     ];

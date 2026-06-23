@@ -389,6 +389,27 @@ impl CodeGen<'_> {
                 writeln!(b, "  ret i32 {r}").unwrap();
                 return Ok(());
             }
+            ("atom_concat", 3) => {
+                // Nondeterministic in split mode → dispatched as a predicate
+                // (like between/3). The env carries the call-site id so the
+                // type/instantiation errors keep source provenance.
+                let mut words = Vec::with_capacity(args.len());
+                for a in args {
+                    words.push(self.emit_term(b, a, vars)?);
+                }
+                for (i, w) in words.iter().enumerate() {
+                    writeln!(b, "  call void @plg_rt_areg_set(ptr %m, i32 {i}, i64 {w})").unwrap();
+                }
+                let site = self.site_id(span);
+                let r = self.fresh();
+                writeln!(
+                    b,
+                    "  {r} = musttail call i32 @plg_rt_pred_atom_concat_3(ptr %m, i64 {site})"
+                )
+                .unwrap();
+                writeln!(b, "  ret i32 {r}").unwrap();
+                return Ok(());
+            }
             _ => {}
         }
         match self.how_to_call(functor, arity) {
