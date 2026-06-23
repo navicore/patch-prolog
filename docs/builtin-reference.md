@@ -117,6 +117,7 @@ predicates; see the [Language Guide](language-guide.md) and the
 | Predicate | Description |
 |---|---|
 | `write/1` | Write a term to stdout (no newline). |
+| `writeq/1` | Write a term to stdout, quoting atoms so it reads back (no newline). |
 | `writeln/1` | Write a term to stdout followed by a newline. |
 | `nl/0` | Write a newline to stdout. |
 

@@ -130,16 +130,79 @@ const INFIX: &[&str] = &[
 ];
 
 pub fn term_to_string(m: &Machine, w: Word) -> String {
-    term_to_string_v(m, w, &mut Vec::new())
+    term_to_string_v(m, w, false, &mut Vec::new())
 }
 
-fn term_to_string_v(m: &Machine, w: Word, visiting: &mut Vec<usize>) -> String {
+/// `writeq/1` rendering: like [`term_to_string`] but atoms that wouldn't read
+/// back unquoted are single-quoted (issue #33). Used only by `writeq/1`.
+pub fn term_to_string_quoted(m: &Machine, w: Word) -> String {
+    term_to_string_v(m, w, true, &mut Vec::new())
+}
+
+/// An atom prints WITHOUT quotes under `writeq` iff it is a solo atom
+/// (`[]`/`!`/`;`/`{}`), an alphanumeric atom (lowercase letter then
+/// letters/digits/`_`), or a symbolic atom (all chars from the ISO symbol
+/// set). Everything else — including the empty atom and anything with spaces
+/// or a leading capital — needs quoting so it reads back as the same atom.
+fn atom_is_unquoted(s: &str) -> bool {
+    if matches!(s, "[]" | "!" | ";" | "{}") {
+        return true;
+    }
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    if bytes[0].is_ascii_lowercase()
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'_')
+    {
+        return true;
+    }
+    const SYM: &[u8] = b"+-*/\\^<>=~:.?@#&$";
+    bytes.iter().all(|b| SYM.contains(b))
+}
+
+/// Render an atom for `writeq`: bare when [`atom_is_unquoted`], else
+/// single-quoted with `'`, `\`, and control chars escaped so it round-trips.
+fn quote_atom(s: &str) -> String {
+    if atom_is_unquoted(s) {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        match c {
+            '\'' => out.push_str("\\'"),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// Render an atom's name, quoting it when `quoted` (writeq) requires it.
+fn atom_name(name: &str, quoted: bool) -> String {
+    if quoted {
+        quote_atom(name)
+    } else {
+        name.to_string()
+    }
+}
+
+fn term_to_string_v(m: &Machine, w: Word, quoted: bool, visiting: &mut Vec<usize>) -> String {
     let w = m.deref(w);
     match tag_of(w) {
-        TAG_ATOM => m.atoms.resolve(atom_id(w)).to_string(),
+        TAG_ATOM => atom_name(m.atoms.resolve(atom_id(w)), quoted),
         TAG_INT => int_value(w).to_string(),
         TAG_BIG => (m.heap[payload(w) as usize] as i64).to_string(),
-        TAG_FLT => format!("{}", f64::from_bits(m.heap[payload(w) as usize])),
+        // `fmt_float` forces the trailing ".0" on whole-valued floats so the
+        // written form reads back as a float (issue #32); raw `{}` would print
+        // `write(2.0)` as `2`, indistinguishable from the integer.
+        TAG_FLT => fmt_float(f64::from_bits(m.heap[payload(w) as usize])),
         TAG_REF => format!("_{}", payload(w)),
         TAG_STR => {
             let idx = payload(w) as usize;
@@ -149,18 +212,20 @@ fn term_to_string_v(m: &Machine, w: Word, visiting: &mut Vec<usize>) -> String {
             visiting.push(idx);
             let (f, n) = unpack_functor(m.heap[idx]);
             let name = m.atoms.resolve(f).to_string();
+            // INFIX operators are symbolic/alphanumeric atoms — never quoted —
+            // so the infix branch is shared by write and writeq unchanged.
             let out = if n == 2 && INFIX.contains(&name.as_str()) {
                 format!(
                     "{} {} {}",
-                    term_to_string_v(m, m.heap[idx + 1], visiting),
+                    term_to_string_v(m, m.heap[idx + 1], quoted, visiting),
                     name,
-                    term_to_string_v(m, m.heap[idx + 2], visiting)
+                    term_to_string_v(m, m.heap[idx + 2], quoted, visiting)
                 )
             } else {
                 let args: Vec<String> = (0..n as usize)
-                    .map(|i| term_to_string_v(m, m.heap[idx + 1 + i], visiting))
+                    .map(|i| term_to_string_v(m, m.heap[idx + 1 + i], quoted, visiting))
                     .collect();
-                format!("{}({})", name, args.join(", "))
+                format!("{}({})", atom_name(&name, quoted), args.join(", "))
             };
             visiting.pop();
             out
@@ -174,14 +239,14 @@ fn term_to_string_v(m: &Machine, w: Word, visiting: &mut Vec<usize>) -> String {
             let (elements, tail) = collect_list_v(m, w, visiting);
             let items: Vec<String> = elements
                 .iter()
-                .map(|e| term_to_string_v(m, *e, visiting))
+                .map(|e| term_to_string_v(m, *e, quoted, visiting))
                 .collect();
             let out = match tail {
                 None => format!("[{}]", items.join(", ")),
                 Some(t) => format!(
                     "[{}|{}]",
                     items.join(", "),
-                    term_to_string_v(m, t, visiting)
+                    term_to_string_v(m, t, quoted, visiting)
                 ),
             };
             visiting.pop();
@@ -204,7 +269,10 @@ fn format_term_v(m: &Machine, w: Word, out: &mut String, visiting: &mut Vec<usiz
         TAG_ATOM => out.push_str(m.atoms.resolve(atom_id(w))),
         TAG_INT => out.push_str(&int_value(w).to_string()),
         TAG_BIG => out.push_str(&(m.heap[payload(w) as usize] as i64).to_string()),
-        TAG_FLT => out.push_str(&f64::from_bits(m.heap[payload(w) as usize]).to_string()),
+        // Route through `fmt_float` so a whole-valued float embedded in an
+        // error term keeps its ".0" too (issue #32): a `2.0` culprit must not
+        // print as `2`, indistinguishable from the integer.
+        TAG_FLT => out.push_str(&fmt_float(f64::from_bits(m.heap[payload(w) as usize]))),
         TAG_REF => {
             out.push('_');
             out.push_str(&payload(w).to_string());
@@ -323,6 +391,67 @@ mod tests {
             "{\"args\":[\"bar\",1],\"functor\":\"foo\"}"
         );
         assert_eq!(term_to_string(&m, w), "foo(bar, 1)");
+    }
+
+    #[test]
+    fn whole_floats_keep_decimal_point_in_text() {
+        // Regression for #32: write/1 / binding text uses term_to_string, which
+        // must render 2.0 as "2.0" (not "2") so it reads back as a float.
+        let mut m = machine();
+        let push_flt = |m: &mut Machine, f: f64| {
+            let idx = m.heap.len();
+            m.heap.push(f.to_bits());
+            make(TAG_FLT, idx as u64)
+        };
+        let two = push_flt(&mut m, 2.0);
+        assert_eq!(term_to_string(&m, two), "2.0");
+        assert_eq!(term_to_json(&m, two), "2.0");
+        // format_term (error-message byte contract) keeps the ".0" too, so a
+        // float culprit in an error term doesn't read back as an integer.
+        let mut em = String::new();
+        format_term(&m, two, &mut em);
+        assert_eq!(em, "2.0");
+        let big = push_flt(&mut m, 1024.0);
+        assert_eq!(term_to_string(&m, big), "1024.0");
+        // Non-whole floats are unaffected.
+        let half = push_flt(&mut m, 3.5);
+        assert_eq!(term_to_string(&m, half), "3.5");
+    }
+
+    #[test]
+    fn writeq_quotes_only_when_needed() {
+        // Regression for #33: term_to_string_quoted (writeq/1) single-quotes
+        // atoms that wouldn't read back unquoted, leaving the rest bare.
+        let mut m = machine();
+        let atom = |m: &mut Machine, s: &str| make_atom(m.atoms.intern(s));
+
+        // Bare: alphanumeric, symbolic, and solo atoms.
+        for s in ["foo", "fooBar", "+", "=..", "[]", "!", ";"] {
+            let w = atom(&mut m, s);
+            assert_eq!(term_to_string_quoted(&m, w), s, "{s} must stay unquoted");
+        }
+        // Quoted: spaces, leading capital, empty, embedded quote.
+        let w = atom(&mut m, "hello world");
+        assert_eq!(term_to_string_quoted(&m, w), "'hello world'");
+        let w = atom(&mut m, "Abc");
+        assert_eq!(term_to_string_quoted(&m, w), "'Abc'");
+        let w = atom(&mut m, "");
+        assert_eq!(term_to_string_quoted(&m, w), "''");
+        let w = atom(&mut m, "it's");
+        assert_eq!(term_to_string_quoted(&m, w), "'it\\'s'");
+
+        // write/1 (unquoted) is unaffected — same atom prints bare.
+        let w = atom(&mut m, "hello world");
+        assert_eq!(term_to_string(&m, w), "hello world");
+
+        // Functor names are quoted too, args recurse.
+        let inner = atom(&mut m, "a b");
+        let f = m.atoms.intern("my pred");
+        let idx = m.heap.len();
+        m.heap.push(pack_functor(f, 1));
+        m.heap.push(inner);
+        let s = make(TAG_STR, idx as u64);
+        assert_eq!(term_to_string_quoted(&m, s), "'my pred'('a b')");
     }
 
     #[test]

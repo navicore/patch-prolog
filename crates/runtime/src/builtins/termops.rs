@@ -145,9 +145,14 @@ fn functor_construct(m: &mut Machine, term: u64, name: u64, arity: u64) -> i32 {
     let n = arity_val as u32;
     let base = m.heap.len();
     m.heap.push(pack_functor(f, n));
+    // Each argument slot must be its OWN fresh variable. Do NOT use
+    // `m.new_var()` here: it pushes a self-ref cell *and* returns a ref to it,
+    // so pushing that ref would lay down two cells per slot and make every
+    // later arg alias the first variable (issue #31). Write a self-referencing
+    // REF directly into each contiguous arg cell instead.
     for _ in 0..n {
-        let v = m.new_var();
-        m.heap.push(v);
+        let idx = m.heap.len();
+        m.heap.push(make_ref(idx));
     }
     let constructed = make(TAG_STR, base as u64);
     unify(m, term, constructed) as i32
@@ -384,6 +389,36 @@ mod tests {
         let mp = &mut *m as *mut Machine;
         assert_eq!(functor3(mp, t, foo, make_int(2)), 1);
         assert_eq!(tag_of(m.deref(t)), TAG_STR);
+    }
+
+    #[test]
+    fn functor_construct_uses_distinct_fresh_vars() {
+        // Regression for #31: functor(T, point, 2) must build point(A, B) with
+        // two DISTINCT vars, so T = point(3, 4) succeeds (it failed when both
+        // slots aliased one variable, reducing the unify to 3 = 4).
+        let mut m = machine();
+        let t = m.new_var();
+        let point = make_atom(m.atoms.intern("point"));
+        let mp = &mut *m as *mut Machine;
+        assert_eq!(functor3(mp, t, point, make_int(2)), 1);
+
+        let w = m.deref(t);
+        assert_eq!(tag_of(w), TAG_STR);
+        let base = payload(w) as usize;
+        // The two arg cells must be different unbound variables.
+        let a0 = m.deref(m.heap[base + 1]);
+        let a1 = m.deref(m.heap[base + 2]);
+        assert_eq!(tag_of(a0), TAG_REF);
+        assert_eq!(tag_of(a1), TAG_REF);
+        assert_ne!(a0, a1, "argument slots must be distinct variables");
+
+        // The behavioral check: T = point(3, 4) succeeds and binds each slot.
+        let concrete = str_term(&mut m, "point", &[make_int(3), make_int(4)]);
+        assert!(unify(&mut m, t, concrete));
+        let w = m.deref(t);
+        let base = payload(w) as usize;
+        assert_eq!(int_value(m.deref(m.heap[base + 1])), 3);
+        assert_eq!(int_value(m.deref(m.heap[base + 2])), 4);
     }
 
     #[test]

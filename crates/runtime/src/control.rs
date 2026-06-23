@@ -131,6 +131,7 @@ fn det_builtin(mp: *mut Machine, name: &str, arity: u32, a: &[Word]) -> Option<b
             miscops::plg_rt_b_unify_with_occurs_check_2(mp, a[0], a[1])
         }
         ("write", 1) => miscops::plg_rt_b_write_1(mp, a[0]),
+        ("writeq", 1) => miscops::plg_rt_b_writeq_1(mp, a[0]),
         ("writeln", 1) => miscops::plg_rt_b_writeln_1(mp, a[0]),
         _ => return None,
     };
@@ -860,7 +861,7 @@ mod vocab_invariant {
         ("=..", 2), ("copy_term", 2), ("atom_length", 2), ("atom_concat", 3),
         ("atom_chars", 2), ("number_chars", 2), ("number_codes", 2), ("msort", 2),
         ("sort", 2), ("succ", 2), ("plus", 3), ("unify_with_occurs_check", 2),
-        ("write", 1), ("writeln", 1),
+        ("write", 1), ("writeq", 1), ("writeln", 1),
     ];
 
     #[test]

@@ -64,6 +64,7 @@ pub const DET_BUILTINS: &[(&str, u32, &str, bool)] = &[
         false,
     ),
     ("write", 1, "plg_rt_b_write_1", false),
+    ("writeq", 1, "plg_rt_b_writeq_1", false),
     ("writeln", 1, "plg_rt_b_writeln_1", false),
     ("nl", 0, "plg_rt_b_nl_0", false),
 ];

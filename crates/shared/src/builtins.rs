@@ -58,7 +58,7 @@ impl BuiltinSpec {
 
 use BuiltinKind::{Atom, Control, Det, Inline};
 
-/// The full vocabulary (55 rows). Docs for everything except `,` `;`
+/// The full vocabulary (56 rows). Docs for everything except `,` `;`
 /// `->` port verbatim from v1's `BUILTIN_DOCS`; those three are new.
 /// `rustfmt::skip` keeps it as a one-row-per-line table — the doc
 /// strings would otherwise wrap to five lines each.
@@ -88,6 +88,7 @@ pub const BUILTINS: &[BuiltinSpec] = &[
     b(Det, "plus", 3, "`plus(X, Y, Z)` — addition relation; any one argument may be unbound."),
     b(Det, "unify_with_occurs_check", 2, "Unification with occurs check: rejects `X = f(X)`-style cycles."),
     b(Det, "write", 1, "Write a term to stdout (no newline)."),
+    b(Det, "writeq", 1, "Write a term to stdout, quoting atoms so it reads back (no newline)."),
     b(Det, "writeln", 1, "Write a term to stdout followed by a newline."),
     b(Det, "nl", 0, "Write a newline to stdout."),
     // --- Inline: own LGoal variant / op-code table ---
@@ -168,9 +169,9 @@ mod tests {
 
     #[test]
     fn roster_size_and_partition() {
-        assert_eq!(BUILTINS.len(), 55, "roster size changed — update the doc");
+        assert_eq!(BUILTINS.len(), 56, "roster size changed — update the doc");
         let count = |k: BuiltinKind| BUILTINS.iter().filter(|s| s.kind == k).count();
-        assert_eq!(count(Det), 25);
+        assert_eq!(count(Det), 26);
         assert_eq!(count(Inline), 16);
         assert_eq!(count(Control), 10);
         assert_eq!(count(Atom), 4);
