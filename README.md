@@ -1,9 +1,15 @@
-# patch-prolog2
+# patch-prolog
 
 A **standalone Prolog compiler**. `plgc` compiles an ISO-subset Prolog
 program to a single native binary with zero runtime dependencies — no
 Rust toolchain, no interpreter, no serialized clause database. Predicates
 become native code via LLVM.
+
+**Home Code Repository** is at [git.navicore.tech](https://git.navicore.tech/navicore/patch-prolog)
+
+**PRs and issues** welcome at [codeberg.org mirror](https://codeberg.org/navicore/patch-prolog)
+
+[Documentation](https://docs.navicore.tech/patch-prolog)
 
 ```sh
 plgc build rules.pl -o my-linter      # ~676K standalone binary
