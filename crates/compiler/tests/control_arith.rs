@@ -187,9 +187,12 @@ fn arithmetic_errors_match_v1() {
         "{\"error\":\"Runtime error: error(evaluation_error(zero_divisor), Division by zero (integer division))\"}",
         3,
     );
+    // DELIBERATE ISO-over-v1 divergence (issue #36): the culprit for a
+    // non-evaluable atom is the predicate indicator `foo/0` per ISO 8.6,
+    // not the bare atom v1 produced. The compound path was already correct.
     check(
         "X is foo + 1",
-        "{\"error\":\"Runtime error: error(type_error(evaluable, foo), Cannot evaluate as arithmetic)\"}",
+        "{\"error\":\"Runtime error: error(type_error(evaluable, /(foo, 0)), Cannot evaluate as arithmetic)\"}",
         3,
     );
 }
