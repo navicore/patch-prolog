@@ -97,6 +97,19 @@ pub fn arith_eq(a: ArithValue, b: ArithValue) -> bool {
 
 // ---- the evaluator -------------------------------------------------------
 
+/// Build a predicate-indicator term `Name/Arity` on the heap and return its
+/// word. This is the ISO culprit shape for `type_error(evaluable, _)`
+/// (ISO 13211-1 §8.6): the non-evaluable functor named as `Name/Arity`,
+/// including arity 0 for a bare atom.
+fn predicate_indicator(m: &mut Machine, name: u32, arity: i64) -> Word {
+    let slash = m.atoms.intern("/");
+    let pi = m.heap.len();
+    m.heap.push(pack_functor(slash, 2));
+    m.heap.push(make_atom(name));
+    m.heap.push(make_int(arity));
+    make(TAG_STR, pi as u64)
+}
+
 /// Evaluate `expr` (a heap word) to an arithmetic value. On `Err(())`,
 /// `m.error` is already populated with v1-identical message text. The unit
 /// error type is intentional: the rich error lives in `m.error` (the M3 ABI
@@ -115,9 +128,17 @@ pub fn eval(m: &mut Machine, expr: Word) -> Result<ArithValue, ()> {
             crate::errors::instantiation(m, &ctx);
             Err(())
         }
-        TAG_ATOM | TAG_LST => {
-            // v1: non-evaluable atom or list literal → type_error(evaluable,
-            // <term>) with context "Cannot evaluate as arithmetic".
+        TAG_ATOM => {
+            // ISO 8.6: a non-evaluable atom's culprit is the predicate
+            // indicator `Atom/0`, not the bare atom — matching the compound
+            // path below (`foo(1)` → `foo/1`).
+            let culprit = predicate_indicator(m, atom_id(w), 0);
+            crate::errors::type_error(m, "evaluable", culprit, "Cannot evaluate as arithmetic");
+            Err(())
+        }
+        TAG_LST => {
+            // A list literal is non-evaluable; keep the bare-term culprit
+            // (out of scope of the atom-indicator fix).
             crate::errors::type_error(m, "evaluable", w, "Cannot evaluate as arithmetic");
             Err(())
         }
@@ -219,13 +240,8 @@ fn eval_struct(m: &mut Machine, w: Word) -> Result<ArithValue, ()> {
         }
         _ => {
             // Unknown operator → type_error(evaluable, name/arity).
-            let slash = m.atoms.intern("/");
-            let name_atom = make_atom(m.atoms.intern(&name));
-            let pi = m.heap.len();
-            m.heap.push(pack_functor(slash, 2));
-            m.heap.push(name_atom);
-            m.heap.push(make_int(arity as i64));
-            let culprit = make(TAG_STR, pi as u64);
+            let name_id = m.atoms.intern(&name);
+            let culprit = predicate_indicator(m, name_id, arity as i64);
             let ctx = format!("Unknown arithmetic operator: {name}/{arity}");
             crate::errors::type_error(m, "evaluable", culprit, &ctx);
             Err(())
@@ -701,7 +717,7 @@ mod tests {
         assert!(eval(&mut m, make_atom(foo)).is_err());
         assert_eq!(
             msg(&m),
-            "error(type_error(evaluable, foo), Cannot evaluate as arithmetic)"
+            "error(type_error(evaluable, /(foo, 0)), Cannot evaluate as arithmetic)"
         );
 
         let mut m = machine();

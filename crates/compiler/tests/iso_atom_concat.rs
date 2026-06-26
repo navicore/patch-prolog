@@ -40,7 +40,10 @@ fn fails(goal: &str) {
 #[track_caller]
 fn errors(goal: &str, needle: &str) {
     let (out, code) = prog().query(goal, &[]);
-    assert!(out.contains(needle), "goal {goal}: expected {needle}, got {out}");
+    assert!(
+        out.contains(needle),
+        "goal {goal}: expected {needle}, got {out}"
+    );
     assert_eq!(code, 3, "goal {goal} should error: {out}");
 }
 

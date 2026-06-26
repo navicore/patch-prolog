@@ -46,6 +46,11 @@ reference, with ISO section numbers.
   an empty list is an error, not a failure.
 - `functor/3` with a negative arity is an error.
 - `atom_chars/2` is for atoms only; `number_chars/2` handles numbers.
+- When `is/2` (or an arithmetic comparison) meets a non-evaluable functor,
+  the `type_error(evaluable, Culprit)` culprit is a **predicate indicator**
+  `Name/Arity` (ISO 8.6) — so a bare atom `foo` reports `foo/0`, exactly
+  like the compound case `foo(1)` reports `foo/1`. (The original v1
+  interpreter reported the bare atom for the arity-0 case.)
 
 ## Exceptions
 

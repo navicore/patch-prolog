@@ -199,7 +199,7 @@ fn arithmetic_type_error_carries_source_location() {
     let c = compile("go :-\n    _ is foo + 1.\n");
     let (out, code) = c.query("go", &[]);
     assert_eq!(code, 3);
-    assert!(out.contains("type_error(evaluable, foo)"), "{out}");
+    assert!(out.contains("type_error(evaluable, /(foo, 0))"), "{out}");
     assert!(out.contains("prog.pl:2:5"), "{out}");
 }
 
@@ -209,7 +209,7 @@ fn arithmetic_comparison_error_carries_source_location() {
     let c = compile("go :-\n    1 < foo.\n");
     let (out, code) = c.query("go", &[]);
     assert_eq!(code, 3);
-    assert!(out.contains("type_error(evaluable, foo)"), "{out}");
+    assert!(out.contains("type_error(evaluable, /(foo, 0))"), "{out}");
     assert!(out.contains("prog.pl:2:5"), "{out}");
 }
 
