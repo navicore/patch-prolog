@@ -16,4 +16,4 @@ crate-type = ["staticlib", "rlib"] # staticlib for LLVM linking, rlib for testin
 # IMPORTANT: every dependency added here ships inside every compiled
 # Prolog binary. No clap, no serde — JSON output is hand-rolled.
 [dependencies]
-plg-shared = { path = "../shared", version = "=0.3.2", package = "patch-prolog-shared" }
+plg-shared = { path = "../shared", version = "=0.3.3", package = "patch-prolog-shared" }

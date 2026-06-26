@@ -17,8 +17,8 @@ path = "src/main.rs"
 [dependencies]
 # Engine — the LSP is a pure FRONTEND consumer: parser + shared types only.
 # It never links plg-runtime or the solver.
-plg-frontend = { path = "../frontend", version = "=0.3.2", package = "patch-prolog-frontend" }
-plg-shared = { path = "../shared", version = "=0.3.2", package = "patch-prolog-shared" }
+plg-frontend = { path = "../frontend", version = "=0.3.3", package = "patch-prolog-frontend" }
+plg-shared = { path = "../shared", version = "=0.3.3", package = "patch-prolog-shared" }
 
 # LSP plumbing — from the workspace; isolated to this crate.
 tower-lsp.workspace = true
