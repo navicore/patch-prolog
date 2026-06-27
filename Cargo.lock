@@ -1176,7 +1176,7 @@ dependencies = [
 
 [[package]]
 name = "patch-prolog-compiler"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "clap",
  "clap_complete",
@@ -1189,14 +1189,14 @@ dependencies = [
 
 [[package]]
 name = "patch-prolog-frontend"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "patch-prolog-shared",
 ]
 
 [[package]]
 name = "patch-prolog-lsp"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "patch-prolog-frontend",
  "patch-prolog-shared",
@@ -1210,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "patch-prolog-repl"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "clap",
  "crossterm",
@@ -1224,14 +1224,14 @@ dependencies = [
 
 [[package]]
 name = "patch-prolog-runtime"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "patch-prolog-shared",
 ]
 
 [[package]]
 name = "patch-prolog-shared"
-version = "0.3.3"
+version = "0.3.4"
 
 [[package]]
 name = "percent-encoding"
@@ -2276,9 +2276,9 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vim-line"
-version = "7.6.0"
+version = "7.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7105512d7ee0e4d8b16ac7769be578c41b5f0cf0cc819f3c2046d10779c56abf"
+checksum = "f8d8f69a4e3cc1b94ba871a196e7a3865b2a415bdac90b073023707195a033a5"
 
 [[package]]
 name = "vtparse"
