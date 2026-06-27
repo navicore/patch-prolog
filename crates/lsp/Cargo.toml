@@ -4,8 +4,9 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+documentation.workspace = true
+repository.workspace = true
 description = "Language Server Protocol implementation for patch-prolog (`plgl`)"
-repository = "https://git.navicore.tech/navicore/patch-prolog"
 keywords = ["lsp", "language-server", "prolog", "patch-prolog"]
 categories = ["development-tools", "text-editors"]
 

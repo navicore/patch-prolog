@@ -4,8 +4,9 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+documentation.workspace = true
+repository.workspace = true
 description = "Interactive REPL for patch-prolog (`plgr`) — drives the compiler, never interprets"
-repository = "https://git.navicore.tech/navicore/patch-prolog"
 keywords = ["repl", "prolog", "patch-prolog", "tui"]
 categories = ["development-tools", "command-line-utilities"]
 

@@ -1,5 +1,9 @@
 # patch-prolog
 
+[![patch-prolog-compiler](https://img.shields.io/crates/v/patch-prolog-compiler.svg?label=patch-prolog-compiler)](https://crates.io/crates/patch-prolog-compiler)
+[![patch-prolog-repl](https://img.shields.io/crates/v/patch-prolog-repl.svg?label=patch-prolog-repl)](https://crates.io/crates/patch-prolog-repl)
+[![patch-prolog-lsp](https://img.shields.io/crates/v/patch-prolog-lsp.svg?label=patch-prolog-lsp)](https://crates.io/crates/patch-prolog-lsp)
+
 A **standalone Prolog compiler**. `plgc` compiles an ISO-subset Prolog
 program to a single native binary with zero runtime dependencies — no
 Rust toolchain, no interpreter, no serialized clause database. Predicates
@@ -10,6 +14,9 @@ become native code via LLVM.
 **PRs and issues** welcome at [codeberg.org mirror](https://codeberg.org/navicore/patch-prolog)
 
 [Documentation](https://docs.navicore.tech/patch-prolog)
+
+**API docs (rustdoc)** per crate on docs.rs:
+[patch-prolog-shared](https://docs.rs/patch-prolog-shared) · [patch-prolog-frontend](https://docs.rs/patch-prolog-frontend) · [patch-prolog-runtime](https://docs.rs/patch-prolog-runtime) · [patch-prolog-compiler](https://docs.rs/patch-prolog-compiler) · [patch-prolog-lsp](https://docs.rs/patch-prolog-lsp) · [patch-prolog-repl](https://docs.rs/patch-prolog-repl)
 
 ```sh
 plgc build rules.pl -o my-linter      # ~676K standalone binary

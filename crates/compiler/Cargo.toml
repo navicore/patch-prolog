@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+documentation.workspace = true
+repository.workspace = true
 description = "Standalone Prolog compiler (plgc) — compiles .pl to native binaries via LLVM"
 
 [[bin]]

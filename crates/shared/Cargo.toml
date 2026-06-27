@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+documentation.workspace = true
+repository.workspace = true
 description = "Shared term representation and atom interning for patch-prolog2"
 
 # IMPORTANT: this crate is linked into plg-runtime, which ships inside

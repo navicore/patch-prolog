@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+documentation.workspace = true
+repository.workspace = true
 description = "Tokenizer and parser for patch-prolog2 (compiler-side only)"
 
 # Compiler-side only: this crate is NOT linked into compiled Prolog
