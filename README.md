@@ -78,15 +78,25 @@ ceiling (default 10,000, uncatchable) is tunable via `PLG_MAX_STEPS`.
 
 ## The language
 
-ISO 13211-1 subset, inherited from v1 as the spec (deliberate
-exclusions: no modules, DCG, `op/3`, assert/retract, postfix
-operators): full backtracking with first-argument indexing, cut
-(ISO-transparent in `;` — a documented divergence from a v1 bug),
-`->`/`;`/`\+`/`once`, `catch/throw` with the ISO error-term taxonomy,
-`findall/3`, `call/N`, `between/3`, checked i64 arithmetic with floored
-`mod`, the standard order of terms, ~60 builtins, and a compiled-in
-list stdlib (`member`, `append`, `length`, `reverse`, `nth0/1`,
-`last`). See [docs/ISO_COMPLIANCE.md](docs/ISO_COMPLIANCE.md).
+An ISO 13211-1 subset, with ISO conformance as the guide. A few
+minor, deliberate deviations and several safety extensions beyond
+ISO are documented in [docs/ISO_COMPLIANCE.md](docs/ISO_COMPLIANCE.md);
+the subset is defined by its omissions and its features.
+
+Deliberate omissions: no modules, DCG, `op/3`, `assert/retract`, or
+postfix operators.
+
+Features:
+
+- Full backtracking with first-argument indexing
+- Cut, transparent through `,`/`;`/`->` (ISO semantics)
+- `->`/`;`/`\+`/`once`
+- `catch/throw` with the ISO error-term taxonomy
+- `findall/3`, `call/N`, `between/3`
+- Checked i64 arithmetic with floored `mod`
+- The standard order of terms
+- ~60 builtins, plus a compiled-in list stdlib
+  (`member`, `append`, `length`, `reverse`, `nth0/1`, `last`)
 
 Deep recursion is safe: all control transfers are guaranteed tail
 calls (`musttail`), so a million-deep recursive chain runs in
