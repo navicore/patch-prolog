@@ -150,3 +150,6 @@ Required repo secrets (Forgejo → Settings → Actions → Secrets and Variable
 
 - `PAT` — Forgejo token with `write:repository`, to push the version bump to `main`.
 - `CRATES_IO_TOKEN` — crates.io API token from <https://crates.io/settings/tokens>.
+- `DOCS_CLIENT_ID` — anz client ID for publishing the mdbook
+- `DOCS_CLIENT_SECRET` — anz client secret for publishing the mdbook
+
