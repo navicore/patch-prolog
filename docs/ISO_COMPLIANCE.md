@@ -67,7 +67,9 @@ reference, with ISO section numbers.
 
 `!` is **transparent through `,`, `;`, and `->`**: a cut inside a
 disjunction branch cuts the whole clause, including the other branch and
-the predicate's remaining clauses. With `m(1). m(2). m(3).`:
+the predicate's remaining clauses (the standard WAM/ISO cut-barrier rules,
+implemented here as choice-point-stack truncation to the barrier recorded
+at predicate entry). With `m(1). m(2). m(3).`:
 
 ```prolog
 t(X) :- (m(X), X > 1, ! ; X = fallback).

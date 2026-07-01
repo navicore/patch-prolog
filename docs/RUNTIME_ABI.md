@@ -7,6 +7,27 @@ files **are** the contract; this document explains it. The `build.rs`
 version-sync guarantees an embedded runtime always matches the compiler that
 emits calls into it.
 
+## Lineage
+
+The runtime substrate this document describes — the cell heap, the trail,
+choice points with retry pointers, tagged words with type tags in the low
+bits, generic trail-recording unification, first-argument indexing, and cut
+as choice-point-stack truncation — is the **Edinburgh / Warren Abstract
+Machine (WAM)** model (Warren, *An Abstract Prolog Instruction Set*, SRI
+Tech Note 309, 1983), the machine model shared by DEC-10/Quintus/SICStus/
+SWI/GNU Prolog. plgc inherits this machine model; it diverges from WAM in
+the **compilation target**, not the machine model. A WAM system lowers
+Prolog to an instruction set (`get`/`put`/`unify`, `call`/`proceed`) over
+argument registers and a local-stack environment; plgc lowers each
+predicate to one native LLVM function in continuation-passing style, with
+heap-allocated continuation frames replacing the WAM environment stack.
+The ABI below is the seam between that CPS codegen and the WAM-derived
+runtime — so the heap/trail/choice-point/unification vocabulary will be
+familiar to anyone who has read a WAM description, and the uniform function
+signature is where plgc stops looking like one. See
+[Compilation Model](compilation-model.md) for the divergence and its named
+escape hatches.
+
 ## The uniform function signature
 
 Every compiled predicate, clause, chain ("try next clause"), continuation,

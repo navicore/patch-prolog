@@ -61,6 +61,20 @@ can be considered.
 
 ## Execution model (summary)
 
+The runtime substrate — cell heap, trail, choice points, tagged words,
+generic unification, first-argument indexing, cut as choice-point-stack
+truncation — is the **Edinburgh / Warren Abstract Machine (WAM) model**
+[Warren, SRI Tech Note 309, 1983], the shared machine model behind
+DEC-10/Quintus/SICStus/SWI/GNU Prolog. plgc inherits that machine model
+and diverges from WAM only in the **codegen target**: where a classical
+WAM system compiles Prolog to an instruction set (`get`/`put`/`unify`,
+`call`/`proceed`) over a register file and a local-stack environment,
+plgc compiles each predicate to one native LLVM function in
+continuation-passing style. The data structures are WAM's; the
+instruction set is replaced by direct native-code emission. See
+[Compilation Model](compilation-model.md) for the why and the escape
+hatches.
+
 - Each predicate compiles to one LLVM function in continuation-passing
   style: it receives the Machine pointer, its arguments as tagged 64-bit
   words, and a success continuation. Solutions are delivered by

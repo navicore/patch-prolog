@@ -19,9 +19,15 @@ and backtracking never grow the C stack.
 
 This is the simplest design that is *genuinely compiled*. The alternatives:
 
-- **WAM-instruction emission** (GNU Prolog's path) — fastest and most
-  faithful, but needs the full WAM register/environment design up front. A
-  named future escape hatch, not the v1 target.
+- **WAM-instruction emission** (the GNU Prolog / SICStus path — lowering
+  Prolog to Warren's instruction set: `get`/`put`/`unify` head-unification
+  triples over argument registers, `call`/`execute`/`proceed` control) —
+  fastest and most faithful to the standard implementation strategy, but
+  needs the full WAM register/environment design up front. A named future
+  escape hatch, not the v1 target. (plgc keeps the WAM *machine model* —
+  heap, trail, choice points, tagged words, indexing — and replaces only
+  the *instruction set* with direct native CPS codegen; see
+  [Runtime ABI](RUNTIME_ABI.md#lineage).)
 - **A pure choice-point trampoline** (success also routed through the stack)
   — simple, but bounces once per goal, forfeiting the `musttail` win on
   determinate iteration.
