@@ -21,6 +21,7 @@
 
 use crate::core::{self, QueryResult};
 use crate::machine::{Machine, OutputSink};
+use crate::wire::{Encoder, Envelope, Json, WireError};
 use std::alloc::{Layout, alloc, dealloc};
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 
@@ -142,7 +143,7 @@ pub unsafe extern "C" fn plg_rt_run_query(
     // Writes never fail (a `Vec` sink), so the `io::Result`s are infallible.
     match core::run_query(m, q) {
         QueryResult::ParseError(msg) | QueryResult::RuntimeError(msg) => {
-            let _ = core::write_error_json(&mut buf, &msg);
+            let _ = Json.write_error(&mut buf, &WireError::Parse(msg));
         }
         QueryResult::Solutions => {
             let exhausted = core::exhausted(m);
@@ -150,7 +151,8 @@ pub unsafe extern "C" fn plg_rt_run_query(
             // nothing was written), so the result always carries an `output`
             // field. Intended D4 contract: a stable shape for hosts, present
             // even when empty.
-            let _ = core::write_solutions_json(&mut buf, m, exhausted, m.captured_output());
+            let env = Envelope::from_machine(m, exhausted);
+            let _ = Json.write_envelope(&mut buf, &env);
         }
     }
 

@@ -7,6 +7,7 @@
 
 use crate::core::{self, QueryResult};
 use crate::machine::{Machine, RegistryEntry, SrcLoc};
+use crate::wire::{Encoder, Envelope, Json, WireError};
 use plg_shared::StringInterner;
 use std::ffi::CStr;
 use std::io::{self, Write};
@@ -109,11 +110,10 @@ fn parse_args(argv: Vec<String>) -> Result<Args, String> {
 }
 
 /// v1's output_error: JSON errors go to stdout, text errors to stderr.
-/// The JSON shape is the shared core's; only the routing is CLI-specific.
 fn output_error(format: &str, message: &str) {
     if format == "json" {
         let mut out = io::stdout().lock();
-        let _ = core::write_error_json(&mut out, message);
+        let _ = Json.write_error(&mut out, &WireError::Parse(message.to_string()));
         let _ = out.write_all(b"\n");
     } else {
         eprintln!("Error: {message}");
@@ -122,9 +122,8 @@ fn output_error(format: &str, message: &str) {
 
 fn output_json(m: &Machine, exhausted: bool) {
     let mut out = io::stdout().lock();
-    // `None` output: the CLI streamed any `write/1` bytes to stdout already, so
-    // its JSON stays byte-identical to v1 (no `output` field).
-    let _ = core::write_solutions_json(&mut out, m, exhausted, None);
+    let env = Envelope::from_machine(m, exhausted);
+    let _ = Json.write_envelope(&mut out, &env);
     let _ = out.write_all(b"\n");
 }
 
