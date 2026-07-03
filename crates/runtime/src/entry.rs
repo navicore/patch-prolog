@@ -141,12 +141,18 @@ fn output_solutions(enc: Option<&EncoderDesc>, m: &Machine, exhausted: bool) {
 }
 
 /// Emit an error. Wire encodings go to stdout (the encoding's error object);
-/// the human form (`enc == None`) goes to stderr (v1 behavior).
-fn output_result(enc: Option<&EncoderDesc>, message: &str) {
+/// the human form (`enc == None`) goes to stderr (v1 behavior). The caller
+/// constructs the `WireError` with the correct class (`Parse` vs `Runtime`) so
+/// the distinction is honest on the wire even though today's encoders collapse
+/// both to the same message — a future bson `kind` field will surface it.
+fn output_result(enc: Option<&EncoderDesc>, err: WireError) {
+    let message = match &err {
+        WireError::Parse(m) | WireError::Runtime(m) => m.as_str(),
+    };
     match enc {
         Some(e) => {
             let mut out = io::stdout().lock();
-            let _ = (e.write_error)(&mut out, &WireError::Parse(message.to_string()));
+            let _ = (e.write_error)(&mut out, &err);
             if (e.can_stream)() {
                 let _ = out.write_all(b"\n");
             } else {
@@ -243,7 +249,12 @@ pub unsafe extern "C" fn plg_rt_main(
             }
             let mut stdin_buf = Vec::new();
             if let Err(e) = std::io::stdin().read_to_end(&mut stdin_buf) {
-                eprintln!("failed to read bson request from stdin: {e}");
+                // Route through the output encoder: a bson-speaking caller
+                // expects a bson response, not plaintext stderr. (IO.md #2.)
+                output_result(
+                    enc,
+                    WireError::Parse(format!("bson request read error: {e}")),
+                );
                 return 2;
             }
             match crate::wire::parse_bson_request(&stdin_buf) {
@@ -253,7 +264,13 @@ pub unsafe extern "C" fn plg_rt_main(
                     (req.query, lim)
                 }
                 Err(e) => {
-                    eprintln!("bson request parse error: {e}");
+                    // A malformed bson request is a parse error at the framing
+                    // layer; encode it like any other parse error rather than
+                    // breaking the "I only speak bson" contract. (IO.md #2.)
+                    output_result(
+                        enc,
+                        WireError::Parse(format!("bson request parse error: {e}")),
+                    );
                     return 2;
                 }
             }
@@ -292,11 +309,11 @@ pub unsafe extern "C" fn plg_rt_main(
 
     match core::run_query(m, &query) {
         QueryResult::ParseError(msg) => {
-            output_result(enc, &msg);
+            output_result(enc, WireError::Parse(msg));
             2
         }
         QueryResult::RuntimeError(msg) => {
-            output_result(enc, &msg);
+            output_result(enc, WireError::Runtime(msg));
             3
         }
         QueryResult::Solutions => {

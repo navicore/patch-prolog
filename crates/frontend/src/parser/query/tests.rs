@@ -371,12 +371,27 @@ fn test_io_format_directive_single_atom() {
 }
 
 #[test]
-fn test_io_format_directive_dedups() {
+fn test_io_format_directive_no_parse_level_dedup() {
+    // Dedup is codegen's job (it owns the cross-file merge); the parser
+    // preserves source order including duplicates.
     let mut interner = StringInterner::new();
     let (_clauses, dirs) =
         Parser::parse_program_with_directives(":- io_format([json, json, bson]).", &mut interner)
             .unwrap();
-    assert_eq!(dirs.io_format, vec!["json".to_string(), "bson".to_string()]);
+    assert_eq!(
+        dirs.io_format,
+        vec!["json".to_string(), "json".to_string(), "bson".to_string()]
+    );
+}
+
+#[test]
+fn test_io_format_directive_rejects_improper_list() {
+    let mut interner = StringInterner::new();
+    let result =
+        Parser::parse_program_with_directives(":- io_format([json | bson]).", &mut interner);
+    assert!(result.is_err(), "improper list must be rejected");
+    let err = result.unwrap_err();
+    assert!(err.message.contains("proper list"), "got: {err}");
 }
 
 #[test]

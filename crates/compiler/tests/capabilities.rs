@@ -241,3 +241,52 @@ fn argv_query_still_works_in_bson_binary() {
     assert_eq!(code, 1);
     assert!(out.contains("\"X\":\"bob\""));
 }
+
+// ── bson error path (review #1 + #2: errors route through the output encoder) ─
+
+/// A bson cstring-key scan (sufficient for these fixtures, not a parser).
+fn bson_has_key(buf: &[u8], key: &[u8]) -> bool {
+    let mut needle = key.to_vec();
+    needle.push(0x00);
+    buf.windows(needle.len()).any(|w| w == needle.as_slice())
+}
+
+/// A runtime error (undefined non-dynamic predicate ⇒ existence_error, exit 3)
+/// is emitted as a valid bson error document on stdout — not plaintext stderr.
+#[test]
+fn bson_error_path_on_runtime_error() {
+    let (bson, code) = both_list().query_bytes("no_such_pred(X)", &["--format", "bson"]);
+    assert_eq!(code, 3, "undefined predicate ⇒ runtime error ⇒ exit 3");
+    let len = i32::from_le_bytes(bson[..4].try_into().unwrap());
+    assert_eq!(len as usize, bson.len(), "bson error doc self-delimits");
+    assert!(bson_has_key(&bson, b"error"), "carries an error field");
+}
+
+/// A query-parse error (exit 2) is also emitted as a bson error document.
+#[test]
+fn bson_error_path_on_parse_error() {
+    let (bson, code) = both_list().query_bytes("bad(", &["--format", "bson"]);
+    assert_eq!(code, 2, "malformed query ⇒ parse error ⇒ exit 2");
+    let len = i32::from_le_bytes(bson[..4].try_into().unwrap());
+    assert_eq!(len as usize, bson.len(), "bson error doc self-delimits");
+    assert!(bson_has_key(&bson, b"error"));
+}
+
+/// A malformed bson *request* (exit 2) is encoded in the chosen output format,
+/// not dropped to stderr — the "I only speak bson" contract at the framing
+/// layer. (Review #2.)
+#[test]
+fn bson_request_parse_error_is_encoded_not_stderr() {
+    let (bson, code) =
+        both_list().run_with_stdin(&["--input-format", "bson", "--format", "bson"], b"not bson");
+    assert_eq!(code, 2);
+    // stdout carries a valid bson error document (the plaintext did NOT go to
+    // stderr): self-delimiting length matches.
+    let len = i32::from_le_bytes(bson[..4].try_into().unwrap());
+    assert_eq!(
+        len as usize,
+        bson.len(),
+        "malformed-request error encoded as bson"
+    );
+    assert!(bson_has_key(&bson, b"error"));
+}

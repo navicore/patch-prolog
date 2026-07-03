@@ -119,17 +119,27 @@ impl Parser<'_> {
                 self.collect_io_format_specs(&args[0], directives)?;
                 self.collect_io_format_specs(&args[1], directives)
             }
-            // List: [json, bson]
+            // List: [json, bson]. The tail must be a proper list (another cons
+            // or `[]`) — `[json | bson]` is rejected rather than silently
+            // parsed as `[json, bson]`.
             Term::List { head, tail } => {
                 self.collect_io_format_specs(head, directives)?;
-                self.collect_io_format_specs(tail, directives)
+                match tail.as_ref() {
+                    Term::List { .. } => self.collect_io_format_specs(tail, directives),
+                    Term::Atom(a) if self.interner.resolve(*a) == "[]" => Ok(()),
+                    other => Err(self.error_here(format!(
+                        "io_format list must be a proper list of atoms; unexpected tail: {}",
+                        format_directive_term(other, self.interner)
+                    ))),
+                }
             }
             Term::Atom(nil) if self.interner.resolve(*nil) == "[]" => Ok(()),
             Term::Atom(id) => {
-                let name = self.interner.resolve(*id).to_string();
-                if !directives.io_format.contains(&name) {
-                    directives.io_format.push(name);
-                }
+                // Dedup is the codegen layer's job (it sees the cross-file
+                // merge); the parser just collects in source order.
+                directives
+                    .io_format
+                    .push(self.interner.resolve(*id).to_string());
                 Ok(())
             }
             other => Err(self.error_here(format!(

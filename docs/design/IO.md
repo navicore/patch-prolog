@@ -151,8 +151,18 @@ pub struct Request { pub query: String, pub limit: Option<usize>, pub format: Op
   reads the same fields. `program_output` is `Some` only in capture mode
   (bson); `None` in stream mode (text), preserving the v1 byte contract.
 - **Capability table** — codegen-baked `.rodata`: the set from
-  `:- io_format([...])`, default `[text]`. **One set, gating both input and
-  output.** `--format` or `--input-format` outside the set → exit 2.
+  `:- io_format([...])`, default `[json]`. **One set, gating both input and
+  output.** `--format` or `--input-format` outside the set → exit 2. An explicit
+  `:- io_format([])` is indistinguishable from no directive and also defaults
+  to `[json]` (a binary must speak at least one encoding). (The design
+  vocabulary calls this encoding `text`; the CLI rename to `text` is part 2.)
+  **Scope:** the capability table governs the CLI/`plg_rt_main` contract. The
+  WASM Tier-2 reactor (`reactor.rs`, `--target worker`) is host-ABI-driven —
+  it has no `--format` and always emits json — so a `[bson]`-only *worker*
+  binary still emits json from its reactor (and `PLG_ENC_JSON` won’t
+  dead-strip there). Native binaries are unaffected (the reactor isn’t
+  linked, so dead-stripping holds). Whether/how `io_format` should apply to
+  the worker target is an open follow-up.
 - **`Machine::OutputSink`** — invariant unchanged: in `Capture`, `write/1`
   bytes survive heap rewind and are available post-solve. bson forces Capture;
   text uses Stdout (default) or Capture (if the author/caller opts in later).

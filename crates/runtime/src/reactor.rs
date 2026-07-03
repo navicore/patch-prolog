@@ -142,8 +142,11 @@ pub unsafe extern "C" fn plg_rt_run_query(
     let mut buf = Vec::new();
     // Writes never fail (a `Vec` sink), so the `io::Result`s are infallible.
     match core::run_query(m, q) {
-        QueryResult::ParseError(msg) | QueryResult::RuntimeError(msg) => {
+        QueryResult::ParseError(msg) => {
             let _ = (PLG_ENC_JSON.write_error)(&mut buf, &WireError::Parse(msg));
+        }
+        QueryResult::RuntimeError(msg) => {
+            let _ = (PLG_ENC_JSON.write_error)(&mut buf, &WireError::Runtime(msg));
         }
         QueryResult::Solutions => {
             let exhausted = core::exhausted(m);
