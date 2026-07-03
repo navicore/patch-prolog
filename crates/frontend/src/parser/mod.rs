@@ -25,19 +25,14 @@ use std::collections::HashMap;
 
 /// Directives extracted from a program (`:- dynamic(f/1).` etc).
 ///
-/// Currently `dynamic/1` and `io_format/1` are recognized. Future directives
-/// (e.g. `multifile`, `discontiguous`) extend this struct.
+/// Currently only `dynamic/1` is recognized. Future directives (e.g.
+/// `multifile`, `discontiguous`) extend this struct.
 #[derive(Debug, Default, Clone)]
 pub struct ProgramDirectives {
     /// `(functor, arity)` pairs declared `:- dynamic(F/A).`.
     /// A goal referencing a predicate in this set fails silently when no
     /// clauses match, instead of throwing `existence_error`.
     pub dynamic: Vec<(AtomId, usize)>,
-    /// Wire-encoding names the program declares via `:- io_format([...]).`
-    /// (e.g. `[json, bson]`). Default `[json]`. The codegen-baked capability
-    /// table gates `--format`; encoders not listed are dead-stripped from the
-    /// binary. See docs/design/IO.md.
-    pub io_format: Vec<String>,
 }
 
 /// A source occurrence of an atom-functor term (`name` or `name(...)`),

@@ -72,9 +72,6 @@ reallocation and backtracking truncation.
 ```llvm
 @plg_atom_strs    = [N x ptr]              ; atom names, id order
 @plg_registry     = [K x { i32, i32, ptr }] ; functor, arity, entry fn
-@plg_caps         = [C x ptr]              ; advertised EncoderDesc ptrs
-@plg_srcmap       = [S x { i32, i32, i32 }] ; site_id → (file, line, col)
-@plg_files        = [F x ptr]              ; filename cstrings
 ```
 
 `plg_rt_init` re-interns the atom names in order, reproducing the compiler's
@@ -83,13 +80,6 @@ unseen at compile time get fresh ids ≥ N and correctly unify with nothing.
 The registry is sorted by (functor, arity) for binary search; `:- dynamic`
 predicates with no clauses point at `@plg_rt_pred_fail` (silent-fail
 contract).
-
-`@plg_caps` is the wire-encoding capability table (docs/design/IO.md): one
-pointer per encoding the program declared via `:- io_format([...])`
-(default `[json]`), each pointing at a runtime `EncoderDesc` static
-(`@PLG_ENC_JSON` / `@PLG_ENC_BSON`). `plg_rt_main` resolves `--format` by
-scanning it; encoders NOT listed are unreferenced, so link-time `--gc-sections`
-strips their code (a `[json]`-only binary links no bson).
 
 ## Term words (tag in low 3 bits)
 
@@ -107,7 +97,7 @@ mirrored in `cell.rs` and `term_emit.rs`, covered by tests on both sides).
 
 | symbol | signature (IR) | purpose |
 |---|---|---|
-| `plg_rt_init` | `ptr (ptr, i32, ptr, i32, ptr, i32, ptr, i32, ptr, i32)` | build Machine from atom table + registry + provenance + capability table |
+| `plg_rt_init` | `ptr (ptr, i32, ptr, i32)` | build Machine from atom table + registry |
 | `plg_rt_main` | `i32 (ptr, i32, ptr)` | argv parse, query parse, solve, output, exit code |
 | `plg_rt_step` | `i32 (ptr)` | step counter; 0 ⇒ uncatchable resource_error set |
 | `plg_rt_new_var` | `i64 (ptr)` | fresh unbound REF cell |

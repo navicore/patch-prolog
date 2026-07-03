@@ -273,8 +273,8 @@ mod tests {
         assert!(matches!(solve(&mut m, goal), Outcome::Done));
         assert!(m.error.is_none());
         assert_eq!(m.solutions.len(), 2);
-        assert_eq!(m.solutions[0].bindings[0].text, "a");
-        assert_eq!(m.solutions[1].bindings[0].text, "b");
+        assert_eq!(m.solutions[0].bindings[0].2, "a");
+        assert_eq!(m.solutions[1].bindings[0].2, "b");
     }
 
     #[test]

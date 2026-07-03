@@ -41,11 +41,6 @@ impl Parser<'_> {
                 }
                 Ok(())
             }
-            Term::Compound { functor, args }
-                if self.interner.resolve(functor) == "io_format" && args.len() == 1 =>
-            {
-                self.collect_io_format_specs(&args[0], directives)
-            }
             _ => Err(self.error_here(format!(
                 "Unknown directive: {}",
                 format_directive_term(&body, self.interner)
@@ -97,54 +92,6 @@ impl Parser<'_> {
             other => Err(self.error_here(format!(
                 "Invalid dynamic spec (expected F/A): {}",
                 format_directive_term(&other, self.interner)
-            ))),
-        }
-    }
-
-    /// Walk an `io_format` spec — a single atom, or a comma-chain / list of
-    /// atoms — into the directives set. Accepts `:- io_format(bson).`,
-    /// `:- io_format((json, bson)).`, and `:- io_format([json, bson]).`. The
-    /// atom text is validated against the known encoder names at codegen
-    /// time (here we just collect strings).
-    fn collect_io_format_specs(
-        &self,
-        spec: &Term,
-        directives: &mut ProgramDirectives,
-    ) -> Result<(), ParseError> {
-        match spec {
-            // Comma-chain: (json, bson)
-            Term::Compound { functor, args }
-                if self.interner.resolve(*functor) == "," && args.len() == 2 =>
-            {
-                self.collect_io_format_specs(&args[0], directives)?;
-                self.collect_io_format_specs(&args[1], directives)
-            }
-            // List: [json, bson]. The tail must be a proper list (another cons
-            // or `[]`) — `[json | bson]` is rejected rather than silently
-            // parsed as `[json, bson]`.
-            Term::List { head, tail } => {
-                self.collect_io_format_specs(head, directives)?;
-                match tail.as_ref() {
-                    Term::List { .. } => self.collect_io_format_specs(tail, directives),
-                    Term::Atom(a) if self.interner.resolve(*a) == "[]" => Ok(()),
-                    other => Err(self.error_here(format!(
-                        "io_format list must be a proper list of atoms; unexpected tail: {}",
-                        format_directive_term(other, self.interner)
-                    ))),
-                }
-            }
-            Term::Atom(nil) if self.interner.resolve(*nil) == "[]" => Ok(()),
-            Term::Atom(id) => {
-                // Dedup is the codegen layer's job (it sees the cross-file
-                // merge); the parser just collects in source order.
-                directives
-                    .io_format
-                    .push(self.interner.resolve(*id).to_string());
-                Ok(())
-            }
-            other => Err(self.error_here(format!(
-                "io_format spec must be an atom (or list of atoms), got {}",
-                format_directive_term(other, self.interner)
             ))),
         }
     }
