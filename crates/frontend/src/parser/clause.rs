@@ -41,6 +41,11 @@ impl Parser<'_> {
                 }
                 Ok(())
             }
+            Term::Compound { functor, args }
+                if self.interner.resolve(functor) == "io_format" && args.len() == 1 =>
+            {
+                self.collect_io_format_specs(&args[0], directives)
+            }
             _ => Err(self.error_here(format!(
                 "Unknown directive: {}",
                 format_directive_term(&body, self.interner)
@@ -92,6 +97,44 @@ impl Parser<'_> {
             other => Err(self.error_here(format!(
                 "Invalid dynamic spec (expected F/A): {}",
                 format_directive_term(&other, self.interner)
+            ))),
+        }
+    }
+
+    /// Walk an `io_format` spec — a single atom, or a comma-chain / list of
+    /// atoms — into the directives set. Accepts `:- io_format(bson).`,
+    /// `:- io_format((json, bson)).`, and `:- io_format([json, bson]).`. The
+    /// atom text is validated against the known encoder names at codegen
+    /// time (here we just collect strings).
+    fn collect_io_format_specs(
+        &self,
+        spec: &Term,
+        directives: &mut ProgramDirectives,
+    ) -> Result<(), ParseError> {
+        match spec {
+            // Comma-chain: (json, bson)
+            Term::Compound { functor, args }
+                if self.interner.resolve(*functor) == "," && args.len() == 2 =>
+            {
+                self.collect_io_format_specs(&args[0], directives)?;
+                self.collect_io_format_specs(&args[1], directives)
+            }
+            // List: [json, bson]
+            Term::List { head, tail } => {
+                self.collect_io_format_specs(head, directives)?;
+                self.collect_io_format_specs(tail, directives)
+            }
+            Term::Atom(nil) if self.interner.resolve(*nil) == "[]" => Ok(()),
+            Term::Atom(id) => {
+                let name = self.interner.resolve(*id).to_string();
+                if !directives.io_format.contains(&name) {
+                    directives.io_format.push(name);
+                }
+                Ok(())
+            }
+            other => Err(self.error_here(format!(
+                "io_format spec must be an atom (or list of atoms), got {}",
+                format_directive_term(other, self.interner)
             ))),
         }
     }

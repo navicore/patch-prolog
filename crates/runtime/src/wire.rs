@@ -1,36 +1,42 @@
-//! The wire layer: the fixed envelope *shape* as a typed value, plus a
-//! plural `Encoder` trait whose impls are the *encodings*. Splits what was
-//! collapsed in `core.rs` — where the JSON byte-emitters implicitly defined
-//! the shape — so the shape is owned once (here) and the encodings vary
-//! independently. See docs/design/IO.md.
+//! The wire layer: the fixed envelope *shape* as a typed value, plus plural
+//! encodings exposed as **descriptors** (vtables of function pointers). Splits
+//! what was collapsed in `core.rs` — where the JSON byte-emitters implicitly
+//! defined the shape — so the shape is owned once (here) and the encodings
+//! vary independently. See docs/design/IO.md.
 //!
 //! Both the CLI/WASI shell (`entry.rs`) and the Tier-2 reactor (`reactor.rs`)
-//! build an `Envelope` and hand it to a chosen `Encoder`, so the envelope
-//! shape has a single source and can't drift between transports.
+//! build an `Envelope` and drive it through a chosen `EncoderDesc`.
+//!
+//! **Why descriptors, not a trait.** Codegen bakes a per-binary *capability
+//! table* — pointers to the descriptors the program declared via
+//! `io_format/1` — and `entry.rs` dispatches through those pointers, never
+//! naming an encoder statically. Link-time `--gc-sections` then strips any
+//! encoder whose descriptor isn't in the table (a `[text]`-only binary links
+//! no bson code). A trait-object `encoder_for(name)` match would reference
+//! every encoder statically and defeat that.
 //!
 //! Two encodings: **json** (the text wire encoding, v1 byte-identical) and
-//! **bson** (binary, dense, typed). Term values inside bson are carried as
-//! `BinData(0x00)` wrapping a `copyterm::TermBuf` — the same cell ABI the
-//! fact tables and `copy_term/2` use, single-sourced in `plg-shared::cell`,
-//! lossless including cyclic terms. Because a binary format can't coexist
-//! with streamed text bytes, bson forces capture mode (`can_stream() ==
-//! false`); the encoding dictates the sink.
+//! **bson** (binary, dense, typed). Term values inside bson are `BinData(0x00)`
+//! wrapping a `copyterm::TermBuf` — the same cell ABI the fact tables and
+//! `copy_term/2` use, single-sourced in `plg-shared::cell`, lossless including
+//! cyclic terms. Because a binary format can't coexist with streamed text
+//! bytes, bson forces capture mode; the encoding dictates the sink.
 
 use crate::copyterm::{self, TermBuf};
 use crate::machine::Machine;
 use crate::render::{RenderedSolution, json_escape};
 use std::io::{self, Write};
 
-/// The fixed engine-output shape — the contract, made a type. Every
-/// `Encoder` reads the same fields; only their byte encoding varies.
+/// The fixed engine-output shape — the contract, made a type. Every encoding
+/// reads the same fields; only their byte encoding varies.
 pub struct Envelope<'a> {
     pub count: usize,
     pub exhausted: bool,
     pub solutions: &'a [RenderedSolution],
     /// Captured `write/1` bytes, when the sink is in capture mode. `None` when
     /// output streamed to stdout (the CLI json path, v1 byte-identical).
-    /// Encoders that can't stream (`can_stream() == false`) require the caller
-    /// to have run in capture mode so this is `Some`.
+    /// Encodings that can't stream require the caller to have run in capture
+    /// mode so this is `Some`.
     pub program_output: Option<&'a str>,
 }
 
@@ -56,81 +62,96 @@ pub enum WireError {
     Runtime(String),
 }
 
-/// The plural encoding. One impl per wire format.
-pub trait Encoder {
-    /// Serialise a solved envelope. The `Machine` is needed by encodings that
-    /// walk term structure directly (bson walks each binding's root word via
-    /// `copyterm::copy_to_buf`); the json encoder ignores it (its bindings are
-    /// pre-rendered to strings at capture time).
-    fn write_envelope(&self, w: &mut dyn Write, m: &Machine, e: &Envelope) -> io::Result<()>;
-    /// Serialise an error.
-    fn write_error(&self, w: &mut dyn Write, e: &WireError) -> io::Result<()>;
-    /// Whether this encoding can coexist with streamed `write/1` bytes on the
-    /// same stdout. json: yes (v1-preserved). bson: no — a binary format can't
-    /// tolerate interleaved foreign bytes, so bson forces capture mode.
-    fn can_stream(&self) -> bool;
+/// An encoding as a vtable: a name plus the three operations the wire contract
+/// needs. `#[repr(C)]` so codegen can reference a descriptor by address and
+/// `entry.rs` can read its fields after dereferencing the pointer from the
+/// capability table. A `#[no_mangle] static` of this type per encoding
+/// (`PLG_ENC_JSON`, `PLG_ENC_BSON`) is what codegen's `@plg_caps` table points
+/// at; encoders not listed there are unreferenced and get dead-stripped.
+#[repr(C)]
+pub struct EncoderDesc {
+    /// The `--format` name this descriptor answers to ("json", "bson").
+    pub name: &'static str,
+    pub write_envelope: fn(&mut dyn Write, &Machine, &Envelope) -> io::Result<()>,
+    pub write_error: fn(&mut dyn Write, &WireError) -> io::Result<()>,
+    /// False ⇒ the encoding can't coexist with streamed `write/1` bytes on the
+    /// same stdout (binary formats), so the caller must run in capture mode.
+    pub can_stream: fn() -> bool,
 }
 
-/// Look up an encoder by the `--format` name. Returns `None` for unknown names
-/// (the CLI reports a usage error → exit 2). The capability-table gating
-/// (`io_format/1` → which encodings a binary advertises) lands in a later PR;
-/// until then both encodings are reachable from any binary.
-pub fn encoder_for(name: &str) -> Option<Box<dyn Encoder>> {
-    match name {
-        "json" => Some(Box::new(Json)),
-        "bson" => Some(Box::new(Bson)),
-        _ => None,
+impl EncoderDesc {
+    /// Find a descriptor by name in a capability table (codegen-baked pointers
+    /// to `#[no_mangle] static` descriptors). Returns `None` when the name
+    /// isn't advertised — `entry.rs` maps that to a usage error (exit 2).
+    /// # Safety
+    /// `caps` must point at `len` valid pointers to static descriptors.
+    pub unsafe fn find(
+        caps: *const *const EncoderDesc,
+        len: usize,
+        name: &str,
+    ) -> Option<&'static EncoderDesc> {
+        let slice = unsafe { std::slice::from_raw_parts(caps, len) };
+        for &p in slice {
+            let d = unsafe { &*p };
+            if d.name == name {
+                return Some(d);
+            }
+        }
+        None
     }
 }
 
 // ── json: the text wire encoding ────────────────────────────────────────────
 
-/// The text wire encoding: the v1 JSON envelope, byte-identical to the
-/// pre-refactor output (`core::write_solutions_json` / `write_error_json`).
-/// Registered as `"json"` to preserve the current CLI contract; the rename to
-/// `text` (and the demotion of the human `X = foo` form to `--pretty`) comes
-/// with the capability-table work.
-pub struct Json;
-
-impl Encoder for Json {
-    fn write_envelope(&self, w: &mut dyn Write, _m: &Machine, e: &Envelope) -> io::Result<()> {
-        write!(w, "{{\"count\":{},\"exhausted\":{}", e.count, e.exhausted)?;
-        if let Some(out) = e.program_output {
-            write!(w, ",\"output\":\"{}\"", json_escape(out))?;
+fn json_write_envelope(w: &mut dyn Write, _m: &Machine, e: &Envelope) -> io::Result<()> {
+    write!(w, "{{\"count\":{},\"exhausted\":{}", e.count, e.exhausted)?;
+    if let Some(out) = e.program_output {
+        write!(w, ",\"output\":\"{}\"", json_escape(out))?;
+    }
+    w.write_all(b",\"solutions\":[")?;
+    for (i, sol) in e.solutions.iter().enumerate() {
+        if i > 0 {
+            w.write_all(b",")?;
         }
-        w.write_all(b",\"solutions\":[")?;
-        for (i, sol) in e.solutions.iter().enumerate() {
-            if i > 0 {
+        w.write_all(b"{")?;
+        for (j, b) in sol.bindings.iter().enumerate() {
+            if j > 0 {
                 w.write_all(b",")?;
             }
-            w.write_all(b"{")?;
-            for (j, b) in sol.bindings.iter().enumerate() {
-                if j > 0 {
-                    w.write_all(b",")?;
-                }
-                write!(w, "\"{}\":{}", json_escape(&b.name), b.json)?;
-            }
-            w.write_all(b"}")?;
+            write!(w, "\"{}\":{}", json_escape(&b.name), b.json)?;
         }
-        w.write_all(b"]}")
+        w.write_all(b"}")?;
     }
-
-    fn write_error(&self, w: &mut dyn Write, e: &WireError) -> io::Result<()> {
-        let msg = match e {
-            WireError::Parse(m) | WireError::Runtime(m) => m,
-        };
-        write!(w, "{{\"error\":\"{}\"}}", json_escape(msg))
-    }
-
-    fn can_stream(&self) -> bool {
-        true
-    }
+    w.write_all(b"]}")
 }
+
+fn json_write_error(w: &mut dyn Write, e: &WireError) -> io::Result<()> {
+    let msg = match e {
+        WireError::Parse(m) | WireError::Runtime(m) => m,
+    };
+    write!(w, "{{\"error\":\"{}\"}}", json_escape(msg))
+}
+
+const fn json_can_stream() -> bool {
+    true
+}
+
+/// The json (text) wire encoding: v1 JSON, byte-identical to the pre-refactor
+/// output. Registered as `"json"` to preserve the current CLI contract; the
+/// rename to `text` (and the demotion of the human `X = foo` form to
+/// `--pretty`) comes with the CLI-flag work.
+#[unsafe(no_mangle)]
+pub static PLG_ENC_JSON: EncoderDesc = EncoderDesc {
+    name: "json",
+    write_envelope: json_write_envelope,
+    write_error: json_write_error,
+    can_stream: json_can_stream,
+};
 
 // ── bson: the binary wire encoding ──────────────────────────────────────────
 //
 // Hand-rolled (no serde in the runtime — footprint). BSON is little-endian,
-// length-prefixed, and self-delimiting; because every document needs its total
+// length-prefixed, self-delimiting; because every document needs its total
 // size up front and `dyn Write` isn't seekable, bson is built into a `Vec<u8>`
 // and flushed in one `write_all`. This is the non-streaming path by design
 // (`can_stream() == false`).
@@ -143,8 +164,6 @@ impl Encoder for Json {
 // Scalars map to native bson types (`bsondump` reads them); term values are
 // opaque `BinData(0x00)` (a caller speaking bson to a patch-prolog binary has
 // opted into this engine's cell ABI). See `serialize_termbuf` for the payload.
-
-pub struct Bson;
 
 /// BinData(0x00) payload layout for a term (the TermBuf cell format, framed):
 ///     byte 0      format version (0x01)
@@ -193,77 +212,83 @@ fn bson_doc_end(buf: &mut Vec<u8>, start: usize) {
     buf[start..start + 4].copy_from_slice(&len.to_le_bytes());
 }
 
-impl Encoder for Bson {
-    fn write_envelope(&self, w: &mut dyn Write, m: &Machine, e: &Envelope) -> io::Result<()> {
-        let mut buf = Vec::new();
-        let doc = bson_doc_begin(&mut buf);
+fn bson_write_envelope(w: &mut dyn Write, m: &Machine, e: &Envelope) -> io::Result<()> {
+    let mut buf = Vec::new();
+    let doc = bson_doc_begin(&mut buf);
 
-        // count: int32 (solution counts far below i32::MAX; saturate as a guard).
-        buf.push(T_INT32);
-        bson_cstring(&mut buf, "count");
-        buf.extend_from_slice(&(e.count.min(i32::MAX as usize) as i32).to_le_bytes());
+    // count: int32 (solution counts far below i32::MAX; saturate as a guard).
+    buf.push(T_INT32);
+    bson_cstring(&mut buf, "count");
+    buf.extend_from_slice(&(e.count.min(i32::MAX as usize) as i32).to_le_bytes());
 
-        // exhausted: bool.
-        buf.push(T_BOOL);
-        bson_cstring(&mut buf, "exhausted");
-        buf.push(if e.exhausted { 0x01 } else { 0x00 });
+    // exhausted: bool.
+    buf.push(T_BOOL);
+    bson_cstring(&mut buf, "exhausted");
+    buf.push(if e.exhausted { 0x01 } else { 0x00 });
 
-        // output: string, only when captured (capture mode is required for bson).
-        if let Some(out) = e.program_output {
-            buf.push(T_STRING);
-            bson_cstring(&mut buf, "output");
-            let len = i32::try_from(out.len() + 1).expect("output string < 2GB");
-            buf.extend_from_slice(&len.to_le_bytes());
-            buf.extend_from_slice(out.as_bytes());
-            buf.push(0x00);
-        }
-
-        // solutions: array (a bson array is a document with keys "0","1",...).
-        buf.push(T_ARRAY);
-        bson_cstring(&mut buf, "solutions");
-        let arr = bson_doc_begin(&mut buf);
-        for (i, sol) in e.solutions.iter().enumerate() {
-            buf.push(T_DOCUMENT);
-            bson_cstring(&mut buf, &i.to_string());
-            let sdoc = bson_doc_begin(&mut buf);
-            for b in &sol.bindings {
-                let tb = copyterm::copy_to_buf(m, b.word);
-                let payload = serialize_termbuf(&tb);
-                buf.push(T_BINARY);
-                bson_cstring(&mut buf, &b.name);
-                let len = i32::try_from(payload.len()).expect("termbuf < 2GB");
-                buf.extend_from_slice(&len.to_le_bytes());
-                buf.push(0x00); // subtype: generic binary
-                buf.extend_from_slice(&payload);
-            }
-            bson_doc_end(&mut buf, sdoc);
-        }
-        bson_doc_end(&mut buf, arr);
-
-        bson_doc_end(&mut buf, doc);
-        w.write_all(&buf)
-    }
-
-    fn write_error(&self, w: &mut dyn Write, e: &WireError) -> io::Result<()> {
-        let msg = match e {
-            WireError::Parse(m) | WireError::Runtime(m) => m,
-        };
-        let mut buf = Vec::new();
-        let doc = bson_doc_begin(&mut buf);
+    // output: string, only when captured (capture mode is required for bson).
+    if let Some(out) = e.program_output {
         buf.push(T_STRING);
-        bson_cstring(&mut buf, "error");
-        let len = i32::try_from(msg.len() + 1).expect("error message < 2GB");
+        bson_cstring(&mut buf, "output");
+        let len = i32::try_from(out.len() + 1).expect("output string < 2GB");
         buf.extend_from_slice(&len.to_le_bytes());
-        buf.extend_from_slice(msg.as_bytes());
+        buf.extend_from_slice(out.as_bytes());
         buf.push(0x00);
-        bson_doc_end(&mut buf, doc);
-        w.write_all(&buf)
     }
 
-    fn can_stream(&self) -> bool {
-        false
+    // solutions: array (a bson array is a document with keys "0","1",...).
+    buf.push(T_ARRAY);
+    bson_cstring(&mut buf, "solutions");
+    let arr = bson_doc_begin(&mut buf);
+    for (i, sol) in e.solutions.iter().enumerate() {
+        buf.push(T_DOCUMENT);
+        bson_cstring(&mut buf, &i.to_string());
+        let sdoc = bson_doc_begin(&mut buf);
+        for b in &sol.bindings {
+            let tb = copyterm::copy_to_buf(m, b.word);
+            let payload = serialize_termbuf(&tb);
+            buf.push(T_BINARY);
+            bson_cstring(&mut buf, &b.name);
+            let len = i32::try_from(payload.len()).expect("termbuf < 2GB");
+            buf.extend_from_slice(&len.to_le_bytes());
+            buf.push(0x00); // subtype: generic binary
+            buf.extend_from_slice(&payload);
+        }
+        bson_doc_end(&mut buf, sdoc);
     }
+    bson_doc_end(&mut buf, arr);
+
+    bson_doc_end(&mut buf, doc);
+    w.write_all(&buf)
 }
+
+fn bson_write_error(w: &mut dyn Write, e: &WireError) -> io::Result<()> {
+    let msg = match e {
+        WireError::Parse(m) | WireError::Runtime(m) => m,
+    };
+    let mut buf = Vec::new();
+    let doc = bson_doc_begin(&mut buf);
+    buf.push(T_STRING);
+    bson_cstring(&mut buf, "error");
+    let len = i32::try_from(msg.len() + 1).expect("error message < 2GB");
+    buf.extend_from_slice(&len.to_le_bytes());
+    buf.extend_from_slice(msg.as_bytes());
+    buf.push(0x00);
+    bson_doc_end(&mut buf, doc);
+    w.write_all(&buf)
+}
+
+const fn bson_can_stream() -> bool {
+    false
+}
+
+#[unsafe(no_mangle)]
+pub static PLG_ENC_BSON: EncoderDesc = EncoderDesc {
+    name: "bson",
+    write_envelope: bson_write_envelope,
+    write_error: bson_write_error,
+    can_stream: bson_can_stream,
+};
 
 #[cfg(test)]
 mod tests {
@@ -291,12 +316,20 @@ mod tests {
         buf
     }
 
+    fn enc(name: &str) -> &'static EncoderDesc {
+        match name {
+            "json" => &PLG_ENC_JSON,
+            "bson" => &PLG_ENC_BSON,
+            _ => unreachable!(),
+        }
+    }
+
     #[test]
     fn json_empty_success_matches_v1_shape() {
         let m = machine();
         let e = env(0, true, None);
         assert_eq!(
-            String::from_utf8(bytes(|w| Json.write_envelope(w, &m, &e))).unwrap(),
+            String::from_utf8(bytes(|w| (enc("json").write_envelope)(w, &m, &e))).unwrap(),
             "{\"count\":0,\"exhausted\":true,\"solutions\":[]}"
         );
     }
@@ -306,7 +339,7 @@ mod tests {
         let m = machine();
         let e = env(0, false, Some("hi\n"));
         assert_eq!(
-            String::from_utf8(bytes(|w| Json.write_envelope(w, &m, &e))).unwrap(),
+            String::from_utf8(bytes(|w| (enc("json").write_envelope)(w, &m, &e))).unwrap(),
             "{\"count\":0,\"exhausted\":false,\"output\":\"hi\\n\",\"solutions\":[]}"
         );
     }
@@ -314,37 +347,47 @@ mod tests {
     #[test]
     fn json_error_object_is_escaped() {
         assert_eq!(
-            String::from_utf8(bytes(
-                |w| Json.write_error(w, &WireError::Parse("a\"b".into()))
-            ))
+            String::from_utf8(bytes(|w| {
+                (enc("json").write_error)(w, &WireError::Parse("a\"b".into()))
+            }))
             .unwrap(),
             "{\"error\":\"a\\\"b\"}"
         );
     }
 
     #[test]
-    fn encoder_for_known_and_unknown() {
-        assert!(encoder_for("json").is_some());
-        assert!(encoder_for("bson").is_some());
-        assert!(encoder_for("garbage").is_none());
+    fn descriptors_are_named_and_have_distinct_streaming() {
+        assert_eq!(PLG_ENC_JSON.name, "json");
+        assert_eq!(PLG_ENC_BSON.name, "bson");
+        assert!((PLG_ENC_JSON.can_stream)());
+        assert!(!(PLG_ENC_BSON.can_stream)());
     }
 
     #[test]
-    fn json_can_stream_and_bson_cannot() {
-        assert!(Json.can_stream());
-        assert!(!Bson.can_stream());
+    fn find_locates_advertised_encoders() {
+        let caps: [*const EncoderDesc; 2] = [&PLG_ENC_JSON, &PLG_ENC_BSON];
+        let json = unsafe { EncoderDesc::find(caps.as_ptr(), caps.len(), "json") };
+        let bson = unsafe { EncoderDesc::find(caps.as_ptr(), caps.len(), "bson") };
+        let none = unsafe { EncoderDesc::find(caps.as_ptr(), caps.len(), "csv") };
+        assert_eq!(json.unwrap().name, "json");
+        assert_eq!(bson.unwrap().name, "bson");
+        assert!(none.is_none(), "unadvertised encoder not found");
+    }
+
+    #[test]
+    fn find_returns_none_for_encoder_omitted_from_table() {
+        // A [json]-only capability table must not resolve bson.
+        let caps: [*const EncoderDesc; 1] = [&PLG_ENC_JSON];
+        let bson = unsafe { EncoderDesc::find(caps.as_ptr(), caps.len(), "bson") };
+        assert!(bson.is_none(), "bson resolves despite not being advertised");
     }
 
     // ── bson structure ──────────────────────────────────────────────────────
 
-    /// Decode just the leading int32 length of a bson document.
     fn bson_doc_len(buf: &[u8]) -> i32 {
         i32::from_le_bytes(buf[0..4].try_into().unwrap())
     }
 
-    /// A bson document is valid iff its leading length equals the buffer length
-    /// (the length covers itself + terminator). Used to check framing without a
-    /// full bson parser.
     fn assert_valid_bson_doc(buf: &[u8]) {
         assert_eq!(
             bson_doc_len(buf) as usize,
@@ -362,9 +405,8 @@ mod tests {
     fn bson_empty_envelope_is_self_delimiting_and_carries_scalars() {
         let m = machine();
         let e = env(3, true, None);
-        let buf = bytes(|w| Bson.write_envelope(w, &m, &e));
+        let buf = bytes(|w| (enc("bson").write_envelope)(w, &m, &e));
         assert_valid_bson_doc(&buf);
-        // The scalar keys are present as bson cstrings.
         assert!(contains_cstring_key(&buf, b"count"));
         assert!(contains_cstring_key(&buf, b"exhausted"));
         assert!(contains_cstring_key(&buf, b"solutions"));
@@ -372,14 +414,11 @@ mod tests {
 
     #[test]
     fn bson_error_document_is_valid() {
-        let buf = bytes(|w| Bson.write_error(w, &WireError::Runtime("boom".into())));
+        let buf = bytes(|w| (enc("bson").write_error)(w, &WireError::Runtime("boom".into())));
         assert_valid_bson_doc(&buf);
         assert!(contains_cstring_key(&buf, b"error"));
     }
 
-    /// Crude key scan: a bson element is `<type byte> <key bytes> 0x00`. We just
-    /// check the key's cstring appears somewhere (sufficient for these fixtures;
-    /// not a general parser).
     fn contains_cstring_key(buf: &[u8], key: &[u8]) -> bool {
         let mut needle = key.to_vec();
         needle.push(0x00);
@@ -388,7 +427,6 @@ mod tests {
 
     // ── TermBuf framing round-trip (the losslessness claim) ─────────────────
 
-    /// Mirror of `serialize_termbuf` on the decode side, for testing.
     fn deserialize_termbuf(data: &[u8]) -> TermBuf {
         assert_eq!(data[0], 0x01, "format version");
         let n = u32::from_le_bytes(data[1..5].try_into().unwrap()) as usize;
@@ -436,7 +474,6 @@ mod tests {
         let rt = deserialize_termbuf(&payload_bytes);
         let restored = copyterm::restore_from_buf(&mut m, &rt);
         assert_eq!(tag_of(restored), TAG_STR, "cycle restored as a structure");
-        // The structure's single arg must be itself (the cycle survived).
         let ri = payload(restored) as usize;
         assert_eq!(
             m.deref(m.heap[ri + 1]),

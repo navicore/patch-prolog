@@ -345,6 +345,41 @@ fn test_parse_program_ignores_directives() {
 }
 
 #[test]
+fn test_io_format_directive_list() {
+    let mut interner = StringInterner::new();
+    let (_clauses, dirs) =
+        Parser::parse_program_with_directives(":- io_format([json, bson]). f(a).", &mut interner)
+            .unwrap();
+    assert_eq!(dirs.io_format, vec!["json".to_string(), "bson".to_string()]);
+}
+
+#[test]
+fn test_io_format_directive_comma_chain() {
+    let mut interner = StringInterner::new();
+    let (_clauses, dirs) =
+        Parser::parse_program_with_directives(":- io_format((json, bson)).", &mut interner)
+            .unwrap();
+    assert_eq!(dirs.io_format, vec!["json".to_string(), "bson".to_string()]);
+}
+
+#[test]
+fn test_io_format_directive_single_atom() {
+    let mut interner = StringInterner::new();
+    let (_clauses, dirs) =
+        Parser::parse_program_with_directives(":- io_format(bson).", &mut interner).unwrap();
+    assert_eq!(dirs.io_format, vec!["bson".to_string()]);
+}
+
+#[test]
+fn test_io_format_directive_dedups() {
+    let mut interner = StringInterner::new();
+    let (_clauses, dirs) =
+        Parser::parse_program_with_directives(":- io_format([json, json, bson]).", &mut interner)
+            .unwrap();
+    assert_eq!(dirs.io_format, vec!["json".to_string(), "bson".to_string()]);
+}
+
+#[test]
 fn test_unknown_directive_errors() {
     let mut interner = StringInterner::new();
     let result = Parser::parse_program_with_directives(":- unknown_thing(foo).", &mut interner);

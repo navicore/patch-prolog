@@ -87,6 +87,7 @@ fn parse_sources(
             .map_err(|e| format_parse_error(path, &src, &e))?;
         clauses.append(&mut cs);
         directives.dynamic.extend(ds.dynamic);
+        directives.io_format.extend(ds.io_format);
     }
     Ok((clauses, directives, interner))
 }
@@ -135,6 +136,7 @@ fn parse_sources_cg(
             .map_err(|e| format_parse_error(path, &src, &e))?;
         clauses.append(&mut cs);
         directives.dynamic.extend(ds.dynamic);
+        directives.io_format.extend(ds.io_format);
         cg_sources.push(CgSource {
             path: path.display().to_string(),
             text: src,

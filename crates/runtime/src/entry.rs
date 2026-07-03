@@ -7,7 +7,7 @@
 
 use crate::core::{self, QueryResult};
 use crate::machine::{Machine, RegistryEntry, SrcLoc};
-use crate::wire::{Bson, Encoder, Envelope, Json, WireError};
+use crate::wire::{EncoderDesc, Envelope, WireError};
 use plg_shared::StringInterner;
 use std::ffi::CStr;
 use std::io::{self, Write};
@@ -30,6 +30,8 @@ pub unsafe extern "C" fn plg_rt_init(
     srcmap_len: u32,
     files: *const *const c_char,
     files_len: u32,
+    caps: *const *const EncoderDesc,
+    caps_len: u32,
 ) -> *mut Machine {
     let mut atoms = StringInterner::new();
     for i in 0..atom_count as usize {
@@ -60,6 +62,9 @@ pub unsafe extern "C" fn plg_rt_init(
         .collect();
     let mut m = Machine::new(atoms, registry);
     m.set_provenance(srcmap, files);
+    m.capabilities = (0..caps_len as usize)
+        .map(|i| unsafe { *caps.add(i) })
+        .collect();
     Box::into_raw(m)
 }
 
@@ -109,41 +114,41 @@ fn parse_args(argv: Vec<String>) -> Result<Args, String> {
     })
 }
 
-/// Error output by requested format. json/bson errors go to stdout (as a
-/// json object or a bson document respectively); the human `text` form goes to
-/// stderr (v1 behavior).
-fn output_error(format: &str, message: &str) {
+/// Emit solutions for a solved query. `enc == None` is the human display form
+/// (`--format text`); otherwise the wire encoder serializes the envelope.
+/// The `can_stream()` flag drives both the line discipline (streamed json gets
+/// a trailing newline; binary bson gets an explicit flush instead) and the
+/// capture-mode decision made earlier in `plg_rt_main`.
+fn output_solutions(enc: Option<&EncoderDesc>, m: &Machine, exhausted: bool) {
+    let Some(e) = enc else {
+        output_text(m);
+        return;
+    };
     let mut out = io::stdout().lock();
-    match format {
-        "json" => {
-            let _ = Json.write_error(&mut out, &WireError::Parse(message.to_string()));
-            let _ = out.write_all(b"\n");
-        }
-        "bson" => {
-            let _ = Bson.write_error(&mut out, &WireError::Parse(message.to_string()));
-            let _ = out.flush();
-        }
-        _ => eprintln!("Error: {message}"),
+    let env = Envelope::from_machine(m, exhausted);
+    let _ = (e.write_envelope)(&mut out, m, &env);
+    if (e.can_stream)() {
+        let _ = out.write_all(b"\n");
+    } else {
+        let _ = out.flush();
     }
 }
 
-fn output_json(m: &Machine, exhausted: bool) {
-    let mut out = io::stdout().lock();
-    let env = Envelope::from_machine(m, exhausted);
-    let _ = Json.write_envelope(&mut out, m, &env);
-    let _ = out.write_all(b"\n");
-}
-
-/// bson output: one self-delimiting bson document (no trailing newline — bson
-/// carries its own length, unlike the json/text line discipline). Capture mode
-/// was enabled before the query ran, so `write/1` bytes ride in `output`.
-/// An explicit flush is required: Rust's stdout is a `LineWriter`, and with no
-/// trailing newline the buffered bytes would never flush before exit.
-fn output_bson(m: &Machine, exhausted: bool) {
-    let mut out = io::stdout().lock();
-    let env = Envelope::from_machine(m, exhausted);
-    let _ = Bson.write_envelope(&mut out, m, &env);
-    let _ = out.flush();
+/// Emit an error. Wire encodings go to stdout (the encoding's error object);
+/// the human form (`enc == None`) goes to stderr (v1 behavior).
+fn output_result(enc: Option<&EncoderDesc>, message: &str) {
+    match enc {
+        Some(e) => {
+            let mut out = io::stdout().lock();
+            let _ = (e.write_error)(&mut out, &WireError::Parse(message.to_string()));
+            if (e.can_stream)() {
+                let _ = out.write_all(b"\n");
+            } else {
+                let _ = out.flush();
+            }
+        }
+        None => eprintln!("Error: {message}"),
+    }
 }
 
 fn output_text(m: &Machine) {
@@ -189,15 +194,29 @@ pub unsafe extern "C" fn plg_rt_main(
             return 2;
         }
     };
-    if args.format != "json" && args.format != "text" && args.format != "bson" {
-        output_error("text", &format!("Unknown format: {}", args.format));
-        return 2;
-    }
-    // bson can't stream (a binary format can't coexist with raw text bytes
-    // on stdout), so run in capture mode: `write/1` bytes land in the
-    // envelope's `output` field instead of stdout. (IO.md — encoding dictates
-    // the sink.)
-    if args.format == "bson" {
+    // Resolve the output encoding against the capability table (the encoders
+    // this binary advertises via `io_format/1`, default `[json]`). `text` is
+    // the human display form — always available, not a wire encoding. An
+    // unknown or undeclared wire format is a usage error (exit 2).
+    let enc: Option<&'static EncoderDesc> = if args.format == "text" {
+        None
+    } else {
+        match unsafe {
+            EncoderDesc::find(m.capabilities.as_ptr(), m.capabilities.len(), &args.format)
+        } {
+            Some(e) => Some(e),
+            None => {
+                eprintln!("Unknown or undeclared format: {}", args.format);
+                return 2;
+            }
+        }
+    };
+    // A non-streamable encoding (binary) can't coexist with raw `write/1` text
+    // bytes on stdout, so run in capture mode: `write/1` bytes land in the
+    // envelope's `output` field. (IO.md — the encoding dictates the sink.)
+    if let Some(e) = enc
+        && !(e.can_stream)()
+    {
         m.output = crate::machine::OutputSink::Capture(String::new());
     }
     m.solution_limit = args.limit;
@@ -221,21 +240,17 @@ pub unsafe extern "C" fn plg_rt_main(
 
     match core::run_query(m, &args.query) {
         QueryResult::ParseError(msg) => {
-            output_error(&args.format, &msg);
+            output_result(enc, &msg);
             2
         }
         QueryResult::RuntimeError(msg) => {
-            output_error(&args.format, &msg);
+            output_result(enc, &msg);
             3
         }
         QueryResult::Solutions => {
             let count = m.solutions.len();
             let exhausted = core::exhausted(m);
-            match args.format.as_str() {
-                "json" => output_json(m, exhausted),
-                "bson" => output_bson(m, exhausted),
-                _ => output_text(m),
-            }
+            output_solutions(enc, m, exhausted);
             if count > 0 { 1 } else { 0 }
         }
     }

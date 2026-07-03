@@ -1,8 +1,10 @@
 # Design: Plural wire encodings (text | bson)
 
-Status: **decision recorded, not yet implemented.** Addresses issue #38 — give
-the program author (and the caller) a choice of wire format beyond the JSON-only
-presumption, while keeping stdin/stdout as the only I/O surface.
+Status: **partially implemented.** Output is done: the `Envelope`/`EncoderDesc`
+seam, the json + bson encoders (TermBuf-in-BinData), and the capability table
+(`:- io_format([...])` gating `--format`, with dead-stripping). Still pending:
+bson **input** (`--input-format`, the one-field request document) and the CLI
+rename (`json`→`text`, human form→`--pretty`). Addresses issue #38.
 
 ## Intent
 
