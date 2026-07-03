@@ -1,10 +1,8 @@
 # Design: Plural wire encodings (text | bson)
 
-Status: **output and input implemented.** json + bson encoders (TermBuf-in-
-BinData for output terms), the capability table (`:- io_format([...])` gating
-both `--format` and `--input-format`, with dead-stripping), and bson input
-(the one-field `{query, limit?}` request document) are all done. Only the CLI
-rename (`json`→`text`, human form→`--pretty`) remains. Addresses issue #38.
+Status: **decision recorded, not yet implemented.** Addresses issue #38 — give
+the program author (and the caller) a choice of wire format beyond the JSON-only
+presumption, while keeping stdin/stdout as the only I/O surface.
 
 ## Intent
 
@@ -24,18 +22,8 @@ author picks the set; the caller picks within it.
   `output` — the fields the engine emits. Only their *encoding* pluralises.
 - **Exit codes unchanged.** `0` no solutions · `1` solutions · `2` parse/usage
   error · `3` runtime error.
-- **Losslessness — asymmetric by encoding, stated honestly.** The two
-  encodings are *not* information-equivalent on cyclic terms.
-  **bson** is fully lossless, including cyclic terms (`X = f(X)`) and
-  improper lists (`[a|b]`) — `copyterm::TermBuf` represents cycles
-  structurally (memoized copy, no divergence). **text** is lossy on cyclic
-  terms by design: `render.rs` cuts a re-encountered subterm to `"_N"`
-  (v1's `apply()` behavior, preserved for byte-compat), so `X = f(X)` reads
-  back as `f(_N)` and does not round-trip. Acyclic terms round-trip fully
-  in both. This asymmetry is a deliberate point in bson's favor, *not* a
-  defect to fix — making text lossless on cycles would break the v1
-  byte-contract. The cyclic-term round-trip checkpoint is therefore scoped
-  to **bson only**; text is exempt under the v1-byte-compat carve-out.
+- **Losslessness is non-negotiable.** Any encoding round-trips the full term
+  space, including cyclic terms (`X = f(X)`) and improper lists (`[a|b]`).
 - **Footprint rule.** No serde/clap in `plg-runtime`; encoders are hand-rolled.
   Dead-stripping (`--gc-sections`/`-dead_strip`, already load-bearing) drops
   encoders the binary doesn't advertise.
@@ -43,8 +31,6 @@ author picks the set; the caller picks within it.
   program, never runtime KB mutation.
 - **Wire contract preserved for text.** The default `[text]` capability is
   byte-identical to today's JSON output; existing harnesses keep working.
-  The default input path (argv `--query`) is also byte-identical and never
-  reads stdin — the v1 no-stdin contract holds for the default invocation.
 - **`plg-shared::cell` stays the single source of the word/cell ABI.**
 
 ## Approach
@@ -65,20 +51,6 @@ string in bson gives the caller a binary, typed, length-framed transport
 without buying parser complexity on our side (the Event Hubs / Parquet
 precedent — except here the string *is* the natural unit; there's no second
 parse, so the cheat is honest).
-
-**Input/output orthogonality.** Input and output encodings are fully
-orthogonal — any `{in}×{out}` pairing the capability set permits is allowed.
-The common case `--query "goal(X)" --format bson` (text-in / bson-out: a
-human types a query, a machine consumes the dense result) is explicitly
-supported. The capability table is **one set, gating both directions**: a
-`[text]`-only binary accepts neither bson input nor bson output. Input
-encoding defaults to text (argv `--query`); bson input is opt-in via a flag
-**separate from output `--format`** — `--input-format text|bson` (default
-`text`). `entry.rs` reads stdin **only** when `--input-format bson` is passed;
-the default path never touches stdin, preserving the v1 no-stdin contract.
-Keeping the two flags distinct avoids the overload trap of "absent `--query`
-⇒ read bson from stdin," where the absence of one flag would imply the
-presence of another.
 
 Terms inside bson output use **TermBuf-in-BinData**: each solution's term
 values are encoded as the existing `copyterm::TermBuf` cell bytes (M9's format,
@@ -140,9 +112,6 @@ pub fn encoder_for(name: &str) -> Option<Box<dyn Encoder>>;  // "text" | "bson"
 
 // transport-framed input (one-field): {"query": "...", "limit"?: N, "format"?: "..."}
 pub struct Request { pub query: String, pub limit: Option<usize>, pub format: Option<String> }
-// entry.rs: --format selects output Encoder; --input-format text|bson (default
-// text) selects the input path. Input/output are orthogonal; the capability
-// table gates both directions. stdin is read ONLY when --input-format bson.
 ```
 
 ### Data shapes
@@ -151,18 +120,7 @@ pub struct Request { pub query: String, pub limit: Option<usize>, pub format: Op
   reads the same fields. `program_output` is `Some` only in capture mode
   (bson); `None` in stream mode (text), preserving the v1 byte contract.
 - **Capability table** — codegen-baked `.rodata`: the set from
-  `:- io_format([...])`, default `[json]`. **One set, gating both input and
-  output.** `--format` or `--input-format` outside the set → exit 2. An explicit
-  `:- io_format([])` is indistinguishable from no directive and also defaults
-  to `[json]` (a binary must speak at least one encoding). (The design
-  vocabulary calls this encoding `text`; the CLI rename to `text` is part 2.)
-  **Scope:** the capability table governs the CLI/`plg_rt_main` contract. The
-  WASM Tier-2 reactor (`reactor.rs`, `--target worker`) is host-ABI-driven —
-  it has no `--format` and always emits json — so a `[bson]`-only *worker*
-  binary still emits json from its reactor (and `PLG_ENC_JSON` won’t
-  dead-strip there). Native binaries are unaffected (the reactor isn’t
-  linked, so dead-stripping holds). Whether/how `io_format` should apply to
-  the worker target is an open follow-up.
+  `:- io_format([...])`, default `[text]`. `--format` outside the set → exit 2.
 - **`Machine::OutputSink`** — invariant unchanged: in `Capture`, `write/1`
   bytes survive heap rewind and are available post-solve. bson forces Capture;
   text uses Stdout (default) or Capture (if the author/caller opts in later).
@@ -176,12 +134,9 @@ pub struct Request { pub query: String, pub limit: Option<usize>, pub format: Op
 - *Compile time* — author writes `:- io_format([text, bson]).`; codegen bakes
   the capability table and emits encoder calls only for the declared set.
   Encoders not in the set are dead-stripped from the final binary.
-- *Request arrives* — caller passes `--format <cap>` (output, validated
-  against the table) and `--input-format text|bson` (default `text`, also
-  validated). text-in reads `--query` from argv; bson-in reads a one-field
-  request document from stdin **only in that mode**. The two encodings are
-  orthogonal: e.g. text-in / bson-out is allowed. Engine parses the inner
-  query string; the wrapper is transport framing only.
+- *Request arrives* — caller passes `--format <cap>` (validated against the
+  table) and, for bson input, a one-field request document on stdin. Engine
+  parses the inner query string; the wrapper is transport framing only.
 - *Solution emitted* — text mode: `write/1` bytes stream to stdout, then the
   envelope serialised as JSON follows (v1 byte-identical). bson mode: `write/1`
   bytes are captured into the envelope's `output` field, and the whole envelope
@@ -200,7 +155,6 @@ pub struct Request { pub query: String, pub limit: Option<usize>, pub format: Op
 - A binary declaring `[bson]` only: `ldd`/symbol check confirms no JSON encoder
   linked (dead-strip verified); footprint drops vs a `[text, bson]` binary.
 - bson input: a one-field `{"query":"..."}` document on stdin produces the
-  same solutions as the equivalent `--query` argv call (text-in / bson-out and
-  bson-in / text-out cross-pairings both verified).
+  same solutions as the equivalent `--query` argv call.
 - Footprint gate (`tests/binary_size.rs`) and standalone-contract `ldd` check
   stay green for both text-only and bson-capable binaries.

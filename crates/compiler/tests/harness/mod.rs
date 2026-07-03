@@ -43,35 +43,4 @@ impl Compiled {
             out.status.code().unwrap_or(-1),
         )
     }
-
-    /// Run `--query` and return raw stdout bytes + exit code. Use this for
-    /// binary encodings (bson) where lossy UTF-8 decoding would corrupt bytes.
-    #[allow(dead_code)] // used only by bson-capable tests; each test crate compiles the harness alone
-    pub fn query_bytes(&self, goal: &str, extra: &[&str]) -> (Vec<u8>, i32) {
-        let out = Command::new(&self.bin)
-            .args(["--query", goal])
-            .args(extra)
-            .output()
-            .expect("run compiled binary");
-        (out.stdout, out.status.code().unwrap_or(-1))
-    }
-
-    /// Run with arbitrary argv (no forced `--query`) and optional stdin bytes.
-    /// Returns raw stdout bytes + exit code. Used for bson-input mode, which
-    /// reads the query from a bson request on stdin rather than `--query`.
-    #[allow(dead_code)]
-    pub fn run_with_stdin(&self, args: &[&str], stdin: &[u8]) -> (Vec<u8>, i32) {
-        use std::io::Write;
-        let mut child = Command::new(&self.bin)
-            .args(args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .expect("spawn compiled binary");
-        if !stdin.is_empty() {
-            child.stdin.take().unwrap().write_all(stdin).unwrap();
-        }
-        let out = child.wait_with_output().expect("wait compiled binary");
-        (out.stdout, out.status.code().unwrap_or(-1))
-    }
 }
