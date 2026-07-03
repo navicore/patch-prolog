@@ -7,7 +7,7 @@
 
 use crate::core::{self, QueryResult};
 use crate::machine::{Machine, RegistryEntry, SrcLoc};
-use crate::wire::{Encoder, Envelope, Json, WireError};
+use crate::wire::{Bson, Encoder, Envelope, Json, WireError};
 use plg_shared::StringInterner;
 use std::ffi::CStr;
 use std::io::{self, Write};
@@ -109,22 +109,41 @@ fn parse_args(argv: Vec<String>) -> Result<Args, String> {
     })
 }
 
-/// v1's output_error: JSON errors go to stdout, text errors to stderr.
+/// Error output by requested format. json/bson errors go to stdout (as a
+/// json object or a bson document respectively); the human `text` form goes to
+/// stderr (v1 behavior).
 fn output_error(format: &str, message: &str) {
-    if format == "json" {
-        let mut out = io::stdout().lock();
-        let _ = Json.write_error(&mut out, &WireError::Parse(message.to_string()));
-        let _ = out.write_all(b"\n");
-    } else {
-        eprintln!("Error: {message}");
+    let mut out = io::stdout().lock();
+    match format {
+        "json" => {
+            let _ = Json.write_error(&mut out, &WireError::Parse(message.to_string()));
+            let _ = out.write_all(b"\n");
+        }
+        "bson" => {
+            let _ = Bson.write_error(&mut out, &WireError::Parse(message.to_string()));
+            let _ = out.flush();
+        }
+        _ => eprintln!("Error: {message}"),
     }
 }
 
 fn output_json(m: &Machine, exhausted: bool) {
     let mut out = io::stdout().lock();
     let env = Envelope::from_machine(m, exhausted);
-    let _ = Json.write_envelope(&mut out, &env);
+    let _ = Json.write_envelope(&mut out, m, &env);
     let _ = out.write_all(b"\n");
+}
+
+/// bson output: one self-delimiting bson document (no trailing newline — bson
+/// carries its own length, unlike the json/text line discipline). Capture mode
+/// was enabled before the query ran, so `write/1` bytes ride in `output`.
+/// An explicit flush is required: Rust's stdout is a `LineWriter`, and with no
+/// trailing newline the buffered bytes would never flush before exit.
+fn output_bson(m: &Machine, exhausted: bool) {
+    let mut out = io::stdout().lock();
+    let env = Envelope::from_machine(m, exhausted);
+    let _ = Bson.write_envelope(&mut out, m, &env);
+    let _ = out.flush();
 }
 
 fn output_text(m: &Machine) {
@@ -136,8 +155,8 @@ fn output_text(m: &Machine) {
         if sol.bindings.is_empty() {
             println!("true.");
         } else {
-            for (name, _, text) in &sol.bindings {
-                println!("{name} = {text}");
+            for b in &sol.bindings {
+                println!("{} = {}", b.name, b.text);
             }
         }
     }
@@ -170,9 +189,16 @@ pub unsafe extern "C" fn plg_rt_main(
             return 2;
         }
     };
-    if args.format != "json" && args.format != "text" {
+    if args.format != "json" && args.format != "text" && args.format != "bson" {
         output_error("text", &format!("Unknown format: {}", args.format));
         return 2;
+    }
+    // bson can't stream (a binary format can't coexist with raw text bytes
+    // on stdout), so run in capture mode: `write/1` bytes land in the
+    // envelope's `output` field instead of stdout. (IO.md — encoding dictates
+    // the sink.)
+    if args.format == "bson" {
+        m.output = crate::machine::OutputSink::Capture(String::new());
     }
     m.solution_limit = args.limit;
     // Documented extension over v1 (which hardcoded 10_000): the step
@@ -207,6 +233,7 @@ pub unsafe extern "C" fn plg_rt_main(
             let exhausted = core::exhausted(m);
             match args.format.as_str() {
                 "json" => output_json(m, exhausted),
+                "bson" => output_bson(m, exhausted),
                 _ => output_text(m),
             }
             if count > 0 { 1 } else { 0 }

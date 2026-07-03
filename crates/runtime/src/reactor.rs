@@ -152,7 +152,7 @@ pub unsafe extern "C" fn plg_rt_run_query(
             // field. Intended D4 contract: a stable shape for hosts, present
             // even when empty.
             let env = Envelope::from_machine(m, exhausted);
-            let _ = Json.write_envelope(&mut buf, &env);
+            let _ = Json.write_envelope(&mut buf, m, &env);
         }
     }
 
