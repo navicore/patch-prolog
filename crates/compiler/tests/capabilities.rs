@@ -145,3 +145,99 @@ fn undeclared_encoders_are_dead_stripped() {
         "json encoder dead-stripped from a bson-only binary"
     );
 }
+
+// ── bson input (IO.md: the one-field request document) ─────────────────────
+
+/// Build a bson request `{query, limit?}` from raw bytes (no bson dep).
+fn bson_request(query: &str, limit: Option<i64>) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.push(0x02);
+    body.extend_from_slice(b"query\0");
+    let qb = query.as_bytes();
+    body.extend_from_slice(&(qb.len() as i32 + 1).to_le_bytes());
+    body.extend_from_slice(qb);
+    body.push(0x00);
+    if let Some(n) = limit {
+        body.push(0x10); // int32
+        body.extend_from_slice(b"limit\0");
+        body.extend_from_slice(&(n as i32).to_le_bytes());
+    }
+    let total = body.len() + 5; // length prefix (4) + trailing null (1)
+    let mut doc = (total as i32).to_le_bytes().to_vec();
+    doc.extend_from_slice(&body);
+    doc.push(0x00);
+    doc
+}
+
+/// bson-in / json-out: a request document drives the query; argv selects the
+/// output format. (IO.md orthogonality — input and output encodings are
+/// independent.)
+#[test]
+fn bson_input_drives_query_with_json_output() {
+    let req = bson_request("parent(tom, X)", None);
+    let (out, code) =
+        both_list().run_with_stdin(&["--input-format", "bson", "--format", "json"], &req);
+    assert_eq!(code, 1);
+    let out = String::from_utf8(out).unwrap();
+    assert!(
+        out.contains("\"X\":\"bob\""),
+        "query ran from bson request: {out}"
+    );
+}
+
+/// A `limit` in the bson request is honored (surfaces as `exhausted:false`
+/// when the limit is hit).
+#[test]
+fn bson_input_limit_is_honored() {
+    let req = bson_request("parent(tom, X)", Some(1));
+    let (out, _) =
+        both_list().run_with_stdin(&["--input-format", "bson", "--format", "json"], &req);
+    let out = String::from_utf8(out).unwrap();
+    assert!(
+        out.contains("\"exhausted\":false"),
+        "limit hit ⇒ not exhausted: {out}"
+    );
+    assert!(out.contains("\"count\":1"), "limit 1 ⇒ one solution: {out}");
+}
+
+/// bson-in / bson-out (both directions binary).
+#[test]
+fn bson_in_bson_out() {
+    let req = bson_request("parent(tom, X)", None);
+    let (bson, code) =
+        both_list().run_with_stdin(&["--input-format", "bson", "--format", "bson"], &req);
+    assert_eq!(code, 1);
+    let len = i32::from_le_bytes(bson[..4].try_into().unwrap());
+    assert_eq!(len as usize, bson.len(), "bson-out self-delimits");
+}
+
+/// A [json]-only binary rejects bson input (capability gates both directions).
+#[test]
+fn json_only_binary_rejects_bson_input() {
+    let req = bson_request("parent(tom, X)", None);
+    let (_out, code) =
+        default_prog().run_with_stdin(&["--input-format", "bson", "--format", "json"], &req);
+    assert_eq!(code, 2, "bson input on a json-only binary ⇒ exit 2");
+}
+
+/// A request missing the required `query` string is a usage error (exit 2).
+#[test]
+fn bson_request_missing_query_is_rejected() {
+    let mut body = vec![0x10];
+    body.extend_from_slice(b"limit\0");
+    body.extend_from_slice(&3i32.to_le_bytes());
+    let mut doc = ((body.len() + 5) as i32).to_le_bytes().to_vec();
+    doc.extend_from_slice(&body);
+    doc.push(0x00);
+    let (_out, code) =
+        both_list().run_with_stdin(&["--input-format", "bson", "--format", "json"], &doc);
+    assert_eq!(code, 2, "missing query ⇒ exit 2");
+}
+
+/// argv `--query` still works (text-input mode is the default and untouched).
+#[test]
+fn argv_query_still_works_in_bson_binary() {
+    let (out, code) = both_list().query("parent(tom, X)", &["--format", "json"]);
+    assert_eq!(code, 1);
+    assert!(out.contains("\"X\":\"bob\""));
+}

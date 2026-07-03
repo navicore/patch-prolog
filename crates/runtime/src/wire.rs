@@ -194,6 +194,7 @@ const T_ARRAY: u8 = 0x04;
 const T_BINARY: u8 = 0x05;
 const T_BOOL: u8 = 0x08;
 const T_INT32: u8 = 0x10;
+const T_INT64: u8 = 0x12;
 
 fn bson_cstring(buf: &mut Vec<u8>, s: &str) {
     buf.extend_from_slice(s.as_bytes());
@@ -289,6 +290,137 @@ pub static PLG_ENC_BSON: EncoderDesc = EncoderDesc {
     write_error: bson_write_error,
     can_stream: bson_can_stream,
 };
+
+// ── bson input: the one-field request document ──────────────────────────────
+//
+// Input is transport framing around a query string (IO.md's "honest cheat"
+// — the engine parses the inner string exactly as for argv `--query`, so there
+// is no bson-term loader). The request document is:
+//     { query: string, limit?: int32|int64 }
+// Output format is NOT carried here — it stays on argv `--format` (input and
+// output encodings are orthogonal). Unknown fields are skipped for forward-
+// compat; `query` is required and must be a string.
+
+/// A parsed bson request document. `limit` is `None` when absent.
+#[derive(Debug)]
+pub struct ParsedRequest {
+    pub query: String,
+    pub limit: Option<usize>,
+}
+
+/// Parse a bson request document from `buf`. `buf` may be longer than the
+/// document (stdin may carry trailing bytes); only the leading document
+/// (delimited by its int32 length) is consumed. Returns the `query` and an
+/// optional `limit`.
+pub fn parse_bson_request(buf: &[u8]) -> Result<ParsedRequest, String> {
+    if buf.len() < 5 {
+        return Err("bson request too short".to_string());
+    }
+    let total = i32::from_le_bytes(buf[0..4].try_into().unwrap()) as usize;
+    if total < 5 || total > buf.len() {
+        return Err(format!(
+            "bson request length mismatch: declared {total}, have {}",
+            buf.len()
+        ));
+    }
+    let body = &buf[..total];
+    let mut off = 4; // skip the length prefix
+    let end = total - 1; // last byte is the 0x00 terminator
+    let mut query = None;
+    let mut limit = None;
+    while off < end {
+        let ty = body[off];
+        off += 1;
+        let (key, after_key) = read_cstring(body, off)?;
+        off = after_key;
+        match (ty, key.as_str()) {
+            (T_STRING, "query") => {
+                let (s, next) = read_string(body, off)?;
+                query = Some(s);
+                off = next;
+            }
+            (T_INT32, "limit") => {
+                let n = read_i32(body, off)?;
+                limit = Some(n.max(0) as usize);
+                off += 4;
+            }
+            (T_INT64, "limit") => {
+                // int64
+                let n = read_i64(body, off)?;
+                limit = Some(n.max(0) as usize);
+                off += 8;
+            }
+            _ => {
+                // Unknown field (or known field of a different type): skip its
+                // value for forward-compat, erroring on a type we can't size.
+                off = skip_value(body, off, ty)?;
+            }
+        }
+    }
+    let query = query.ok_or_else(|| "bson request missing required 'query' string".to_string())?;
+    Ok(ParsedRequest { query, limit })
+}
+
+fn read_cstring(buf: &[u8], mut off: usize) -> Result<(String, usize), String> {
+    let end = buf[off..]
+        .iter()
+        .position(|&b| b == 0)
+        .ok_or_else(|| "bson key not null-terminated".to_string())?;
+    let s = std::str::from_utf8(&buf[off..off + end])
+        .map_err(|_| "bson key not utf-8".to_string())?
+        .to_string();
+    off += end + 1;
+    Ok((s, off))
+}
+
+fn read_string(buf: &[u8], off: usize) -> Result<(String, usize), String> {
+    let n = read_i32(buf, off)? as usize;
+    if n == 0 || off + 4 + n > buf.len() {
+        return Err("bson string length out of range".to_string());
+    }
+    // the count includes a trailing null
+    let s = std::str::from_utf8(&buf[off + 4..off + 4 + n - 1])
+        .map_err(|_| "bson string not utf-8".to_string())?
+        .to_string();
+    Ok((s, off + 4 + n))
+}
+
+fn read_i32(buf: &[u8], off: usize) -> Result<i32, String> {
+    buf[off..]
+        .get(..4)
+        .map(|b| i32::from_le_bytes(b.try_into().unwrap()))
+        .ok_or_else(|| "bson int32 truncated".to_string())
+}
+
+fn read_i64(buf: &[u8], off: usize) -> Result<i64, String> {
+    buf[off..]
+        .get(..8)
+        .map(|b| i64::from_le_bytes(b.try_into().unwrap()))
+        .ok_or_else(|| "bson int64 truncated".to_string())
+}
+
+/// Advance past a value of known bson type, returning the new offset. Used to
+/// skip unknown fields for forward-compat.
+fn skip_value(buf: &[u8], off: usize, ty: u8) -> Result<usize, String> {
+    match ty {
+        0x01 => Ok(off + 8),                      // double
+        T_STRING => Ok(read_string(buf, off)?.1), // string
+        T_DOCUMENT | T_ARRAY => {
+            // document/array
+            let n = read_i32(buf, off)? as usize;
+            Ok(off + n)
+        }
+        T_BINARY => {
+            let n = read_i32(buf, off)? as usize;
+            Ok(off + 4 + 1 + n)
+        }
+        T_BOOL => Ok(off + 1),
+        0x0A => Ok(off), // null
+        T_INT32 => Ok(off + 4),
+        0x12 => Ok(off + 8), // int64
+        _ => Err(format!("bson: cannot skip unknown element type {ty:#x}")),
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -496,5 +628,95 @@ mod tests {
         let rt = deserialize_termbuf(&serialize_termbuf(&tb));
         let restored = copyterm::restore_from_buf(&mut m, &rt);
         assert_eq!(tag_of(restored), crate::cell::TAG_LST);
+    }
+
+    // ── bson input parsing ────────────────────────────────────────────────
+
+    /// Build a bson request document with hand-written field helpers.
+    fn req_doc(fields: &[(u8, &str, &[u8])]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let start = bson_doc_begin(&mut buf);
+        for (ty, key, val_bytes) in fields {
+            buf.push(*ty);
+            bson_cstring(&mut buf, key);
+            buf.extend_from_slice(val_bytes);
+        }
+        bson_doc_end(&mut buf, start);
+        buf
+    }
+    fn bson_int32(n: i32) -> Vec<u8> {
+        n.to_le_bytes().to_vec()
+    }
+    fn bson_int64(n: i64) -> Vec<u8> {
+        n.to_le_bytes().to_vec()
+    }
+    fn bson_str(s: &str) -> Vec<u8> {
+        let mut v = (s.len() as i32 + 1).to_le_bytes().to_vec();
+        v.extend_from_slice(s.as_bytes());
+        v.push(0x00);
+        v
+    }
+
+    #[test]
+    fn parses_a_query_only_request() {
+        let doc = req_doc(&[(T_STRING, "query", &bson_str("parent(tom, X)"))]);
+        let r = parse_bson_request(&doc).unwrap();
+        assert_eq!(r.query, "parent(tom, X)");
+        assert!(r.limit.is_none());
+    }
+
+    #[test]
+    fn parses_query_and_int32_limit() {
+        let doc = req_doc(&[
+            (T_STRING, "query", &bson_str("p(X)")),
+            (T_INT32, "limit", &bson_int32(5)),
+        ]);
+        let r = parse_bson_request(&doc).unwrap();
+        assert_eq!(r.query, "p(X)");
+        assert_eq!(r.limit, Some(5));
+    }
+
+    #[test]
+    fn parses_query_and_int64_limit() {
+        let doc = req_doc(&[
+            (T_INT64, "limit", &bson_int64(42)),
+            (T_STRING, "query", &bson_str("p(X)")),
+        ]);
+        let r = parse_bson_request(&doc).unwrap();
+        assert_eq!(r.query, "p(X)");
+        assert_eq!(r.limit, Some(42));
+    }
+
+    #[test]
+    fn ignores_unknown_fields_for_forward_compat() {
+        let doc = req_doc(&[
+            (T_STRING, "caller", &bson_str("an-unknown-field")),
+            (T_STRING, "query", &bson_str("ok")),
+        ]);
+        let r = parse_bson_request(&doc).unwrap();
+        assert_eq!(r.query, "ok");
+    }
+
+    #[test]
+    fn missing_query_is_an_error() {
+        let doc = req_doc(&[(T_INT32, "limit", &bson_int32(3))]);
+        let err = parse_bson_request(&doc).unwrap_err();
+        assert!(err.contains("missing required 'query'"), "{err}");
+    }
+
+    #[test]
+    fn truncated_document_is_an_error() {
+        // declare a length larger than the buffer
+        let mut doc = vec![99u8, 0, 0, 0]; // length = 99
+        doc.extend_from_slice(b"\x00");
+        assert!(parse_bson_request(&doc).is_err());
+    }
+
+    #[test]
+    fn trailing_bytes_after_document_are_ignored() {
+        let mut doc = req_doc(&[(T_STRING, "query", &bson_str("q"))]);
+        doc.extend_from_slice(b"garbage trailing bytes"); // stdin may carry these
+        let r = parse_bson_request(&doc).unwrap();
+        assert_eq!(r.query, "q");
     }
 }

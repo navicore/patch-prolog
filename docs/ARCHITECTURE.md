@@ -111,10 +111,14 @@ how `call/1` and `findall/3` re-enter compiled code. Predicates declared
 `--format` selects one of the wire encodings the binary advertises via
 `:- io_format([...])` (default `[json]`; `bson` available when declared). The
 human `text` form (`X = foo`) is always available as a display rendering, not
-a wire encoding. An undeclared format exits 2. Default behaviour is preserved
-from v1 so existing harnesses keep working:
+a wire encoding. `--input-format text|bson` (default `text`) selects the input
+path: `text` takes the query from argv `--query`; `bson` reads a one-field
+request document `{"query":"...","limit"?:N}` from stdin (the capability
+gates both directions — bson input requires bson advertised). Input and
+output encodings are orthogonal. An undeclared format exits 2. Default
+behaviour is preserved from v1 so existing harnesses keep working:
 
-- `--query "goal(X)"`, `--limit N`, `--format json|text|bson`
+- `--query "goal(X)"`, `--limit N`, `--format json|text|bson`, `--input-format text|bson`
 - exit `0` no solutions · `1` solutions found · `2` query parse/usage error ·
   `3` runtime error
 - json: `{"solutions":[{"X": ...}], "count": N, "exhausted": bool}`

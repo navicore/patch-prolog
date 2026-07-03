@@ -10,7 +10,7 @@ use crate::machine::{Machine, RegistryEntry, SrcLoc};
 use crate::wire::{EncoderDesc, Envelope, WireError};
 use plg_shared::StringInterner;
 use std::ffi::CStr;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::raw::c_char;
 
 /// Build the Machine from the tables codegen baked into the binary.
@@ -69,15 +69,17 @@ pub unsafe extern "C" fn plg_rt_init(
 }
 
 struct Args {
-    query: String,
+    query: Option<String>,
     limit: Option<usize>,
     format: String,
+    input_format: String,
 }
 
 fn parse_args(argv: Vec<String>) -> Result<Args, String> {
     let mut query = None;
     let mut limit = None;
     let mut format = "json".to_string(); // v1 default
+    let mut input_format = "text".to_string(); // default: argv `--query`
     let mut it = argv.into_iter().peekable();
     while let Some(arg) = it.next() {
         let (flag, inline_value) = match arg.split_once('=') {
@@ -100,17 +102,21 @@ fn parse_args(argv: Vec<String>) -> Result<Args, String> {
                 )
             }
             "-f" | "--format" => format = value(&mut it)?,
+            "--input-format" => input_format = value(&mut it)?,
             "-h" | "--help" => {
-                return Err("usage: --query <goal> [--limit N] [--format json|text]".to_string());
+                return Err(
+                    "usage: --query <goal> [--limit N] [--format json|text|bson] [--input-format text|bson]"
+                        .to_string(),
+                );
             }
             other => return Err(format!("unexpected argument: {other}")),
         }
     }
-    let query = query.ok_or("missing required argument: --query <goal>".to_string())?;
     Ok(Args {
         query,
         limit,
         format,
+        input_format,
     })
 }
 
@@ -211,6 +217,52 @@ pub unsafe extern "C" fn plg_rt_main(
             }
         }
     };
+    // Resolve the query string and limit by input mode (IO.md). Default
+    // (`text`) takes the query from argv `--query` (required) — always
+    // available, like the human display form. `--input-format bson` reads a
+    // one-field request document `{query, limit?}` from stdin; it requires the
+    // binary to advertise `bson` (capability gates both directions). argv
+    // `--limit`, when present, overrides any limit from the bson document.
+    let (query, argv_limit) = match args.input_format.as_str() {
+        "text" => {
+            let q = match args.query {
+                Some(q) => q,
+                None => {
+                    eprintln!("missing required argument: --query <goal>");
+                    return 2;
+                }
+            };
+            (q, args.limit)
+        }
+        "bson" => {
+            if unsafe {
+                EncoderDesc::find(m.capabilities.as_ptr(), m.capabilities.len(), "bson").is_none()
+            } {
+                eprintln!("Unknown or undeclared input format: bson");
+                return 2;
+            }
+            let mut stdin_buf = Vec::new();
+            if let Err(e) = std::io::stdin().read_to_end(&mut stdin_buf) {
+                eprintln!("failed to read bson request from stdin: {e}");
+                return 2;
+            }
+            match crate::wire::parse_bson_request(&stdin_buf) {
+                Ok(req) => {
+                    // argv --limit overrides the document's limit when present.
+                    let lim = args.limit.or(req.limit);
+                    (req.query, lim)
+                }
+                Err(e) => {
+                    eprintln!("bson request parse error: {e}");
+                    return 2;
+                }
+            }
+        }
+        other => {
+            eprintln!("Unknown --input-format: {other} (expected text|bson)");
+            return 2;
+        }
+    };
     // A non-streamable encoding (binary) can't coexist with raw `write/1` text
     // bytes on stdout, so run in capture mode: `write/1` bytes land in the
     // envelope's `output` field. (IO.md — the encoding dictates the sink.)
@@ -219,7 +271,7 @@ pub unsafe extern "C" fn plg_rt_main(
     {
         m.output = crate::machine::OutputSink::Capture(String::new());
     }
-    m.solution_limit = args.limit;
+    m.solution_limit = argv_limit;
     // Documented extension over v1 (which hardcoded 10_000): the step
     // ceiling is tunable via environment so big-but-legitimate queries
     // can raise it without changing the CLI contract.
@@ -238,7 +290,7 @@ pub unsafe extern "C" fn plg_rt_main(
         m.metacall_depth_limit = n;
     }
 
-    match core::run_query(m, &args.query) {
+    match core::run_query(m, &query) {
         QueryResult::ParseError(msg) => {
             output_result(enc, &msg);
             2
@@ -267,20 +319,30 @@ mod tests {
     #[test]
     fn parses_flags_with_space_and_equals() {
         let a = args(&["--query", "p(X)", "--limit", "3", "--format", "text"]).unwrap();
-        assert_eq!(a.query, "p(X)");
+        assert_eq!(a.query.as_deref(), Some("p(X)"));
         assert_eq!(a.limit, Some(3));
         assert_eq!(a.format, "text");
+        assert_eq!(a.input_format, "text", "default input-format is text");
 
         let a = args(&["--query=p(X)", "-l", "1"]).unwrap();
-        assert_eq!(a.query, "p(X)");
+        assert_eq!(a.query.as_deref(), Some("p(X)"));
         assert_eq!(a.limit, Some(1));
         assert_eq!(a.format, "json", "default format is json (v1)");
     }
 
     #[test]
-    fn missing_query_is_an_error() {
-        assert!(args(&["--format", "json"]).is_err());
+    fn parses_input_format_flag() {
+        let a = args(&["--query", "p(X)", "--input-format", "bson"]).unwrap();
+        assert_eq!(a.input_format, "bson");
+        // --query is now optional at the parse layer (required only for
+        // text-input mode, enforced in plg_rt_main); missing it parses fine.
+        assert!(args(&["--input-format", "bson"]).is_ok());
+    }
+
+    #[test]
+    fn missing_value_flags_are_errors() {
         assert!(args(&["--query"]).is_err());
         assert!(args(&["--bogus", "x"]).is_err());
+        assert!(args(&["--input-format"]).is_err());
     }
 }

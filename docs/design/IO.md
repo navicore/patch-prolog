@@ -1,10 +1,10 @@
 # Design: Plural wire encodings (text | bson)
 
-Status: **partially implemented.** Output is done: the `Envelope`/`EncoderDesc`
-seam, the json + bson encoders (TermBuf-in-BinData), and the capability table
-(`:- io_format([...])` gating `--format`, with dead-stripping). Still pending:
-bson **input** (`--input-format`, the one-field request document) and the CLI
-rename (`json`→`text`, human form→`--pretty`). Addresses issue #38.
+Status: **output and input implemented.** json + bson encoders (TermBuf-in-
+BinData for output terms), the capability table (`:- io_format([...])` gating
+both `--format` and `--input-format`, with dead-stripping), and bson input
+(the one-field `{query, limit?}` request document) are all done. Only the CLI
+rename (`json`→`text`, human form→`--pretty`) remains. Addresses issue #38.
 
 ## Intent
 
