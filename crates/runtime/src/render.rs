@@ -13,8 +13,19 @@ use plg_shared::atom::ATOM_NIL;
 /// One captured solution: bindings sorted by variable name (v1 rule),
 /// rendered immediately (terms are undone by backtracking afterwards).
 pub struct RenderedSolution {
-    /// (name, json_value, text_value) per query variable, `_` excluded.
-    pub bindings: Vec<(String, String, String)>,
+    /// per query variable, `_` excluded. The bson encoder walks `word` via
+    /// `copyterm::copy_to_buf`; the json/text encoders use the strings.
+    pub bindings: Vec<Binding>,
+}
+
+/// One query-variable binding, materialized at solution time. `word` is the
+/// already-dereferenced value term (zero extra computation over producing the
+/// strings); the bson encoder walks it via `copyterm::copy_to_buf`.
+pub struct Binding {
+    pub name: String,
+    pub json: String,
+    pub text: String,
+    pub word: Word,
 }
 
 /// Capture the current solution from the machine's query variables.
@@ -26,7 +37,12 @@ pub fn capture_solution(m: &Machine) -> RenderedSolution {
         .filter(|(name, _)| name != "_")
         .map(|(name, idx)| {
             let w = m.deref(make_ref(*idx));
-            (name.clone(), term_to_json(m, w), term_to_string(m, w))
+            Binding {
+                name: name.clone(),
+                json: term_to_json(m, w),
+                text: term_to_string(m, w),
+                word: w,
+            }
         })
         .collect();
     RenderedSolution { bindings }
