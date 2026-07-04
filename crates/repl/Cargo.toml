@@ -19,8 +19,8 @@ path = "src/main.rs"
 # Engine frontend — the REPL parses/validates input and sources its
 # completion vocabulary here. It NEVER links the solver; per
 # LESSONS_FROM_V1 rule 3 it drives the compiler (see docs/design/REPL.md).
-plg-frontend = { path = "../frontend", version = "=0.4.1", package = "patch-prolog-frontend" }
-plg-shared = { path = "../shared", version = "=0.4.1", package = "patch-prolog-shared" }
+plg-frontend = { path = "../frontend", version = "=0.4.2", package = "patch-prolog-frontend" }
+plg-shared = { path = "../shared", version = "=0.4.2", package = "patch-prolog-shared" }
 
 # TUI + vim-motion line editing. `vim-line` (patch-seq's editor) is
 # host-agnostic; `src/input.rs` adapts crossterm key events to it and
