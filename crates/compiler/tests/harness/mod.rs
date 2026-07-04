@@ -102,6 +102,7 @@ pub struct BsonEnvelope {
     pub count: Option<i64>,
     pub exhausted: Option<bool>,
     pub error: Option<String>,
+    pub atoms: Option<Vec<String>>,
 }
 
 /// Minimal bson document decoder extracting the top-level scalar fields tests
@@ -122,6 +123,7 @@ pub fn bson_decode(buf: &[u8]) -> Option<BsonEnvelope> {
     let mut count = None;
     let mut exhausted = None;
     let mut error = None;
+    let mut atoms = None;
     while off < end {
         let ty = body[off];
         off += 1;
@@ -141,6 +143,29 @@ pub fn bson_decode(buf: &[u8]) -> Option<BsonEnvelope> {
                 error = Some(String::from_utf8_lossy(&body[off + 4..off + 4 + n - 1]).into_owned());
                 off += 4 + n;
             }
+            (0x04, "atoms") => {
+                // self-describing mode (--atoms): an array of name strings.
+                let arr_total = i32::from_le_bytes(body[off..off + 4].try_into().ok()?) as usize;
+                let arr_end = off + arr_total;
+                let mut names = Vec::new();
+                let mut ao = off + 4;
+                while ao < arr_end - 1 {
+                    let aty = body[ao];
+                    let (_, after_k) = read_cstring(body, ao + 1)?;
+                    ao = after_k;
+                    if aty == 0x02 {
+                        let n = i32::from_le_bytes(body[ao..ao + 4].try_into().ok()?) as usize;
+                        names.push(
+                            String::from_utf8_lossy(&body[ao + 4..ao + 4 + n - 1]).into_owned(),
+                        );
+                        ao += 4 + n;
+                    } else {
+                        break;
+                    }
+                }
+                atoms = Some(names);
+                off = arr_end;
+            }
             _ => {
                 off = skip_value(body, off, ty)?;
             }
@@ -150,6 +175,7 @@ pub fn bson_decode(buf: &[u8]) -> Option<BsonEnvelope> {
         count,
         exhausted,
         error,
+        atoms,
     })
 }
 

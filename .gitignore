@@ -4,6 +4,7 @@
 *.pdb
 family
 linting
+deps
 
 # LLVM IR output
 *.ll
