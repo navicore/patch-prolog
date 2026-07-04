@@ -68,10 +68,15 @@ impl CodeGen<'_> {
     /// the program declared via `:- io_format([...])`, default `[text]`. The
     /// runtime scans it to resolve `--format`; encoders NOT listed here are
     /// unreferenced by this binary, so link-time `--gc-sections` strips their
-    /// code (a `[text]`-only binary links no bson). Returns the table length
-    /// for the `plg_rt_init` handoff.
+    /// code. The default advertises BOTH core formats (`[text, bson]`) — bson
+    /// is a first-class engine format, not an opt-in feature, so a freshly-built
+    /// binary speaks it without ceremony. A program declares `io_format` to
+    /// RESTRICT (e.g. `[text]` for a deliberately text-only minimal binary, or
+    /// `[bson]` to force bson-only); that restriction is what sheds the other
+    /// encoder via dead-stripping. Returns the table length for the `plg_rt_init`
+    /// handoff.
     pub fn emit_capabilities(&mut self, declared: &[String]) -> Result<usize, String> {
-        let defaults: [&str; 1] = ["text"];
+        let defaults: [&str; 2] = ["text", "bson"];
         let names: Vec<&str> = if declared.is_empty() {
             defaults.to_vec()
         } else {

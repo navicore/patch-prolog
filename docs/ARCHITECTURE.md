@@ -110,7 +110,9 @@ how `call/1` and `findall/3` re-enter compiled code. Predicates declared
 
 The engine speaks **two** wire encodings, **no JSON**: `text` (readable, the
 `X = foo` form, default) and `bson` (binary, dense, typed). A program declares
-which its binary advertises via `:- io_format([...])` (default `[text]`);
+which its binary advertises via `:- io_format([...])` (default `[text, bson]` —
+both core formats available out of the box; the directive is opt-out, to
+restrict);
 `--format`/`--input-format` outside that set exit 2. Encoders not advertised
 are dead-stripped from the binary (`--gc-sections`). A host wanting JSON
 derives it from bson at the host boundary — the engine never serializes JSON.
