@@ -1,4 +1,3 @@
-//! Ported from patch-prolog v1 `crates/cli/tests/integration.rs`.
 //! Term introspection (functor/3, arg/3, =../2, copy_term in once),
 //! atom predicates (atom_length, atom_concat, atom_chars), number_chars /
 //! number_codes (both directions + error terms), term ordering (@<, @>,

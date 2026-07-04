@@ -26,7 +26,7 @@ fn value_to_word(m: &mut Machine, v: ArithValue) -> Option<Word> {
             if (INT_MIN..=INT_MAX).contains(&n) {
                 Some(cell::make_int(n))
             } else {
-                // M4: full i64 range via a boxed BIG cell (v1 parity).
+                // M4: full i64 range via a boxed BIG cell.
                 let idx = m.heap.len();
                 m.heap.push(n as u64);
                 Some(cell::make(cell::TAG_BIG, idx as u64))
@@ -144,7 +144,7 @@ pub extern "C" fn plg_rt_b_compare(m: *mut Machine, order: u64, a: u64, b: u64) 
 /// the absence of exception frames in the current runtime.
 #[unsafe(no_mangle)]
 pub extern "C" fn plg_rt_cut(m: *mut Machine, height: u64) {
-    // Stops at catch frames (v1 rule: catch/3 is opaque to cut).
+    // Stops at catch frames (catch/3 is opaque to cut).
     mref(m).cut_to(height as usize);
 }
 
@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn b_is_boxes_big_integers() {
         // M4: results beyond the i61 immediate box to a BIG cell — the
-        // full i64 range works, matching v1.
+        // full i64 range works.
         let mut m = machine();
         let v = m.new_var();
         let big = INT_MAX; // 2^60 - 1, the largest immediate

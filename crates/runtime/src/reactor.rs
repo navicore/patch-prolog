@@ -1,6 +1,6 @@
 //! Tier-2 reactor ABI for `wasm32-unknown-unknown` (Cloudflare Workers / V8
 //! isolates). No WASI, no stdio/argv — the module *exports* functions a JS
-//! host calls over linear memory (docs/design/done/WASM_TIER2_PLAN.md A3):
+//! host calls over linear memory:
 //!
 //!   plg_init                       (emitted by the generated module) → builds
 //!                                  the Machine, hands it to `plg_rt_set_machine`
@@ -168,7 +168,7 @@ pub unsafe extern "C" fn plg_rt_run_query(
     // Writes never fail (a `Vec` sink), so the `io::Result`s are infallible.
     // The reactor emits bson (the binary machine format); the host glue
     // decodes bson→JSON for HTTP clients, so the engine itself never
-    // serializes JSON. (docs/design/IO.md.)
+    // serializes JSON.
     match core::run_query(m, q) {
         QueryResult::ParseError(msg) => {
             let _ = (PLG_ENC_BSON.write_error)(&mut buf, &WireError::Parse(msg));

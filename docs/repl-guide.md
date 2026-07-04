@@ -54,7 +54,11 @@ plg> :- dynamic(extra/1).
 ```
 
 Each accepted entry recompiles the program and confirms with the running
-clause count. A **rule spanning several lines** continues under the `|  `
+clause count. The session is **saved per-directory** and restored on the
+next `plgr` start in the same directory — close the REPL, come back later,
+your program is still there. (See [Persistence](#persistence).)
+
+A **rule spanning several lines** continues under the `|  `
 prompt until a line ends in `.`:
 
 ```
@@ -121,7 +125,7 @@ Commands are single-line and start with `:`. Most have a short alias.
 | `:list` | `:ls` | Show the session buffer, one numbered clause per entry. |
 | `:edit` | `:e` | Open the whole session in `$EDITOR`; on save it reloads and recompiles. |
 | `:save FILE` | | Write the current session buffer to `FILE`. |
-| `:reset` | | Clear the session (start over). |
+| `:reset` | | Clear the session (and its saved state for this directory). |
 | `:help` | `:h` | Show the command summary. |
 | `:quit` | `:q` | Exit. (Ctrl-D or Ctrl-C also quit.) |
 
@@ -141,6 +145,22 @@ binary; a `?-` query re-invokes that current binary. So the cost model is:
 This is the whole point: the REPL gives an interactive feel by *driving the
 compiler*, never by interpreting clauses. A divergent or runaway query is
 bounded by a timeout and killed without taking the REPL down with it.
+
+## Persistence
+
+The session buffer — the clauses you've defined — is saved to disk and
+restored when you next run `plgr` in the **same directory**. Each project
+directory has its own session; there is no global program.
+
+- Save happens on exit; load happens at startup. A restored session
+  recompiles so the first query works immediately.
+- `:reset` clears the buffer *and* deletes the saved state, so a fresh
+  start sticks across restarts.
+- `:save FILE` and `:load FILE` are separate, explicit operations — they
+don't affect the per-directory session.
+
+Sessions live under `$HOME/.local/share/plgr/sessions/`, one file per
+directory. (History lives separately at `$HOME/.local/share/plgr_history`.)
 
 ## Configuration
 

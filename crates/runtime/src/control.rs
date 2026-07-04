@@ -2,8 +2,7 @@
 //!
 //! Clause bodies compile control flow to native code; this module only
 //! serves goals built at RUNTIME — the `--query` string today, call/1
-//! metacalls in M4. It walks goal TERMS, never clauses (the rule in
-//! docs/design/LESSONS_FROM_V1.md stays intact).
+//! metacalls in M4. It walks goal TERMS, never clauses.
 //!
 //! The implementations mirror the compiled lowering exactly (same
 //! choice-point shapes, same commit heights), so a goal behaves
@@ -510,7 +509,7 @@ fn int_to_word(m: &mut Machine, n: i64) -> Word {
     }
 }
 
-/// Deref an integer argument for between/3 (v1: bounds must be bound
+/// Deref an integer argument for between/3 (bounds must be bound
 /// integers).
 fn int_arg(m: &mut Machine, w: Word, who: &str) -> Option<i64> {
     let w = m.deref(w);
@@ -981,8 +980,8 @@ mod m4_tests {
 
 #[cfg(test)]
 mod vocab_invariant {
-    //! Runtime half of the `plg-shared::builtins` invariant
-    //! (docs/design/BUILTIN_VOCAB.md). `det_builtin` above is the
+    //! Runtime half of the `plg-shared::builtins` invariant.
+    //! `det_builtin` above is the
     //! query-side mirror of codegen's `DET_BUILTINS`; this asserts the
     //! arms it handles are EXACTLY the arity>0 `Det` rows of `BUILTINS`
     //! (`nl/0` is Det but dispatched via `try_atom_builtin`, so it is

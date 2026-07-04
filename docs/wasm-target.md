@@ -41,10 +41,10 @@ module at instantiation with a clear `tail-call` error.
 
 ```sh
 plgc build --target wasm32-wasi deps.pl -o deps.wasm
-wasmtime run deps.wasm --query "needs(app, X)" --format json
+wasmtime run deps.wasm --query "needs(app, X)" --format text
 ```
 
-`--query`, `--limit`, `--format`, the JSON shape, and the exit codes
+`--query`, `--limit`, `--format` (`text` the default, or `bson`), and the exit codes
 (`0` none · `1` solutions · `2` parse error · `3` runtime error) are all
 identical to a native build. If `-o` is omitted, the output defaults to the
 input stem with a `.wasm` extension.

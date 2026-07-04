@@ -49,8 +49,7 @@ reference, with ISO section numbers.
 - When `is/2` (or an arithmetic comparison) meets a non-evaluable functor,
   the `type_error(evaluable, Culprit)` culprit is a **predicate indicator**
   `Name/Arity` (ISO 8.6) — so a bare atom `foo` reports `foo/0`, exactly
-  like the compound case `foo(1)` reports `foo/1`. (The original v1
-  interpreter reported the bare atom for the arity-0 case.)
+  like the compound case `foo(1)` reports `foo/1`.
 
 ## Exceptions
 

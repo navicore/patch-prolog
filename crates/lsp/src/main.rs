@@ -5,7 +5,7 @@
 //! Features: text sync + parse-error diagnostics, completion (built-ins
 //! from `plg_shared::builtins` + stdlib + buffer predicates), hover
 //! (built-in docs + user clause heads), and goto-definition (first clause
-//! head in the buffer). Full v1 LSP parity — see docs/design/LSP_PORT.md.
+//! head in the buffer).
 
 use std::collections::HashMap;
 use std::sync::RwLock;

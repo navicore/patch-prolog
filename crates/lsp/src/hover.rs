@@ -5,8 +5,8 @@
 //! row, so any builtin whose NAME is an identifier docs here even if
 //! completion ranks it differently. Pure-operator names (`=..`, `@<`,
 //! `\+`) are NOT reachable: `word_at_position` extracts identifier runs
-//! only, so the cursor never resolves to an operator token (a v1
-//! limitation — symbol-token hover would be an additive enhancement).
+//! only, so the cursor never resolves to an operator token
+//! (symbol-token hover would be an additive enhancement).
 
 use plg_shared::{StringInterner, Term, builtins};
 use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};

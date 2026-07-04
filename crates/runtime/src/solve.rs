@@ -67,7 +67,7 @@ pub fn drive(m: &mut Machine, floor: usize, mut r: i32) -> i32 {
 }
 
 /// Unwind the CP stack looking for a catch frame whose catcher unifies
-/// with the ball (v1 dispatch_or_return semantics). On a match, clears
+/// with the ball. On a match, clears
 /// the error, restores the catch-time continuation, and runs the
 /// recovery goal, returning its result. `None` if no frame matches
 /// above `floor` (the error remains set).

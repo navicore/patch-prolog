@@ -264,8 +264,7 @@ pub fn link_ir(ir_path: &Path, output_path: &Path, opt: OptLevel) -> Result<(), 
     clang.arg(opt_flag);
     // DWARF only in --debug builds: it multiplies binary size ~8x
     // (4.4M vs ~550K for hello-world) and the line info resolves into
-    // the Rust runtime, not the user's .pl. Release binaries stay lean
-    // (v1 shipped without debug info too).
+    // the Rust runtime, not the user's .pl. Release binaries stay lean.
     if opt == OptLevel::O0 {
         clang.arg("-g");
     }
@@ -307,8 +306,8 @@ pub fn link_ir(ir_path: &Path, output_path: &Path, opt: OptLevel) -> Result<(), 
     Ok(())
 }
 
-/// Link an LLVM IR file into a standalone `wasm32-wasi` module (Tier 1 — see
-/// docs/design/done/WASM.md), using the Rust-bundled `llc` / `wasm-ld` and the wasm
+/// Link an LLVM IR file into a standalone `wasm32-wasi` module (Tier 1),
+/// using the Rust-bundled `llc` / `wasm-ld` and the wasm
 /// target's self-contained wasi-libc — no wasi-sdk.
 ///
 /// The musttail chains that keep recursion in constant stack require the wasm
@@ -399,7 +398,7 @@ const REACTOR_EXPORTS: &[&str] = &[
 ];
 
 /// Link an LLVM IR file into a `wasm32-unknown-unknown` *reactor* module
-/// (Tier 2 — docs/design/done/WASM_TIER2_PLAN.md C1): no WASI, no crt, no libc — the
+/// (Tier 2): no WASI, no crt, no libc — the
 /// module exports `plg_init` + the buffer ABI a JS host (Cloudflare Workers /
 /// V8) drives. Reuses the same Rust-bundled `llc`/`wasm-ld` as Tier 1; only the
 /// archive and the link flags differ (`--no-entry` + the explicit exports).

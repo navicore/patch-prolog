@@ -63,7 +63,7 @@ impl CodeGen<'_> {
         rows.len()
     }
 
-    /// The wire-encoding capability table (docs/design/IO.md). A `@plg_caps`
+    /// The wire-encoding capability table. A `@plg_caps`
     /// array of pointers to runtime `EncoderDesc` statics — one per encoding
     /// the program declared via `:- io_format([...])`, default `[text]`. The
     /// runtime scans it to resolve `--format`; encoders NOT listed here are

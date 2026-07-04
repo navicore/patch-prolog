@@ -1,22 +1,18 @@
-//! Ported from patch-prolog v1 `crates/cli/tests/integration.rs`.
 //! Facts, rules, recursion, type-checking, if-then-else, disjunction,
 //! cut, negation-as-failure, once/call, and the solution limit.
 //!
-//! v1 asserted in-process solution *counts* and first-binding values;
-//! here we assert the readable text wire output of the compiled plgc
-//! binary (value/order), with `count`/`exhausted` checks via the bson
-//! envelope. The semantics are v1-validated; only the rendered format
-//! differs (no JSON — docs/design/IO.md).
+//! We assert the readable text wire output of the compiled plgc binary
+//! (value/order), with `count`/`exhausted` checks via the bson envelope.
 //!
-//! Variable placeholders (`_N`) are normalized via `norm()` because plgc
-//! numbers fresh variables differently from v1 (known adaptation #1).
+//! Variable placeholders (`_N`) are normalized via `norm()` so assertions
+//! are insensitive to fresh-variable numbering.
 
 mod harness;
 use harness::{Compiled, compile};
 use std::sync::OnceLock;
 
 /// Normalize fresh-variable ids (`_0`, `_13`, …) to a stable `_V` so
-/// assertions are insensitive to plgc-vs-v1 variable numbering.
+/// assertions are insensitive to fresh-variable numbering.
 fn norm(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let bytes = s.as_bytes();
@@ -193,20 +189,20 @@ fn cut_prevents_all_alternatives() {
 
 #[test]
 fn cut_in_once() {
-    // v1 test_cut_in_once: once with cut yields no solution.
+    // once with cut yields no solution.
     check(cut(), "once((foo(X), !, X = b))", "false.", 0);
 }
 
 #[test]
 fn cut_in_try_solve_no_leak_after_once() {
-    // v1 test_cut_in_try_solve_no_leak_after_once: once(!) must not leak
+    // once(!) must not leak
     // the cut into the following predicate iteration.
     check(cut(), "once(!), q(X)", "X = a\nX = b\nX = c", 1);
 }
 
 #[test]
 fn negation_as_failure_pipeline() {
-    // v1 test_negation_as_failure_pipeline: only tweety can fly.
+    // only tweety can fly.
     check(cut(), "can_fly(X)", "X = tweety", 1);
 }
 
@@ -287,7 +283,7 @@ fn call_n_operator_atom_and_findall_inner_goal() {
 
 #[test]
 fn call_n_errors() {
-    // v1 test_call_n_unbound_goal_throws_instantiation_error +
+    // call/N with an unbound goal throws instantiation_error +
     //    test_call_n_non_callable_throws_type_error.
     let (out, code) = meta().query("call(G, X)", &[]);
     assert!(out.contains("instantiation_error"), "{out}");
@@ -302,7 +298,7 @@ fn call_n_errors() {
 
 #[test]
 fn solution_limit_respected() {
-    // v1 test_solution_limit_respected (n(1)..n(10)) using --limit. exhausted
+    // (n(1)..n(10)) using --limit. exhausted
     // semantics live in the bson envelope, so the program advertises both.
     let c = compile(
         ":- io_format([text, bson]).\nn(1). n(2). n(3). n(4). n(5). n(6). n(7). n(8). n(9). n(10).\n",
@@ -315,7 +311,7 @@ fn solution_limit_respected() {
     assert_eq!(env.exhausted, Some(true));
 }
 
-// Cut is opaque inside \+ (ISO and v1 agree): `foo(X),!,X=b` commits
+// Cut is opaque inside \+ (ISO): `foo(X),!,X=b` commits
 // to X=a, fails, so \+ succeeds — with X reported unbound.
 // Fixed in M4 by the walker cut-barrier mechanics (qbarrier).
 #[test]

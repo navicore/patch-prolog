@@ -1,4 +1,3 @@
-//! Ported from patch-prolog v1 `crates/cli/tests/integration.rs`.
 //! Control: catch/3 + throw/1 (ISO error handling), ;/-> precedence,
 //! and unify_with_occurs_check / no-occurs-check `=`.
 //!
@@ -182,8 +181,8 @@ fn negation_with_member_and_naf_binding() {
 // ---- DIVERGENCE (ignored, reported for triage) -----------------------
 
 #[test]
-fn no_occurs_check_unify_v1_divergence() {
-    // v1 test_no_occurs_check_unify: `=` does NOT occurs-check, so X = f(X)
+fn no_occurs_check_unify() {
+    // `=` does NOT occurs-check, so X = f(X)
     // succeeds (creating a cyclic term). plgc renders the cycle as f(_V).
     succeeds_once("X = f(X)");
 }

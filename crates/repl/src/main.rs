@@ -2,7 +2,7 @@
 //!
 //! The engine compiles whole programs to native binaries; this REPL
 //! delivers an interactive feel by *driving the compiler*, never by
-//! interpreting clauses at runtime (LESSONS_FROM_V1 rule 3). Clause and
+//! interpreting clauses at runtime. Clause and
 //! `:load` edits recompile the session buffer to a temp binary; `?-`
 //! queries re-invoke the *current* binary via `--query`. The compile step
 //! shells out to `plgc` (`engine.rs`); editing uses the `vim-line` crate
@@ -165,7 +165,7 @@ fn edit_session(
     Ok(())
 }
 
-/// Rule-3 guard (LESSONS_FROM_V1 rule 3): the REPL drives the compiler
+/// Rule-3 guard: the REPL drives the compiler
 /// and never interprets clauses in-process.
 /// Pinned here so it's enforced by CI, not just true by inspection.
 #[cfg(test)]

@@ -45,7 +45,7 @@ this engine generates native code per predicate instead.
 | Crate | Artifact | Role |
 |---|---|---|
 | `plg-shared` | rlib | `AtomId` + well-known atoms, `Term`, `StringInterner`, `FirstArgKey`, operator table. Linked into BOTH compiler and runtime — zero dependencies, by rule. |
-| `plg-frontend` | rlib | Tokenizer + operator-precedence parser + ISO error types (ported from v1). Compiler-side only. |
+| `plg-frontend` | rlib | Tokenizer + operator-precedence parser + ISO error types. Compiler-side only. |
 | `plg-runtime` | **staticlib** + rlib | The machine substrate compiled code calls into: heap/trail/choice points, generic unify, ~60 builtins, the minimal goal-only `--query` parser, text/bson wire output, process entry. Ships inside every compiled binary. |
 | `plg-compiler` | bin `plgc` + rlib | CLI, codegen (IR text emission), clang driver, runtime embedding. |
 | `plg-lsp` | bin `plgl` | Language server (diagnostics, completion, hover, goto-definition). A frontend consumer — never links the runtime. |

@@ -7,7 +7,7 @@
 //!
 //! Wire encodings are `text` (readable, default) and `bson` (binary), gated by
 //! the codegen-baked capability table (`io_format/1`, default `[text]`). No
-//! JSON — a host wanting JSON derives it from bson. See docs/design/IO.md.
+//! JSON — a host wanting JSON derives it from bson.
 
 use crate::core::{self, QueryResult};
 use crate::machine::{Machine, RegistryEntry, SrcLoc};

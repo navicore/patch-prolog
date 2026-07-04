@@ -2,7 +2,7 @@
 //! encodings exposed as **descriptors** (vtables of function pointers). Splits
 //! what was collapsed in `core.rs` — where byte-emitters implicitly defined the
 //! shape — so the shape is owned once (here) and the encodings vary
-//! independently. See docs/design/IO.md.
+//! independently.
 //!
 //! Two encodings, **no JSON**: **text** (the readable `X = foo` form — the
 //! default, human/shell-facing) and **bson** (binary, dense, typed — the
@@ -237,7 +237,7 @@ fn bson_atoms_array(buf: &mut Vec<u8>, names: &[String]) {
 /// Standalone `--atoms` bson output: `{count: N, atoms: [...]}` — just the atom
 /// map (program atoms only; no query has run, so no query-introduced atoms).
 /// For the case where a host wants the map once and its queries won't introduce
-/// new atoms (docs/design/BSON_ATOMS.md).
+/// new atoms.
 pub fn write_atom_map_bson<W: Write>(w: &mut W, m: &Machine) -> io::Result<()> {
     let names: Vec<String> = (0..m.atoms.len())
         .map(|i| {

@@ -1,4 +1,3 @@
-//! Ported from patch-prolog v1 `crates/cli/tests/integration.rs`.
 //! Stdlib list predicates (member/append/length/reverse/last),
 //! is_list, copy_term, between, succ/plus, and findall over lists.
 //!
@@ -167,8 +166,8 @@ fn between_bound_x_fast_paths() {
 }
 
 #[test]
-fn between_overflow_at_max_v1_divergence() {
-    // v1 test_between_overflow_at_max: between(MAX, MAX, X) binds X = MAX.
+fn between_overflow_at_max() {
+    // between(MAX, MAX, X) binds X = MAX.
     let g = format!("between({}, {}, X)", i64::MAX, i64::MAX);
     check(between(), &g, "X = 9223372036854775807", 1);
 }

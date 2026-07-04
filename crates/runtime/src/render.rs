@@ -1,13 +1,13 @@
 //! Solution rendering: the readable text form (`term_to_string`) plus the
 //! raw term word the bson encoder walks. (No JSON rendering — the engine
 //! speaks text + bson; JSON, if a host wants it, is derived from bson at the
-//! host boundary. docs/design/IO.md.)
+//! host boundary.)
 
 use crate::cell::*;
 use crate::machine::Machine;
 use plg_shared::atom::ATOM_NIL;
 
-/// One captured solution: bindings sorted by variable name (v1 rule),
+/// One captured solution: bindings sorted by variable name,
 /// rendered immediately (terms are undone by backtracking afterwards).
 pub struct RenderedSolution {
     /// per query variable, `_` excluded. The bson encoder walks `word` via
@@ -43,9 +43,9 @@ pub fn capture_solution(m: &Machine) -> RenderedSolution {
     RenderedSolution { bindings }
 }
 
-/// Float formatting compatible with v1: text used Rust `{}`; JSON used
-/// serde_json (ryu). Both print 3.14 as "3.14"; ryu prints whole floats
-/// as "3.0" where `{}` prints "3". Force the ".0" for whole floats.
+/// Float formatting: text uses Rust `{}` (whole-valued floats keep
+/// their `.0` so they read back as floats; `{}` prints "3" for whole
+/// floats, so force the ".0").
 fn fmt_float(f: f64) -> String {
     if f.is_finite() && f.fract() == 0.0 && f.abs() < 1e15 {
         format!("{f:.1}")
@@ -54,7 +54,7 @@ fn fmt_float(f: f64) -> String {
     }
 }
 
-/// v1's infix-operator set for human-readable compound rendering.
+/// The infix-operator set for human-readable compound rendering.
 const INFIX: &[&str] = &[
     "+", "-", "*", "/", "mod", "is", "=", "\\=", "<", ">", "=<", ">=", "=:=", "=\\=",
 ];
@@ -137,7 +137,7 @@ fn term_to_string_v(m: &Machine, w: Word, quoted: bool, visiting: &mut Vec<usize
         TAG_STR => {
             let idx = payload(w) as usize;
             if visiting.contains(&idx) {
-                return format!("_{idx}"); // cycle cut (v1 behavior)
+                return format!("_{idx}"); // cycle cut
             }
             visiting.push(idx);
             let (f, n) = unpack_functor(m.heap[idx]);
@@ -186,7 +186,7 @@ fn term_to_string_v(m: &Machine, w: Word, quoted: bool, visiting: &mut Vec<usize
     }
 }
 
-/// v1's `format_term` rendering: plain functional notation (no infix),
+/// `format_term` rendering: plain functional notation (no infix),
 /// atoms unquoted, vars `_<idx>`, lists `[a, b|T]`. This is the byte
 /// contract for error messages ("Runtime error: error(...)").
 pub fn format_term(m: &Machine, w: Word, out: &mut String) {

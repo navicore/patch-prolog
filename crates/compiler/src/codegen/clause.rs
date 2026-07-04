@@ -414,7 +414,7 @@ impl CodeGen<'_> {
         }
         match self.how_to_call(functor, arity) {
             GoalTarget::Undefined => {
-                // v1 contract: existence_error raised when the goal runs.
+                // existence_error raised when the goal runs.
                 // The site_id carries source provenance (SPANS.md Layer 3).
                 // It is emitted as an `i32` (the runtime ABI is `u32`); the
                 // two's-complement bit pattern matches, so `NO_SITE`

@@ -1,8 +1,7 @@
 //! Miscellaneous deterministic builtins: `succ/2`, `plus/3`,
 //! `unify_with_occurs_check/2`, `write/1`, `writeq/1`, `writeln/1`, `nl/0`.
 //!
-//! Ported byte-for-byte from patch-prolog v1 (`solver.rs` arms,
-//! `unify.rs` occurs-check unifier). Notes:
+//! Notes:
 //! - `succ/2` both modes; `succ(X, 0)` fails; negatives raise
 //!   `domain_error(not_less_than_zero, _)`; both-unbound raises
 //!   instantiation.
@@ -10,10 +9,10 @@
 //!   unbound); fewer than two bound raises instantiation.
 //! - `unify_with_occurs_check/2` uses a LOCAL occurs-checking unifier
 //!   (iterative; does not touch the shared `unify.rs`).
-//! - `write/1` / `writeln/1` use v1's `term_to_string` (infix operators,
-//!   `[a, b]` lists, whole-valued floats keep their `.0` so they read back as
-//!   floats — issue #32), printed immediately. `write` adds no newline;
-//!   `writeln` and `nl` add one.
+//! - `write/1` / `writeln/1` render terms (infix operators, `[a, b]`
+//!   lists, whole-valued floats keep their `.0` so they read back as
+//!   floats), printed immediately. `write` adds no newline; `writeln`
+//!   and `nl` add one.
 
 use crate::cell::*;
 use crate::machine::Machine;
@@ -241,7 +240,7 @@ fn occurs(m: &Machine, var: usize, term: Word) -> bool {
     false
 }
 
-/// `write/1`: print the term (v1 `term_to_string`), no trailing newline.
+/// `write/1`: print the term, no trailing newline.
 /// Output goes through the Machine's sink (stdout for CLI/WASI, a capture
 /// buffer for the reactor) so an isolate with no stdout loses nothing.
 #[unsafe(no_mangle)]
@@ -433,7 +432,7 @@ mod tests {
         let mp = &mut *m as *mut Machine;
         assert_eq!(plg_rt_b_write_1(mp, s), 1);
         assert_eq!(plg_rt_b_writeln_1(mp, s), 1);
-        // sanity: rendering matches v1 infix form
+        // sanity: rendering matches infix form
         assert_eq!(term_to_string(&m, s), "1 + 2");
     }
 }

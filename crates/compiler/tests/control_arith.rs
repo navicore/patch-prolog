@@ -1,7 +1,6 @@
 //! M3 integration tests: cut, disjunction, if-then-else, negation,
 //! once, unification builtins, comparisons, and arithmetic. Output is the
-//! readable text format (semantics originally captured from the v1 oracle
-//! on 2026-06-04; the rendered format differs — no JSON, docs/design/IO.md).
+//! readable text format.
 
 mod harness;
 use harness::Compiled;
@@ -96,15 +95,15 @@ fn top_level_arithmetic_queries() {
 }
 
 #[test]
-fn arithmetic_errors_match_v1() {
+fn arithmetic_errors_match_iso() {
     check(
         "X is 1 // 0",
         "error: Runtime error: error(evaluation_error(zero_divisor), Division by zero (integer division))",
         3,
     );
-    // DELIBERATE ISO-over-v1 divergence (issue #36): the culprit for a
-    // non-evaluable atom is the predicate indicator `foo/0` per ISO 8.6,
-    // not the bare atom v1 produced. The compound path was already correct.
+    // ISO 8.6: the culprit for a non-evaluable atom is the predicate
+    // indicator `foo/0`, not a bare atom. The compound path was already
+    // correct.
     check(
         "X is foo + 1",
         "error: Runtime error: error(type_error(evaluable, /(foo, 0)), Cannot evaluate as arithmetic)",
@@ -114,10 +113,9 @@ fn arithmetic_errors_match_v1() {
 
 #[test]
 fn cut_is_transparent_in_disjunction_iso_rule() {
-    // DELIBERATE v1 DIVERGENCE (documented in docs/ISO_COMPLIANCE.md):
     // ISO 7.8.4 — `!` inside `;` cuts the whole clause, including the
-    // disjunction's else branch. v1 treated the cut as local to the
-    // branch and (non-ISO) leaked `fallback` as a second solution.
+    // disjunction's else branch. A non-ISO reading would treat the cut as
+    // local to the branch and leak `fallback` as a second solution.
     let c = harness::compile("t(X) :- (m(X), X > 1, ! ; X = fallback).\nm(1).\nm(2).\nm(3).\n");
     let (out, code) = c.query("t(X)", &[]);
     assert_eq!(out, "X = 2\n");

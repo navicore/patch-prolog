@@ -1,4 +1,4 @@
-//! Worker glue emission (Tier 2, docs/design/done/WASM_TIER2_PLAN.md D1g).
+//! Worker glue emission (Tier 2).
 //!
 //! `plgc build --target worker prog.pl` drops four overrideable scaffolding
 //! files next to the reactor `.wasm` so it "just works" (D2):
@@ -48,7 +48,7 @@ export function assertExports(ex) {
 }
 
 // The reactor emits a bson envelope; the engine has no JSON. This glue decodes
-// bson→JSON host-side (docs/design/WASM_HOST_GLUE.md): bson term values are
+// bson→JSON host-side: bson term values are
 // BinData TermBuf with atom-IDS, resolved via plg_rt_atom_name (which reads the
 // runtime interner — program AND query atoms). All conversion logic is host-side.
 

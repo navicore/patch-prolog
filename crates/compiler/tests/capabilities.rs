@@ -1,4 +1,4 @@
-//! Capability-table integration (docs/design/IO.md): a binary advertises a
+//! Capability-table integration: a binary advertises a
 //! declared set of wire encodings via `:- io_format([...])` (default `[text]`),
 //! `--format`/`--input-format` are validated against it, encoders not declared
 //! are dead-stripped, and the engine speaks **text + bson, no JSON**.
@@ -208,7 +208,7 @@ fn bson_error_path_on_runtime_error() {
     assert!(env.error.is_some(), "error encoded as bson, not stderr");
 }
 
-// ── --atoms: bson self-describing mode (docs/design/BSON_ATOMS.md) ──────────
+// ── --atoms: bson self-describing mode ──────────────────────────────────
 
 #[test]
 fn atoms_embeds_the_atom_map_in_bson() {

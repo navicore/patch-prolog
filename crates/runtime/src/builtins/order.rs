@@ -1,17 +1,14 @@
-//! Standard order of terms (ISO 8.4.2), ported from patch-prolog v1's
-//! `term_compare`.
+//! Standard order of terms (ISO 8.4.2).
 //!
 //! Order:   Var < Number < Atom < Compound
-//!   - vars among themselves by heap-cell index (v1: VarId)
+//!   - vars among themselves by heap-cell index
 //!   - numbers by value; Float < Integer when numerically equal; NaN last
 //!   - atoms alphabetically by name
 //!   - compounds by arity, then functor name, then args left-to-right
 //!
 //! A `LST` cell IS the compound `'.'(Head, Tail)` — arity 2, functor ".".
 //! We treat it as such so a `LST` and a `STR` with functor "." / arity 2
-//! compare structurally equal, exactly as v1 (which has a distinct
-//! `Term::List` but compares it against `Compound('.', [h, t])` as equal —
-//! see the List-vs-Compound arms in v1 `term_compare`).
+//! compare structurally equal.
 
 use crate::cell::*;
 use crate::machine::Machine;
@@ -46,8 +43,8 @@ fn num_of(m: &Machine, w: Word) -> Num {
 }
 
 /// Compare two numbers. Float < Integer at numeric equality; NaN sorts
-/// after every other float (v1 rule). Cross-type comparison goes through
-/// f64 like v1 (documented precision caveat for huge i64).
+/// after every other float. Cross-type comparison goes through
+/// f64 (documented precision caveat for huge i64).
 fn compare_numbers(m: &Machine, a: Word, b: Word) -> Ordering {
     match (num_of(m, a), num_of(m, b)) {
         (Num::I(ia), Num::I(ib)) => ia.cmp(&ib),
@@ -129,7 +126,7 @@ pub fn compare_terms(m: &Machine, a: Word, b: Word) -> Ordering {
         }
         let c = match ra {
             0 => {
-                // both vars: order by heap-cell index (v1 VarId)
+                // both vars: order by heap-cell index
                 payload(a).cmp(&payload(b))
             }
             1 => compare_numbers(m, a, b),

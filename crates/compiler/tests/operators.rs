@@ -1,8 +1,7 @@
-//! Ported from patch-prolog v1 `crates/cli/tests/integration.rs`.
-//! Operator / parser-surface tests (v1 issues #19, #28, #29).
+//! Operator / parser-surface tests.
 //!
 //! plgc's ISO-subset frontend implements the INFIX operator set (covered
-//! in v1_arith: `**`, `^`, `<<`, `>>`, `xor`, `/\`, `\/`, `div`) and
+//! in `arith`: `**`, `^`, `<<`, `>>`, `xor`, `/\`, `\/`, `div`) and
 //! accepts SOME parenthesized comparison operators as atoms. Output is the
 //! readable text format.
 

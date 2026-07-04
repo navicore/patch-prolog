@@ -1,4 +1,3 @@
-//! Ported from patch-prolog v1 `crates/cli/tests/integration.rs`.
 //! Arithmetic evaluation: `is/2`, function evaluators, the extended
 //! operator set (** ^ >> << xor div /\ \/), mod/rem/div semantics,
 //! float division, and arithmetic error terms.
@@ -32,7 +31,7 @@ fn solves(goal: &str) {
     assert_eq!(code, 1, "goal: {goal}");
 }
 
-/// Succeeds with exactly one solution (bindings unchecked) — mirrors v1
+/// Succeeds with exactly one solution (bindings unchecked) — mirrors the
 /// tests that only asserted `solutions.len() == 1`. count lives in bson.
 #[track_caller]
 fn succeeds_once(goal: &str) {
@@ -117,7 +116,7 @@ fn mod_floored_semantics() {
 
 #[test]
 fn mod_vs_rem_difference() {
-    // v1 test_mod_vs_rem_difference: -7 mod 2 = 1, -7 rem 2 = -1.
+    // -7 mod 2 = 1, -7 rem 2 = -1.
     let (out, code) = empty().query("X is -7 mod 2, Y is -7 rem 2", &[]);
     assert_eq!(out, "X = 1\nY = -1\n");
     assert_eq!(code, 1);
@@ -171,9 +170,9 @@ fn succ_plus_overflow() {
 
 #[test]
 fn naf_precedence() {
-    // v1 test_naf_precedence_with_is: `\+ 1 =:= 2` parses as `\+(1 =:= 2)`.
+    // `\+ 1 =:= 2` parses as `\+(1 =:= 2)`.
     solves("\\+ 1 =:= 2");
-    // v1 test_naf_parses_with_operator: `\+ X = goodbye` parses as `\+(X = goodbye)`.
+    // `\+ X = goodbye` parses as `\+(X = goodbye)`.
     let (out, code) = empty().query("X = hello, \\+ X = goodbye", &[]);
     assert_eq!(out, "X = hello\n");
     assert_eq!(code, 1);

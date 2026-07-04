@@ -7,14 +7,14 @@ use plg_frontend::{CgClause, ProgramDirectives};
 use plg_shared::StringInterner;
 use std::fmt::Write;
 
-/// Runtime functions generated code calls (the plg_rt_* ABI — see
-/// docs/design/RUNTIME_ABI.md; signatures mirror crates/runtime/src/abi.rs).
+/// Runtime functions generated code calls (the plg_rt_* ABI;
+/// signatures mirror crates/runtime/src/abi.rs).
 const RUNTIME_DECLS: &str = "\
 declare ptr @plg_rt_init(ptr, i32, ptr, i32, ptr, i32, ptr, i32, ptr, i32)
 declare i32 @plg_rt_main(ptr, i32, ptr)
 declare void @plg_rt_set_machine(ptr)
 
-; Wire-encoding descriptors (docs/design/IO.md). Codegen's `@plg_caps`
+; Wire-encoding descriptors. Codegen's `@plg_caps`
 ; capability table takes their addresses in a constant initializer, so each
 ; must be declared here. Only those a binary's `@plg_caps` actually lists are
 ; referenced and linked; the rest are dead-stripped by `--gc-sections`.
@@ -151,7 +151,7 @@ pub fn codegen_program(
     let (srcmap_len, files_len) = cg.emit_provenance();
     cg.out.push('\n');
 
-    // --- Wire-encoding capability table (docs/design/IO.md): which `--format`
+    // --- Wire-encoding capability table: which `--format`
     // values this binary advertises. Default `[text]`.
     let caps_len = cg.emit_capabilities(&directives.io_format)?;
     cg.out.push('\n');

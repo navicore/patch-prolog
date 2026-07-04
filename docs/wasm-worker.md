@@ -13,8 +13,10 @@ it fits the isolate model by construction. For WASI runtimes (wasmtime, Spin,
 …), use [Tier 1](wasm-target.md) instead.
 
 The answers are **byte-identical to a native build**, including error text — the
-reactor runs the same engine over the same JSON wire shape, only the transport
-differs (a memory buffer instead of stdout).
+reactor runs the same engine and emits the same **bson** envelope a native
+`--format bson` build does; the emitted host glue decodes that bson to the
+JSON HTTP response. Only the transport differs (a memory buffer instead of
+stdout).
 
 ## Requirements
 
@@ -81,7 +83,7 @@ curl -X POST --data 'depends_on(app, D)' http://localhost:8080/
 
 ## Response shape
 
-The JSON is the v1 wire shape with one Tier-2 addition — an `output` field
+The JSON response shape carries one Tier-2 addition — an `output` field
 carrying anything the program wrote with `write/1`/`writeln/1`/`nl/0` (an
 isolate has no stdout, so output is captured losslessly rather than lost):
 
@@ -90,8 +92,10 @@ isolate has no stdout, so output is captured losslessly rather than lost):
 ```
 
 The field is always present (empty when nothing was written), so a host can rely
-on its shape. Strip it to get bytes identical to a native `--query --format
-json`. Errors render exactly as native, as `{"error":"…"}`.
+on its shape. The bson the reactor emits is identical to a native
+`--query --format bson` (the `output` field is the engine's captured `write/1`
+bytes, present in both). Errors render as `{"error":"…"}`, with the same
+message text a native build produces.
 
 ## The buffer ABI
 
@@ -100,7 +104,7 @@ If you replace the glue, the contract the module exports is:
 ```
 plg_init()                                   build the Machine once per isolate
 plg_rt_alloc(len) -> ptr                      host writes the query bytes here
-plg_rt_run_query(ptr, len, limit, steps, depth) -> (len<<32)|ptr   JSON result
+plg_rt_run_query(ptr, len, limit, steps, depth) -> (len<<32)|ptr   bson result
 plg_rt_free(ptr, len)                         host frees the query / result buffer
 ```
 

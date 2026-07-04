@@ -114,13 +114,13 @@ if ./linting --query "violation(_, _)" >/dev/null; then
 fi
 ```
 
-And for tooling that *does* want the data, the default JSON format is ready
-to parse:
+And for tooling that *does* want structured data, the `bson` format is ready
+to parse (the engine speaks `text` and `bson`, no JSON — a host wanting JSON
+derives it from bson):
 
 ```sh
-./linting --query "violation(F, R)" --format json
-# {"count":2,"exhausted":true,"solutions":[{"F":"password","R":"sensitive_field"},
-#                                          {"F":"ssn","R":"sensitive_field"}]}
+./linting --query "violation(F, R)" --format bson
+# a bson document: {count:2, exhausted:true, solutions:[{F: "password", ...}, ...]}
 ```
 
 That `linting` binary is ~700K, depends only on system libc/libm, and needs

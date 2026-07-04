@@ -278,7 +278,7 @@ fn fail_compiles_to_immediate_failure() {
 #[test]
 fn big_integer_literals_box_at_runtime() {
     // M4: beyond-immediate integers compile to a runtime BIG box (full i64
-    // range, v1 parity). In a clause BODY (not a ground fact column, which
+    // range). In a clause BODY (not a ground fact column, which
     // serializes to the blob instead — see the fact-table blob test).
     let ir = plgc::compile_to_ir(&format!("big(X) :- X = {}.", i64::MAX)).unwrap();
     assert!(

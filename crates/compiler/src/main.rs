@@ -252,8 +252,7 @@ fn main() -> ExitCode {
             deny_undefined,
         } => {
             // Compile to a temp binary and exec it — NEVER interpret.
-            // Dev mode and production mode share one execution path
-            // (see docs/design/LESSONS_FROM_V1.md, rule 3).
+            // Dev mode and production mode share one execution path.
             if inputs.is_empty() {
                 eprintln!("error: no input files");
                 return ExitCode::from(3);

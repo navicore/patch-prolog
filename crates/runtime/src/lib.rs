@@ -5,8 +5,7 @@
 //! term heap, trail, choice-point stack, generic unification, the
 //! goal-only `--query` parser, solution output, and the process entry
 //! point. It contains NO clause interpreter: clause control flow lives
-//! in the LLVM IR that `plgc` generates (see
-//! docs/design/COMPILATION_MODEL.md and docs/design/LESSONS_FROM_V1.md).
+//! in the LLVM IR that `plgc` generates.
 
 pub mod abi;
 pub mod builtins;

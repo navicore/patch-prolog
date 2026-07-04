@@ -1,6 +1,6 @@
 //! The builtin / control-construct vocabulary: the single source of
 //! truth for *which* names the language knows, their arities, and a
-//! one-line doc each. Reconciled in `docs/design/BUILTIN_VOCAB.md`.
+//! one-line doc each.
 //!
 //! This is **data only** — no symbol mapping (that stays compiler-side
 //! in `codegen/lower.rs::DET_BUILTINS`) and no dispatch (the runtime
@@ -60,8 +60,8 @@ impl BuiltinSpec {
 
 use BuiltinKind::{Atom, Control, Det, Inline};
 
-/// The full vocabulary (56 rows). Docs for everything except `,` `;`
-/// `->` port verbatim from v1's `BUILTIN_DOCS`; those three are new.
+/// The full vocabulary (56 rows). Docs for `,` `;` `->` are new;
+/// the rest are pinned by the builtin-reference page.
 /// `rustfmt::skip` keeps it as a one-row-per-line table — the doc
 /// strings would otherwise wrap to five lines each.
 #[rustfmt::skip]
@@ -223,7 +223,7 @@ mod tests {
         assert!(lookup("is", 2).unwrap().completable()); // Inline, yes
         assert!(lookup("compare", 3).unwrap().completable()); // Inline, yes
         assert!(lookup("once", 1).unwrap().completable()); // Control, yes
-        assert!(lookup("catch", 3).unwrap().completable()); // Control, yes (v1 omitted)
+        assert!(lookup("catch", 3).unwrap().completable()); // Control, yes
         assert!(lookup("nl", 0).unwrap().completable()); // Det atom-arity, yes
         // ...operators and `!` do not.
         assert!(!lookup("\\+", 1).unwrap().completable()); // Control, no

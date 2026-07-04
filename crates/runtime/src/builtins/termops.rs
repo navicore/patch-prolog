@@ -1,15 +1,13 @@
 //! Term-introspection builtins: `functor/3`, `arg/3`, `=../2` (univ),
 //! `copy_term/2`.
 //!
-//! Ported byte-for-byte from patch-prolog v1 (`solver.rs` Functor/Arg/
-//! Univ/CopyTerm arms). Tag decisions verified against the oracle:
+//! Tag decisions:
 //! - `functor(T, '.', 2)` and `T =.. ['.', a, b]` both build a **STR**
-//!   (functor ".", arity 2), NOT a list cell — v1 always constructs
-//!   `Term::Compound`.
+//!   (functor ".", arity 2), NOT a list cell.
 //! - decomposing a `TAG_LST` yields functor `.` / arity 2 and args
 //!   [Head, Tail] (univ produces `['.', H, T]`).
-//! - errors mirror v1's structured balls (see the captured oracle
-//!   strings in the unit tests).
+//! - errors are structured balls (see the captured strings in the unit
+//!   tests).
 
 use crate::cell::*;
 use crate::machine::Machine;
@@ -88,7 +86,7 @@ pub extern "C" fn plg_rt_b_functor_3(
 }
 
 /// `functor/3` with an unbound first argument: build a term from
-/// name + arity (v1 semantics).
+/// name + arity.
 fn functor_construct(m: &mut Machine, term: u64, name: u64, arity: u64) -> i32 {
     let wname = m.deref(name);
     let warity = m.deref(arity);
@@ -112,7 +110,7 @@ fn functor_construct(m: &mut Machine, term: u64, name: u64, arity: u64) -> i32 {
         }
     }
     if arity_val < 0 {
-        // The culprit is the negative arity itself (v1 oracle).
+        // The culprit is the negative arity itself.
         crate::errors::domain_error(
             m,
             "not_less_than_zero",
@@ -372,7 +370,7 @@ mod tests {
 
     #[test]
     fn functor_construct_builds_str_even_for_dot() {
-        // functor(T, '.', 2) → STR './2', NOT a list cell (oracle-verified).
+        // functor(T, '.', 2) → STR './2', NOT a list cell.
         let mut m = machine();
         let t = m.new_var();
         let dot = make_atom(ATOM_DOT);

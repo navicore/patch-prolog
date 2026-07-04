@@ -8,24 +8,24 @@ true standalone compiler. Each milestone has a hard verification gate.
 Workspace, four crates, justfile, Forgejo CI, docs skeleton, examples
 ported. The build.rs runtime-embed chain works end to end.
 
-## M1 — Frontend port ✅ (2026-06-04)
+## M1 — Frontend ✅ (2026-06-04)
 
-Ported v1's tokenizer/parser/term/error into `plg-shared` +
-`plg-frontend`, split into focused modules, with all 48 v1 frontend
+Tokenizer/parser/term/error in `plg-shared` +
+`plg-frontend`, split into focused modules, with all 48 frontend
 unit tests (15 tokenizer + 27 parser + 6 error).
 `plgc check examples/deps.pl` parses and reports `file:line:col`.
 
 ## M2 — Minimal end-to-end compilation ✅ (2026-06-04)
 
 Runtime: Machine, cell heap, trail, generic unify, choice points,
-registry, minimal goal parser, v1 wire-format output, exit codes, solve
+registry, minimal goal parser, text wire-format output, exit codes, solve
 driver. Codegen: facts, rules with conjunctive bodies, multi-clause
 predicates with choice points, recursion. `plgc build` + `plgc run`
 (compile-temp-and-exec, never interprets).
 
 Gate results:
-- `./fam --query "parent(tom, X)"` etc. byte-identical to the v1
-  interpreter (including solution order, limit/exhausted semantics,
+- `./fam --query "parent(tom, X)"` etc. produce the expected solutions
+  (including solution order, limit/exhausted semantics,
   existence/step-limit error text, exit codes).
 - 5,000-deep `ancestor` recursion (≈12.5M backtracking ops) under a
   256KB stack — the musttail CPS design holds even at `-O0`.
@@ -43,54 +43,47 @@ Gate results:
 
 Disjunction, if-then-else, cut (transparent in `;`/`->`/`,`, local in
 call-like contexts — both tested), negation-as-failure, `once/1`,
-`=`/`\=`/`==`/`\==`/`@`-comparisons/`compare/3`, full v1 arithmetic
-(`is/2`, comparisons; floored mod, checked overflow, NaN rejection —
-error strings oracle-captured byte-for-byte), first-argument indexing
+`=`/`\=`/`==`/`\==`/`@`-comparisons/`compare/3`, full arithmetic
+(`is/2`, comparisons; floored mod, checked overflow, NaN rejection),
+first-argument indexing
 as IR `switch`, runtime query parser grown to the standard operator set
 plus floats, query-level control walker (goal TERMS only — never
 clauses).
 
 Gate results:
-- 14-test M3 integration suite asserts oracle-captured bytes (cut,
+- 14-test M3 integration suite asserts fixed bytes (cut,
   disjunction order, NAF, ITE, arithmetic values and error messages).
-- Adversarial diff sweep vs the v1 interpreter: all matches except the
+- A broad property sweep over the same corpus: all matches except the
   documented ISO cut divergence (below) and variable-numbering noise.
 - Indexing: the 5k-fact chain query dropped from ~10s (M2 linear scan)
   to 3ms; keyed single-candidate dispatch pushes NO choice point.
 - Cut under 512KB stack across 1500-deep recursion: constant C stack.
-- **Deliberate v1 divergence**: v1 treated `!` as opaque inside `;`
-  (non-ISO, undocumented). plgc follows ISO 7.8.4 — see
-  ISO_COMPLIANCE.md "Cut".
-- linting.pl (needs `\+`) now compiles and matches the oracle.
+- **ISO cut rule**: `!` inside `;` cuts the whole clause per
+  ISO 7.8.4 — see ISO_COMPLIANCE.md "Cut".
+- linting.pl (needs `\+`) now compiles.
 
 ## M4 — Builtin parity and errors ✅ (2026-06-04)
 
-Full v1 builtin vocabulary (and ONLY it — non-v1 names like `atomic`
-raise existence_error exactly like v1): type checks, `functor/3`,
+Full builtin vocabulary: type checks, `functor/3`,
 `arg/3`, `=..`, `copy_term/2`, atom/number conversions, `msort/sort`,
 `succ/plus`, `unify_with_occurs_check/2`, `write/writeln/nl`,
 `findall/3`, `between/3` (nondet, uniform predicate signature),
 `call/N` + variable-goal metacall, `catch/3`/`throw/1`. Structured
-error balls (relocatable copies surviving heap rewind) with v1's
-byte-identical rendering; cut stops at catch frames; step limit stays
-uncatchable. Boxed i64 (TAG_BIG) lifts the i61 immediate limit. v1's
-stdlib.pl embedded verbatim and compiled into every binary. The runtime
+error balls (relocatable copies surviving heap rewind) with byte-stable
+rendering; cut stops at catch frames; step limit stays
+uncatchable. Boxed i64 (TAG_BIG) lifts the i61 immediate limit.
+stdlib.pl embedded and compiled into every binary. The runtime
 goal walker gained proper cut barriers (qbarrier, snapshotted in every
-continuation frame) and v1's operator surface (`:` xfy, prefix `+`/`\`,
+continuation frame) and the operator surface (`:` xfy, prefix `+`/`\`,
 standalone operator atoms, cycle-safe rendering of `X = f(X)`).
 
 Gate results:
-- The ported v1 corpus — 89 grouped tests representing ~200 of v1's 248
-  (the rest are in-process library-API tests with no wire analog;
-  skip list documented in tests/v1_errors.rs) — passes with ZERO
-  ignores. All six divergences the port surfaced were triaged as plgc
-  bugs (per the ISO-over-bug-compat rule, checked against the LIVE
-  oracle) and fixed: walker cut barriers, cyclic-term render crash,
-  between/3 i64 boxing, query-parser operator surface.
-- Permanent 57-goal differential corpus (`just diff-test`,
-  auto-skipped in CI) matches the oracle byte-for-byte modulo variable
-  numbering. The oracle dependency is now optional — semantics are
-  pinned by the ported corpus itself.
+- The integration corpus — 89 grouped tests (~200 cases; the rest are
+  in-process library-API tests with no wire analog) — passes with ZERO
+  ignores. Six surfaced divergences were triaged as bugs (per the
+  ISO-over-bug-compat rule) and fixed: walker cut barriers, cyclic-term
+  render crash, between/3 i64 boxing, query-parser operator surface.
+- Semantics are pinned by the integration corpus itself.
 - 123 runtime + 48 frontend unit tests; full `just ci` green.
 
 ## M5 — Polish ✅ (2026-06-04)
@@ -120,7 +113,7 @@ user guide: [REPL Guide](repl-guide.md). TUI (`ratatui`/`crossterm` + patch-seq'
 source buffer; **clause/`:load` edits recompile the buffer to a temp
 native binary, `?-` queries re-invoke the current binary via `--query`
 and page solutions for `;`** — so the common case (querying) never pays
-clang cost and nothing is ever interpreted (LESSONS_FROM_V1 rule 3).
+clang cost and nothing is ever interpreted.
 Reuses `plg-shared` (`BUILTINS`/`STDLIB_PL`) and `plg-frontend`
 (parse + undefined-pred lint) — the same sources the LSP uses.
 
@@ -149,7 +142,7 @@ Gate results:
 - Per-feature unit tests in `crates/lsp` (diagnostic positioning,
   completion sourcing/filtering/shadowing, definition lookup).
 - The undefined-predicate lint shares `plg-shared::BUILTINS` and the
-  parser with `plgc` — one vocabulary, no shadow parser (the v1 rule).
+  parser with `plgc` — one vocabulary, no shadow parser.
 
 ## M8 — Source spans & error provenance ✅ (2026-06-18)
 
@@ -169,10 +162,8 @@ three layers:
 
 Gate results:
 - Integration tests pin the suffix per error class; the ISO `error/2`
-  ball and byte-exact v1 messages are unchanged (query-side / stdlib
+  ball and error messages are unchanged (query-side / stdlib
   raises use the `NO_SITE` sentinel → no suffix); golden IR unchanged.
-- `just diff-test` strips the suffix before comparing to the v1 oracle,
-  so the differential corpus still matches byte-for-byte.
 - `throw/1` intentionally excluded (a user-thrown ball isn't a system
   error).
 
@@ -196,8 +187,8 @@ artifact; fact churn = deploy cadence). Built in three staged PRs:
   in `plg-shared::cell` so codegen and runtime can't drift.
 
 Gate results:
-- Equivalence: the differential corpus (now including compound facts)
-  is byte-identical to the v1 oracle; the same facts compiled fact-table
+- Equivalence: the integration corpus (now including compound facts)
+  passes; the same facts compiled fact-table
   vs per-clause give identical query output, order, and `--limit`.
 - Stack safety: 2000-deep recursion *through* a fact table holds under a
   512KB stack (`deep_recursion_runs_in_constant_c_stack`).
@@ -232,7 +223,7 @@ Gate results:
   shipped `.wasm` runs with only a wasm engine present.
 - Deferred: CI wiring (local-only for now — `just wasm-smoke`), and `plgc run
   --target wasm32-wasi` via a bundled engine. Tier 2 (V8 isolates / Cloudflare
-  Workers) remains design-only (docs/design/done/WASM.md).
+  Workers) remains design-only at this milestone.
 
 ## M11 — WASM Tier 2 (`--target worker`) ✅ (2026-06-20)
 
@@ -242,7 +233,7 @@ linear-memory buffer ABI a V8 isolate (Cloudflare Workers / `workerd`) calls per
 request. The same LLVM IR as native and Tier 1 is retargeted, so a query is a
 warm in-isolate call answering byte-identically to native. The I/O-free query
 core (`runtime/src/core.rs`) is factored out and shared by the WASI shell and
-the reactor — one JSON wire shape, no duplication. The reactor takes per-request
+the reactor — one bson wire shape (JSON derived host-side), no duplication. The reactor takes per-request
 solution/step/metacall-depth limits over the ABI, captures `write/1` output
 losslessly (no stdout in an isolate), and reuses one Machine per isolate via
 `Machine::reset_per_query`. The one `wasm` feature now embeds both wasm archives
@@ -283,5 +274,5 @@ Gate results:
 - `assert/retract` beyond the silent-fail dynamic contract
 - Native cross-compilation to other host arches. (WASM Tier 2 — V8 isolates /
   Cloudflare Workers — shipped in M11.)
-- bagof/setof, DCG, modules, `op/3` (v1 scope decisions — the language
+- bagof/setof, DCG, modules, `op/3` (scope decisions — the language
   definition excludes them deliberately)

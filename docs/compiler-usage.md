@@ -49,12 +49,12 @@ interpreter, so what you test is what you ship.
 |---|---|
 | `--query <GOAL>` | The goal to solve, e.g. `"needs(app, X)"`. Required. |
 | `--limit <N>` | Maximum number of solutions to report. |
-| `--format <json\|text>` | Output format. **Default: `text`** (human-readable). |
+| `--format <FORMAT>` | Output format: `text` or `bson`. **Default: `text`** (human-readable). |
 | `--deny-undefined` | As for `build`. |
 
 ```sh
 plgc run deps.pl --query "needs(app, X)"
-plgc run deps.pl --query "needs(app, X)" --limit 1 --format json
+plgc run deps.pl --query "needs(app, X)" --limit 1 --format bson
 ```
 
 ## `plgc check`
@@ -74,20 +74,25 @@ A binary built by `plgc` answers queries directly — this is the same
 contract `plgc run` and the REPL use under the hood:
 
 ```
-./my-binary --query "goal(X)" [--limit N] [--format json|text]
+./my-binary --query "goal(X)" [--limit N] [--format text|bson]
 ```
 
-- **`--format text`** prints one variable binding per line (`X = bob`),
-  the form you read in a terminal.
-- **`--format json`** prints a single structured object — and is the
-  binary's **default**, because the typical deployment is a program calling
-  the binary and parsing the result:
+The engine speaks **two** wire encodings, **no JSON**:
 
-```json
-{"count":2,"exhausted":true,"solutions":[{"X":"bob"},{"X":"ann"}]}
+- **`--format text`** (the **default**) prints one variable binding per line
+  (`X = bob`), the form you read in a terminal. A goal with no solutions
+  prints `false.`; a ground goal that succeeds prints `true.`.
+- **`--format bson`** prints a single self-delimiting bson document — for a
+  program calling the binary and parsing a structured result. Term values
+  are `BinData(0x00)` carrying a lossless `TermBuf`:
+
+```
+{count:2, exhausted:true, solutions:[{X: BinData(...), ...}, ...]}
 ```
 
-`exhausted` is `false` when more solutions exist beyond `--limit`.
+`exhausted` is `false` when more solutions exist beyond `--limit`. A freshly
+built binary advertises both encodings unless the program restricts them with
+`:- io_format([...])`.
 
 ### Exit codes
 

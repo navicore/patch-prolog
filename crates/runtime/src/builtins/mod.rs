@@ -9,8 +9,7 @@
 //! codes), `sortops` (msort/sort), and `miscops` (succ/plus/
 //! unify_with_occurs_check/write/writeln/nl).
 //!
-//! Semantics are ported byte-for-byte from patch-prolog v1 so error message
-//! text and ordering decisions stay identical; see the per-module docs.
+//! Semantics and error-message text are pinned by the per-module tests.
 
 pub mod arith;
 pub mod atomops;

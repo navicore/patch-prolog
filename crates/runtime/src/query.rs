@@ -4,12 +4,11 @@
 //! is one goal term. Supports atoms (plain and quoted), variables,
 //! integers, compounds, lists, and the standard operator set via the
 //! precedence climber in `query::ops` — the levels mirror
-//! plg-frontend/src/parser (the reference implementation); the
-//! differential test corpus guards against drift.
+//! plg-frontend/src/parser (the reference implementation).
 //!
 //! Terms are built directly on the machine heap; query variables are
 //! recorded in `m.query_vars` (first-occurrence order, `_` excluded —
-//! the renderer sorts by name, matching v1).
+//! the renderer sorts by name).
 
 mod ops;
 
@@ -25,7 +24,7 @@ pub fn parse_query(m: &mut Machine, src: &str) -> Result<Word, String> {
     };
     let goal = p.parse_level(m, 1200)?;
     p.skip_ws();
-    // Tolerate a trailing '.' like the v1 query parser.
+    // Tolerate a trailing '.'.
     if p.peek() == Some('.') {
         p.pos += 1;
         p.skip_ws();
@@ -121,7 +120,7 @@ impl QueryParser {
             }
             Some('+') => {
                 // Prefix plus: folds into a positive numeric literal
-                // (v1 issue #19), otherwise builds '+'/1.
+                // otherwise builds '+'/1.
                 self.pos += 1;
                 self.skip_ws();
                 if self.peek().is_some_and(|c| c.is_ascii_digit()) {
@@ -265,7 +264,7 @@ impl QueryParser {
             .map_err(|_| format!("invalid integer `{digits}`"))?;
         let n = if neg { -n } else { n };
         if !(cell::INT_MIN..=cell::INT_MAX).contains(&n) {
-            // Box beyond-immediate integers (full i64 range, v1 parity).
+            // Box beyond-immediate integers (full i64 range).
             let idx = m.heap.len();
             m.heap.push(n as u64);
             return Ok(cell::make(cell::TAG_BIG, idx as u64));

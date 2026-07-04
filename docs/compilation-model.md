@@ -24,7 +24,7 @@ This is the simplest design that is *genuinely compiled*. The alternatives:
   triples over argument registers, `call`/`execute`/`proceed` control) —
   fastest and most faithful to the standard implementation strategy, but
   needs the full WAM register/environment design up front. A named future
-  escape hatch, not the v1 target. (plgc keeps the WAM *machine model* —
+  escape hatch, not the current target. (plgc keeps the WAM *machine model* —
   heap, trail, choice points, tagged words, indexing — and replaces only
   the *instruction set* with direct native CPS codegen; see
   [Runtime ABI](RUNTIME_ABI.md#lineage).)
@@ -48,7 +48,7 @@ the retry. The driver is the trampoline; depth never grows the C stack.
 Clause groups push lazily: a predicate's entry tries clause 1 and pushes one
 choice point whose retry is clause 2, which pushes clause 3, and so on.
 First-argument indexing compiles to a `switch` on the first argument's
-tag/value (the same keys the v1 interpreter used); a single keyed candidate
+tag/value (the WAM first-argument keys); a single keyed candidate
 pushes **no** choice point.
 
 ## Cut
@@ -86,7 +86,7 @@ named escape hatch if profiles ever demand it (symbols in the
 - generic unification, including head unification — one shared
   bind/deref/trail implementation so compiled and runtime paths can't
   diverge,
-- `is/2` and arithmetic comparison (the v1 evaluator, with its exact error
+- `is/2` and arithmetic comparison (the evaluator, with its exact error
   strings),
 - the deterministic builtin library, plus `findall/3`, `catch/3`, `throw/1`,
   the metacall path, and `between/3`.
@@ -113,6 +113,6 @@ ancestor(X, Z) :- parent(X, Y), ancestor(Y, Z).
 | risk | guard |
 |---|---|
 | `musttail` emission bug → stack growth | codegen post-check (every `musttail` is followed by a bare `ret`) + a deep-recursion integration test |
-| compiled vs. generic unify divergence | shared primitives + differential tests against the v1 interpreter oracle |
+| compiled vs. generic unify divergence | shared primitives + property tests |
 | atom-id divergence compile ↔ runtime | a single emitted atom table + round-trip unit tests |
 | runaway heap in determinate queries | the uncatchable step limit (copying GC is a future escape hatch) |

@@ -41,7 +41,7 @@ pub fn unify(m: &mut Machine, a: Word, b: Word) -> bool {
                 }
             }
             (TAG_FLT, TAG_FLT) => {
-                // to_bits comparison: NaN == NaN, -0.0 != 0.0 (v1 rule)
+                // to_bits comparison: NaN == NaN, -0.0 != 0.0
                 let fa = m.heap[payload(a) as usize];
                 let fb = m.heap[payload(b) as usize];
                 if fa != fb {
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn failed_unify_leaves_partial_bindings_for_caller_rewind() {
         // The engine relies on choice-point rewind (not unify itself) to
-        // undo partial bindings — same as v1. Verify the trail records them.
+        // undo partial bindings — verify the trail records them.
         let mut m = machine();
         let x = m.new_var();
         let s1 = put_struct(&mut m, 5, &[x, make_atom(1)]);

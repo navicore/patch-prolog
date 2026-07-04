@@ -129,13 +129,13 @@ mirrored in `cell.rs` and `term_emit.rs`, covered by tests on both sides).
 | `plg_rt_deref` | `i64 (ptr, i64)` | first-arg indexing dispatch |
 | `plg_rt_str_key` | `i64 (ptr, i64)` | STR → packed functor cell, else u64::MAX |
 | `plg_rt_pred_fail` | `i32 (ptr, i64)` | always-fail body (dynamic stubs) |
-| `plg_rt_existence_error` | `i32 (ptr, i32, i32)` | sets v1-format error, returns 0 |
+| `plg_rt_existence_error` | `i32 (ptr, i32, i32)` | sets a structured error, returns 0 |
 
 ### Inline comparison and arithmetic builtins
 
 | symbol | signature (IR) | purpose |
 |---|---|---|
-| `plg_rt_b_is` | `i32 (ptr, i64, i64)` | `is/2` (v1 eval semantics, exact error strings) |
+| `plg_rt_b_is` | `i32 (ptr, i64, i64)` | `is/2` (ISO eval semantics, exact error strings) |
 | `plg_rt_b_arith_cmp` | `i32 (ptr, i32, i64, i64)` | op 0..5 = `<` `>` `=<` `>=` `=:=` `=\=` |
 | `plg_rt_b_neq` | `i32 (ptr, i64, i64)` | `\=` (trail-rewinding attempt) |
 | `plg_rt_b_term_cmp` | `i32 (ptr, i32, i64, i64)` | op 0..5 = `==` `\==` `@<` `@>` `@=<` `@>=` |
@@ -150,7 +150,7 @@ built at runtime (queries, metacalls), walking goal terms, never clauses.
 ## Errors, metacall, and control builtins
 
 **Structured errors.** `Machine::error` carries a relocatable ball
-(`copyterm::TermBuf`) plus its pre-rendered v1-format message. Balls survive
+(`copyterm::TermBuf`) plus its pre-rendered message. Balls survive
 heap rewinding; `solve::drive` unwinds them to the nearest catch frame (a
 `CpKind::Catch` choice point whose env holds `[catcher, recovery, k_fn,
 k_env]`). `plg_rt_cut` stops at catch frames (catch is opaque to cut). The
@@ -175,16 +175,15 @@ limit; full CPS compilation of metacalls is a named escape hatch.
 **Deterministic builtins** `plg_rt_b_<name>_<arity>` — one symbol per entry
 in codegen's `DET_BUILTINS` table (lower.rs), declarations generated from the
 same table. The runtime's query-side dispatch (control.rs `det_builtin`)
-mirrors it; the differential corpus guards the pair. Vocabulary = exactly
-v1's: type checks, functor/arg/univ/copy_term, atom/number conversions,
-msort/sort, succ/plus, unify_with_occurs_check, write/writeln/nl.
+mirrors it. Vocabulary: type checks, functor/arg/univ/copy_term,
+atom/number conversions, msort/sort, succ/plus,
+unify_with_occurs_check, write/writeln/nl.
 
-**Stdlib.** `crates/compiler/stdlib.pl` (v1's file, verbatim) is parsed
+**Stdlib.** `crates/compiler/stdlib.pl` is parsed
 before user sources in every `plgc build` — member/append/length/last/
-reverse/nth0/nth1 are ordinary compiled predicates in every binary, exactly
-like v1's embedding.
+reverse/nth0/nth1 are ordinary compiled predicates in every binary.
 
 ## Environment
 
-`PLG_MAX_STEPS` overrides the default 10,000 step ceiling (documented
-extension over v1, which hardcoded it; the CLI contract is unchanged).
+`PLG_MAX_STEPS` overrides the default 10,000 step ceiling
+(the CLI contract is unchanged).

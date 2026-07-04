@@ -1,8 +1,8 @@
 //! The C-ABI surface generated code calls into (`plg_rt_*`).
 //!
 //! Every function here matches a declaration emitted by plgc codegen;
-//! the pairing is documented in docs/design/RUNTIME_ABI.md and protected
-//! by the compiler↔runtime version sync in crates/compiler/build.rs.
+//! the pairing is protected by the compiler↔runtime version sync in
+//! crates/compiler/build.rs.
 //!
 //! Safety: all `m` pointers originate from `plg_rt_init` and live for
 //! the whole process; generated code is single-threaded.

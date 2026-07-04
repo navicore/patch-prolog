@@ -8,7 +8,7 @@
 //!   list→atom).
 //! - `number_chars/2` and `number_codes/2` work both directions; garbage
 //!   input on the reverse direction raises a bare `syntax_error` formal.
-//! - float→chars/codes uses v1's `format_float` ("3.0", not "3").
+//! - float→chars/codes uses `format_float` ("3.0", not "3").
 
 use crate::cell::*;
 use crate::machine::Machine;
@@ -49,7 +49,7 @@ fn collect_list(m: &Machine, w: Word) -> Option<Vec<Word>> {
     }
 }
 
-/// v1 `format_float`: append ".0" to a whole-valued float (so number_*/2
+/// `format_float`: append ".0" to a whole-valued float (so number_*/2
 /// renders 3.0 → "3.0", not "3"). NaN/Inf pass through `{}`.
 fn format_float(f: f64) -> String {
     if f.is_nan() || f.is_infinite() {
@@ -73,13 +73,13 @@ fn number_string(m: &Machine, w: Word) -> Option<String> {
     }
 }
 
-/// Raise v1's bare `syntax_error` formal with the given context.
+/// Raise a bare `syntax_error` formal with the given context.
 fn syntax_error(m: &mut Machine, context: &str) {
     let f = make_atom(m.atoms.intern("syntax_error"));
     crate::errors::set_formal(m, f, context, false);
 }
 
-/// Parse a numeric string into an INT or FLT word, mirroring v1's
+/// Parse a numeric string into an INT or FLT word, mirroring the
 /// int-then-float fallback. `None` on a parse failure or a NaN/Inf float.
 fn parse_number(m: &mut Machine, s: &str) -> Option<Word> {
     if let Ok(n) = s.parse::<i64>() {
@@ -165,7 +165,7 @@ pub extern "C" fn plg_rt_b_atom_chars_2(
                     let id = m.atoms.intern(&s);
                     unify(m, atom, make_atom(id)) as i32
                 }
-                None => 0, // a non-single-char element → fail (v1 backtrack)
+                None => 0, // a non-single-char element → fail (backtrack)
             }
         }
         _ => {

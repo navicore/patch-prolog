@@ -2,9 +2,8 @@
 //!
 //! An error is carried as a relocatable ball (`TermBuf`) so it survives
 //! the heap rewinding that unwinds to a catch frame, plus a
-//! pre-rendered message for top-level output. The message format is
-//! v1's `format_term` rendering of the ball — byte-compatible with the
-//! M2/M3 preformatted strings.
+//! pre-rendered message for top-level output. The message format is the
+//! `format_term` rendering of the ball.
 
 use crate::cell::*;
 use crate::copyterm::copy_to_buf;
@@ -92,7 +91,7 @@ pub fn evaluation(m: &mut Machine, kind: &str, context: &str) {
     set_formal(m, make(TAG_STR, idx as u64), context, false);
 }
 
-/// `resource_error(Kind)` — the steps variant is uncatchable (v1 rule).
+/// `resource_error(Kind)` — the steps variant is uncatchable.
 pub fn resource(m: &mut Machine, kind: &str, context: &str, uncatchable: bool) {
     let re = m.atoms.intern("resource_error");
     let k = make_atom(m.atoms.intern(kind));
@@ -102,7 +101,7 @@ pub fn resource(m: &mut Machine, kind: &str, context: &str, uncatchable: bool) {
     set_formal(m, make(TAG_STR, idx as u64), context, uncatchable);
 }
 
-/// `existence_error(procedure, Name/Arity)` with v1's exact context. Source
+/// `existence_error(procedure, Name/Arity)`. Source
 /// provenance (SPANS.md Layer 3) comes from `m.error_site`, appended by
 /// `set_formal` — the caller sets that around the raise.
 pub fn existence_procedure(m: &mut Machine, name: &str, arity: u32) {
@@ -123,7 +122,7 @@ pub fn existence_procedure(m: &mut Machine, name: &str, arity: u32) {
 }
 
 /// `throw/1` of an arbitrary user term: the ball IS the term; the
-/// top-level message is its rendering (v1 runner behavior).
+/// top-level message is its rendering.
 pub fn throw_term(m: &mut Machine, ball_word: Word) {
     let ball_word = m.deref(ball_word);
     if tag_of(ball_word) == TAG_REF {
@@ -151,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn existence_message_matches_v1_bytes() {
+    fn existence_message_format() {
         let mut m = machine();
         existence_procedure(&mut m, "nosuch", 1);
         assert_eq!(
@@ -161,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluation_message_matches_v1_bytes() {
+    fn evaluation_message_format() {
         let mut m = machine();
         evaluation(
             &mut m,

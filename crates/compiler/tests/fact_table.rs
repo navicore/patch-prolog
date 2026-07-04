@@ -1,9 +1,9 @@
-//! Fact-table compilation (FACT_TABLE.md, Stages A–C): a predicate whose
+//! Fact-table compilation (Stages A–C): a predicate whose
 //! clauses are all bodyless facts with ground head args compiles to a `.rodata`
 //! table + a generic runtime lookup instead of one function per clause. These
 //! tests pin that the observable behavior is identical to the per-clause path.
 //! Value assertions use the readable text format; the `--limit`/exhausted
-//! check uses the bson envelope. (No JSON — docs/design/IO.md.)
+//! check uses the bson envelope. (No JSON.)
 
 mod harness;
 use harness::{Compiled, compile};

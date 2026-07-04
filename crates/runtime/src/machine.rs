@@ -13,8 +13,8 @@ use plg_shared::StringInterner;
 /// or final success).
 pub type ContFn = unsafe extern "C" fn(*mut Machine, u64) -> i32;
 
-/// Maximum predicate arity passed via argument registers (v1 had no
-/// practical limit; raise alongside a frame-passing scheme if ever hit).
+/// Maximum predicate arity passed via argument registers (raise
+/// alongside a frame-passing scheme if ever hit).
 pub const MAX_ARGS: usize = 16;
 
 /// Registry row emitted by codegen as `{ i32, i32, ptr }`, sorted by
@@ -108,9 +108,9 @@ impl Drop for MetacallDepthGuard {
 }
 
 /// Where `write/1`/`writeln/1`/`nl/0` send their bytes. The CLI/WASI shell
-/// streams to process stdout (the v1 contract); the Tier-2 reactor has no
+/// streams to process stdout; the Tier-2 reactor has no
 /// stdout in a V8 isolate, so it captures losslessly into a buffer that the
-/// result JSON carries back to the host (docs/design/done/WASM_TIER2_PLAN.md D4).
+/// result JSON carries back to the host.
 pub enum OutputSink {
     /// Stream to process stdout immediately (native CLI / WASI).
     Stdout,
@@ -119,7 +119,7 @@ pub enum OutputSink {
 }
 
 /// Catch frames participate in error unwinding (drive() in solve.rs)
-/// and stop cut truncation (v1 rule: catch is opaque to cut).
+/// and stop cut truncation (catch is opaque to cut).
 #[derive(Clone, Copy, PartialEq)]
 pub enum CpKind {
     Normal,
@@ -136,7 +136,7 @@ pub struct ChoicePoint {
 
 /// A runtime error in flight. The ball is a relocatable copy (it must
 /// survive heap rewinding on the way to a catch frame); the message is
-/// its v1-format rendering for top-level output (exit code 3).
+/// its rendered form for top-level output (exit code 3).
 pub struct RtError {
     pub ball: crate::copyterm::TermBuf,
     pub message: String,
@@ -174,7 +174,7 @@ pub struct Machine {
     /// `site_id` of the raise currently in flight (SPANS.md Layer 3).
     /// `set_formal` appends ` at file:line:col` from it. `NO_SITE` (the
     /// default, and the value for runtime-internal/query-side raises) means no
-    /// suffix — keeping those messages byte-identical to v1.
+    /// suffix — keeping those messages stable.
     ///
     /// INVARIANT: a raising compiled builtin must set this to its site only
     /// around its own work and restore it after — always via `ErrorSiteGuard`,
@@ -200,7 +200,7 @@ pub struct Machine {
     /// Wire-encoding capability table: pointers to the `EncoderDesc` statics
     /// codegen baked for the encodings this binary advertises (`io_format/1`,
     /// default `[text]`). `entry.rs` resolves `--format` against it; encoders
-    /// not listed were dead-stripped and won't resolve. (docs/design/IO.md)
+    /// not listed were dead-stripped and won't resolve.
     pub capabilities: Vec<*const crate::wire::EncoderDesc>,
 }
 
@@ -221,7 +221,7 @@ impl Machine {
             k_fn: no_continuation,
             k_env: 0,
             steps: 0,
-            step_limit: 10_000, // v1 default
+            step_limit: 10_000, // default
             metacall_depth: 0,
             // Conservative: well below the native C-stack capacity (~5-6k
             // walker frames overflow an 8MB stack). The trampoline keeps the
@@ -380,7 +380,7 @@ impl Machine {
     }
 
     /// Cut: truncate the CP stack to `height`, but stop at a catch
-    /// frame (v1 rule: catch/3 is opaque to cut — `!` inside catch's
+    /// frame (catch/3 is opaque to cut — `!` inside catch's
     /// goal cannot prune the catch frame or anything below it).
     pub fn cut_to(&mut self, height: usize) {
         while self.cps.len() > height {
@@ -401,8 +401,8 @@ impl Machine {
     }
 
     /// Bump the step counter; on exceeding the limit set the uncatchable
-    /// resource error (v1: step limit cannot be trapped by catch/3).
-    /// v1 wording, byte-for-byte (solver.rs step_limit_thrown).
+    /// resource error (step limit cannot be trapped by catch/3).
+    /// Wording is stable (solver.rs step_limit_thrown).
     pub fn step(&mut self) -> bool {
         self.steps += 1;
         if self.steps > self.step_limit {

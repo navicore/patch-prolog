@@ -5,7 +5,7 @@
 //! Output is the readable `text` format by default (so value/order/error
 //! assertions read as `X = mary`); `count`/`exhausted` checks — which text
 //! doesn't carry — go through `query_bson` (the binary envelope). No JSON: a
-//! host wanting it derives it from bson. See docs/design/IO.md.
+//! host wanting it derives it from bson.
 
 mod harness;
 use harness::{Compiled, compile};

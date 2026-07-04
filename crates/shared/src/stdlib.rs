@@ -1,9 +1,9 @@
 //! The embedded standard library source.
 //!
-//! Pure-Prolog list predicates (ported verbatim from v1) that the
+//! Pure-Prolog list predicates that the
 //! compiler parses BEFORE user files and compiles into every binary;
-//! user clauses for the same name/arity append to the stdlib predicate
-//! (v1 behavior). It lives in `plg-shared` because the stdlib *source*
+//! user clauses for the same name/arity append to the stdlib predicate.
+//! It lives in `plg-shared` because the stdlib *source*
 //! is part of the language definition — the compiler embeds it and the
 //! LSP offers its predicates in completion, but neither should own it.
 //!

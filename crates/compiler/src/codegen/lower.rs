@@ -4,8 +4,7 @@
 
 use plg_shared::{AtomId, Span, Spanned, StringInterner, Term};
 
-/// Arithmetic comparison op codes — ABI contract with
-/// `plg_rt_b_arith_cmp` (docs/design/RUNTIME_ABI.md).
+/// Arithmetic comparison op codes — ABI contract with `plg_rt_b_arith_cmp`.
 pub const ARITH_OPS: &[(&str, i32)] = &[
     ("<", 0),
     (">", 1),
@@ -25,10 +24,9 @@ pub const ORDER_OPS: &[(&str, i32)] = &[
     ("@>=", 5),
 ];
 
-/// Deterministic runtime builtins: `(name, arity, C symbol, raises)`. The
-/// exact v1 builtin vocabulary — names NOT here (and not control) fall
-/// through to existence_error, like v1. Mirrored by the runtime's
-/// query-side dispatch (control.rs); the diff corpus guards the pair.
+/// Deterministic runtime builtins: `(name, arity, C symbol, raises)`.
+/// Names NOT here (and not control) fall through to existence_error.
+/// Mirrored by the runtime's query-side dispatch (control.rs).
 ///
 /// `raises` (SPANS.md Layer 3): true for builtins that can raise an ISO
 /// error (type/instantiation/etc.). Those take a trailing `site_id` arg so
@@ -320,8 +318,8 @@ pub fn collect_goal_vars(g: &LGoal, out: &mut Vec<plg_shared::term::VarId>) {
 
 #[cfg(test)]
 mod vocab_invariant {
-    //! Codegen half of the `plg-shared::builtins` invariant
-    //! (docs/design/BUILTIN_VOCAB.md): the names this crate recognizes —
+    //! Codegen half of the `plg-shared::builtins` invariant:
+    //! the names this crate recognizes —
     //! `DET_BUILTINS` + `ARITH_OPS` + `ORDER_OPS` + the structural
     //! match-arms of `lower_goal`/`clause.rs` — must be EXACTLY the
     //! `BUILTINS` vocabulary. Adding a row to one side without the other

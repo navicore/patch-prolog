@@ -21,7 +21,7 @@ pub const TAG_FLT: u64 = 5; // payload = heap index of an f64-bits cell
 pub const TAG_BIG: u64 = 6; // payload = heap index of a raw i64 cell
 
 /// Largest magnitude representable as an immediate integer; values
-/// outside box to a TAG_BIG heap cell (full i64 range, v1 parity).
+/// outside box to a TAG_BIG heap cell (full i64 range).
 pub const INT_MAX: i64 = (1 << 60) - 1;
 pub const INT_MIN: i64 = -(1 << 60);
 

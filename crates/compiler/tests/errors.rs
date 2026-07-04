@@ -1,63 +1,12 @@
-//! Ported from patch-prolog v1 `crates/cli/tests/integration.rs`.
 //! Error surfaces: existence_error for undefined predicates, the
 //! dynamic-predicate silent-fail contract, the uncatchable step limit,
 //! query-time parse errors (exit 2), and compile-time (program) parse
-//! errors surfaced by `plgc build` (exit 3, surface-lexeme messages —
-//! v1 issue #20).
+//! errors surfaced by `plgc build` (exit 3, surface-lexeme messages).
 //!
-//! ADAPTATION NOTE (instruction #3): v1's query-parser produced phrased
-//! messages like "after query" and named the offending token; plgc's
-//! query parser phrases trailing junk as "unexpected input at column N".
-//! The BEHAVIORAL contract (trailing junk => exit-2 parse error) is
-//! identical, so the issue-#30 tests are ported as exit-2 + "Parse error"
-//! assertions rather than asserting v1's exact wording.
-//!
-//! =====================================================================
-//! SKIP LIST (v1 tests NOT ported — central record for all v1_*.rs files)
-//! =====================================================================
-//!
-//! A. In-process library-API unit tests with NO CLI/wire analog. These
-//!    drive `Parser`/`Solver`/`CompiledDatabase` directly and assert on
-//!    internal types; plgc exposes only the compiled-binary wire surface:
-//!      - test_parse_error_detection (Parser::parse_program is_err) —
-//!        COVERED behaviorally by program_parse_errors_show_surface_lexemes.
-//!      - test_depth_limit_custom (.with_max_depth(50) API)
-//!      - test_integer_overflow_detected (constructs i64::MAX query via API;
-//!        the wire path IS covered in v1_arith::arithmetic_error_terms)
-//!      - test_division_by_zero / test_unbound_variable_in_arithmetic (API
-//!        form; wire form covered in v1_arith)
-//!      - test_step_limit_in_try_solve_once / test_naf_step_limit_returns_error_not_success
-//!        / test_findall_step_limit_returns_error / test_findall_steps_accumulate_globally
-//!        / test_between_step_limit_in_findall / test_between_step_limit_in_negation
-//!        / test_catch_does_not_catch_step_limit (all .with_max_depth(N) API;
-//!        the default-limit wire path is covered by step_limit_is_uncatchable)
-//!      - test_float_overflow_literal_rejected (Parser API; plgc rejects the
-//!        same literal at build/query time but the unit test is API-shaped)
-//!
-//! B. v1 parser-SURFACE features plgc's ISO-subset frontend does NOT
-//!    implement — these are genuine surface divergences, reported for
-//!    triage (see final report), not ported as passing tests:
-//!      - Issue #19/#28 operator-as-atom & prefix +/\ :
-//!        test_op_atom_in_list, test_op_atom_in_parens_after_equals,
-//!        test_op_atom_not_operator_as_atom, test_op_atom_minus_alone_in_parens,
-//!        test_prefix_plus_on_atom_builds_compound, _folds_integer_literal,
-//!        _folds_float_literal, test_prefix_backslash_on_atom_builds_compound,
-//!        _on_integer_does_not_fold, test_backslash_as_atom_in_closing_context,
-//!        test_prefix_plus_minus_chain, test_op_atom_univ_roundtrip,
-//!        test_op_atom_pow_in_arg_position, test_op_atom_xor_in_arg_position,
-//!        test_op_atom_new_ops_in_list, test_op_atom_word_op_in_arg_position,
-//!        test_op_atom_plus_in_arg_position.
-//!        (`p(+).` etc. → "Parse error", `X is + 3` → "Parse error".)
-//!      - Issue #29 `:` and `^`-as-bare-op term tests:
-//!        test_op_colon_parses_as_term, test_op_colon_right_associative.
-//!        (`a:b:c` and `pkg:expr` → "Parse error".)
-//!    Ported variants that DO work on plgc (e.g. infix `**`, `^`, `<<`,
-//!    `xor`, `/\`, `\/`, `(<)` as atom) live in v1_arith / elsewhere.
-//!
-//! C. v1-runner CLI-surface details plgc phrases/handles differently:
-//!      - test_query_valid_with_query_op_still_works (`?- Goal.` form):
-//!        plgc's --query takes a bare goal and rejects the `?-` prefix.
-//!      - The issue-#30 named-token wording (see ADAPTATION NOTE above).
+//! Parse-error wording: plgc's query parser phrases trailing junk as
+//! "unexpected input at column N". The behavioral contract (trailing
+//! junk => exit-2 parse error) is what's asserted, via exit-2 + "Parse
+//! error" checks, not exact wording.
 
 mod harness;
 use harness::{Compiled, compile};
@@ -102,7 +51,7 @@ fn try_build(source: &str) -> (String, i32) {
 
 #[test]
 fn undefined_predicate_is_existence_error() {
-    // v1 test_no_matching_predicate + test_empty_knowledge_base.
+    // no matching predicate + empty knowledge base.
     let (out, code) = prog().query("shape(X)", &[]);
     assert!(out.contains("existence_error"), "{out}");
     assert_eq!(code, 3);
@@ -115,7 +64,7 @@ fn undefined_predicate_is_existence_error() {
 
 #[test]
 fn dynamic_predicate_silently_fails() {
-    // v1 test_dynamic_predicate_silently_fails_when_undefined.
+    // a dynamic predicate silently fails when undefined.
     let (out, code) = prog().query("field(X)", &[]);
     assert_eq!(out, "false.\n");
     assert_eq!(code, 0);
@@ -123,7 +72,7 @@ fn dynamic_predicate_silently_fails() {
 
 #[test]
 fn ground_index_miss_fails() {
-    // v1 test_index_ground_miss_returns_empty.
+    // index ground miss returns empty.
     let (out, code) = prog().query("color(purple)", &[]);
     assert_eq!(out, "false.\n");
     assert_eq!(code, 0);
@@ -131,7 +80,7 @@ fn ground_index_miss_fails() {
 
 #[test]
 fn undefined_in_rule_body_raises_when_reached() {
-    // v1 test_no_matching_predicate (through a rule body).
+    // no matching predicate (through a rule body).
     let (out, code) = prog().query("go(X)", &[]);
     assert!(
         out.contains("existence_error(procedure, /(missing, 1))"),
@@ -146,7 +95,7 @@ fn undefined_in_rule_body_raises_when_reached() {
 
 #[test]
 fn step_limit_is_uncatchable() {
-    // v1 test_depth_limit_prevents_stack_overflow + does_not_catch_step_limit +
+    // the step limit prevents stack overflow + is not caught +
     //    naf_step_limit_returns_error_not_success.
     let (out, code) = prog().query("loop", &[]);
     assert!(out.contains("resource_error(steps)"), "{out}");
@@ -166,7 +115,7 @@ fn step_limit_is_uncatchable() {
 
 #[test]
 fn query_parse_errors_exit_2() {
-    // v1 issue #30 family: trailing junk after a complete query is an error.
+    // trailing junk after a complete query is an error.
     // plgc phrases these as "Parse error: unexpected input at column N"
     // (see ADAPTATION NOTE); we assert the behavioral contract.
     for q in [
@@ -184,9 +133,9 @@ fn query_parse_errors_exit_2() {
 
 #[test]
 fn valid_queries_still_parse() {
-    // v1 test_query_valid_with_no_dot / with_dot. The optional trailing `.`
+    // optional trailing `.`
     // is accepted; the bare goal is accepted.
-    // NOTE: v1's `?- color(X).` form (test_query_valid_with_query_op) is NOT
+    // NOTE: the `?- color(X).` form is NOT
     // ported — plgc's `--query` takes a bare goal and rejects the `?-`
     // directive prefix (CLI-surface difference, see top-of-file skip list).
     for q in ["color(X)", "color(X)."] {
@@ -203,7 +152,7 @@ fn valid_queries_still_parse() {
 
 #[test]
 fn program_parse_errors_show_surface_lexemes() {
-    // v1 test_parse_err_shows_punctuation_lexeme / word_operator_lexeme /
+    // parse errors show the punctuation lexeme / word-operator lexeme /
     //    atom_lexeme / eof_is_phrased_in_words / expected_includes_surface_lexeme
     //    + test_parse_error_detection. Ported as `plgc build` failures.
 

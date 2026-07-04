@@ -1,14 +1,13 @@
 //! Operator-precedence parser for ISO Prolog programs and queries.
 //!
-//! Ported from patch-prolog's `parser.rs`, split into focused submodules:
+//! Split into focused submodules:
 //! - [`operators`]: the operator-name table DATA (token → atom name).
 //! - [`term`]: term / primary parsing and the precedence-climbing levels.
 //! - [`clause`]: clause parsing and `:- ...` directive handling.
 //! - [`query`]: program / query entry points and goal-list parsing.
 //!
-//! Changes from v1: `fnv::FnvHashMap` → `std::collections::HashMap`, serde
-//! derives dropped, and `Term`/`Clause`/`StringInterner`/`VarId`/`AtomId`
-//! sourced from `plg_shared`.
+//! `Term`/`Clause`/`StringInterner`/`VarId`/`AtomId` are sourced from
+//! `plg_shared`.
 
 mod cg;
 mod clause;
@@ -36,7 +35,7 @@ pub struct ProgramDirectives {
     /// Wire-encoding names the program declares via `:- io_format([...])`
     /// (e.g. `[text, bson]`). Default `[text]`. The codegen-baked capability
     /// table gates `--format`; encoders not listed are dead-stripped from the
-    /// binary. See docs/design/IO.md.
+    /// binary.
     pub io_format: Vec<String>,
 }
 

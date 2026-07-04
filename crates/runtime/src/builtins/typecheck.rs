@@ -1,13 +1,10 @@
 //! Type-checking builtins: `var/1`, `nonvar/1`, `atom/1`, `number/1`,
 //! `integer/1`, `float/1`, `compound/1`, `is_list/1`.
 //!
-//! Ported byte-for-byte from patch-prolog v1 (`builtins.rs` type-check
-//! arms). Each deref-tests a single tag. Notable v1 decisions, verified
-//! against the oracle:
+//! Each deref-tests a single tag. Notable decisions:
 //! - `integer/1` accepts both the immediate `TAG_INT` and the boxed
-//!   `TAG_BIG` (v1's `Term::Integer` covers the full i64 range).
-//! - `compound/1` is TRUE for lists: v1 matches `Compound { .. } |
-//!   List { .. }`, so a `TAG_LST` counts as compound
+//!   `TAG_BIG` (the full i64 range).
+//! - `compound/1` is TRUE for lists: a `TAG_LST` counts as compound
 //!   (`compound([1])` succeeds).
 //! - `is_list/1` walks the tail iteratively and is true only for a
 //!   proper, nil-terminated list (`is_list([a|b])` fails).
@@ -63,7 +60,7 @@ pub extern "C" fn plg_rt_b_float_1(m: *mut Machine, a: u64) -> i32 {
     (tag_of(m.deref(a)) == TAG_FLT) as i32
 }
 
-/// `compound/1`: a structure OR a list cell (v1 counts lists as compound).
+/// `compound/1`: a structure OR a list cell (lists count as compound).
 #[unsafe(no_mangle)]
 pub extern "C" fn plg_rt_b_compound_1(m: *mut Machine, a: u64) -> i32 {
     let m = mref(m);
@@ -173,7 +170,7 @@ mod tests {
         let a = make_atom(m.atoms.intern("a"));
         let mp = &mut *m as *mut Machine;
         assert_eq!(plg_rt_b_compound_1(mp, s), 1); // foo(1)
-        assert_eq!(plg_rt_b_compound_1(mp, l), 1); // [1] — v1: list IS compound
+        assert_eq!(plg_rt_b_compound_1(mp, l), 1); // [1] — list IS compound
         assert_eq!(plg_rt_b_compound_1(mp, a), 0);
         assert_eq!(plg_rt_b_compound_1(mp, make_int(1)), 0);
     }

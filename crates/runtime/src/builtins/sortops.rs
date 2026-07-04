@@ -1,13 +1,11 @@
 //! List-sorting builtins: `msort/2`, `sort/2`.
 //!
-//! Ported byte-for-byte from patch-prolog v1 (`solver.rs` MSort/Sort
-//! arms). Both sort by the standard order of terms (`compare_terms`):
+//! Both sort by the standard order of terms (`compare_terms`):
 //! - `msort/2` is a stable sort that KEEPS duplicates.
 //! - `sort/2` sorts and then removes adjacent `Equal` duplicates.
 //!
-//! The first argument must be a proper list; otherwise v1 raises a
-//! `type_error(list, Culprit)` (oracle-verified). The result is built on
-//! the heap.
+//! The first argument must be a proper list; otherwise a
+//! `type_error(list, Culprit)` is raised. The result is built on the heap.
 
 use crate::builtins::order::compare_terms;
 use crate::cell::*;

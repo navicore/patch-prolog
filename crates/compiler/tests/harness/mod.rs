@@ -49,7 +49,7 @@ impl Compiled {
     /// (`count`, `exhausted`, `error`). Solution *values* are opaque TermBuf
     /// cell words (atom ids) — a test has no atom table to resolve them, so
     /// value/order assertions stay in `text`; this is for `count`/`exhausted`
-    /// checks that the readable text format doesn't carry. (docs/design/IO.md.)
+    /// checks that the readable text format doesn't carry.
     #[allow(dead_code)] // each test crate compiles the harness alone
     pub fn query_bson(&self, goal: &str, extra: &[&str]) -> (BsonEnvelope, i32) {
         let mut all = vec!["--format", "bson"];

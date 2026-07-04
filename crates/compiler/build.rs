@@ -76,7 +76,7 @@ fn main() {
     // Rerun if the runtime library changes
     println!("cargo:rerun-if-changed={}", runtime_lib.display());
 
-    // Wasm Tier 1 (docs/design/done/WASM.md): when built `--features wasm`, also
+    // Wasm Tier 1: when built `--features wasm`, also
     // embed the `wasm32-wasip1` runtime archive, built out-of-band by
     // `just build-runtime-wasm`. Behind the feature so the default
     // `cargo install plgc` is byte-for-byte unchanged and needs no wasm

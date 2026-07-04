@@ -33,5 +33,7 @@ Three binaries share the engine:
   compile your first program.
 - **[Compiler Usage](compiler-usage.md)** — `plgc` commands, the query
   wire-contract, and exit codes.
-- **REPL Guide**, **Language Guide**, and the **Builtin & Stdlib
-  Reference** follow as those pages land.
+- **[REPL Guide](repl-guide.md)** — the interactive `plgr` loop.
+- **[Language Guide](language-guide.md)** and the **[Builtin & Stdlib
+  Reference](builtin-reference.md)** for the language and its library.
+- **[LSP & Editor Guide](lsp-guide.md)** for `plgl`.

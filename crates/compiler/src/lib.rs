@@ -51,10 +51,10 @@ pub enum OptLevel {
 }
 
 /// Compilation target. `Native` (the host) is the default; `Wasm` emits a
-/// standalone `wasm32-wasi` CLI module (Tier 1 — see docs/design/done/WASM.md);
+/// standalone `wasm32-wasi` CLI module (Tier 1);
 /// `Worker` emits a `wasm32-unknown-unknown` *reactor* module (Tier 2 —
 /// no `main`, exports a `plg_init` + the `plg_rt_*` buffer ABI a JS host
-/// drives, see docs/design/done/WASM_TIER2_PLAN.md). Both wasm targets require
+/// drives). Both wasm targets require
 /// plgc built `--features wasm`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Target {
@@ -69,7 +69,7 @@ pub enum Target {
 /// compatibility with existing `plgc::STDLIB_PL` users.
 pub use plg_shared::STDLIB_PL;
 
-/// Parse each source against a shared interner (v1 pattern: line/col
+/// Parse each source against a shared interner (line/col
 /// reports stay relative to the originating file).
 fn parse_sources(
     sources: &[&Path],

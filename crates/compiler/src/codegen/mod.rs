@@ -3,7 +3,7 @@
 //! Each predicate compiles to native functions in continuation-passing
 //! style over a uniform `i32 (ptr, i64)` C-ABI signature; all control
 //! transfers are `musttail` so Prolog recursion never grows the C
-//! stack. See docs/design/COMPILATION_MODEL.md.
+//! stack.
 
 mod atoms;
 mod body;
@@ -42,7 +42,7 @@ pub enum GoalTarget {
     Defined,
     /// Declared `:- dynamic` with no clauses: silent fail.
     DynamicFail,
-    /// Not defined anywhere: existence_error at call time (v1 contract).
+    /// Not defined anywhere: existence_error at call time.
     Undefined,
 }
 

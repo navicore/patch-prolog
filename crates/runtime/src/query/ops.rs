@@ -121,7 +121,7 @@ impl QueryParser {
     }
 
     /// 200: `**` xfx (no chaining), `^` and `:` xfy (right-assoc) —
-    /// mirrors the frontend's parse_200 (`:` per v1 issue #29).
+    /// mirrors the frontend's parse_200.
     fn parse_200(&mut self, m: &mut Machine) -> Result<Word, String> {
         let left = self.parse_primary(m)?;
         self.skip_ws();

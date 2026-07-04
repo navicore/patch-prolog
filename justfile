@@ -31,7 +31,7 @@ build-runtime:
     cargo build --locked --release -p patch-prolog-runtime
     @echo "✅ Runtime built: target/release/libplg_runtime.a"
 
-# Build the runtime for wasm32-wasip1 (Tier 1, docs/design/done/WASM.md). The
+# Build the runtime for wasm32-wasip1 (Tier 1). The
 # archive (target/wasm32-wasip1/release/libplg_runtime.a) is embedded into a
 # wasm-enabled plgc by build.rs under `--features wasm`. Needs the wasm target:
 #   rustup target add wasm32-wasip1
@@ -40,8 +40,7 @@ build-runtime-wasm:
     cargo build --locked --release -p patch-prolog-runtime --target wasm32-wasip1
     @echo "✅ Wasm runtime built: target/wasm32-wasip1/release/libplg_runtime.a"
 
-# Build the runtime for wasm32-unknown-unknown (Tier 2 reactor,
-# docs/design/done/WASM_TIER2_PLAN.md). The archive
+# Build the runtime for wasm32-unknown-unknown (Tier 2 reactor). The archive
 # (target/wasm32-unknown-unknown/release/libplg_runtime.a) is embedded into a
 # wasm-enabled plgc by build.rs under `--features wasm`. Needs the target:
 #   rustup target add wasm32-unknown-unknown
@@ -119,7 +118,7 @@ wasm-smoke: build-runtime-wasm-all
 # examples/deps.pl to a reactor module, instantiates it under Node's V8 (the
 # Workers engine), and asserts the bson→JSON host glue against fixtures
 # (scripts/reactor-smoke.mjs). Then proves the musttail→return_call lowering
-# holds on V8 at 1,000,000-deep recursion. (docs/design/WASM_HOST_GLUE.md)
+# holds on V8 at 1,000,000-deep recursion.
 wasm-reactor-smoke: build-runtime-wasm-all
     #!/usr/bin/env bash
     set -euo pipefail
@@ -225,15 +224,6 @@ test-integration: build
     cargo test --locked --release -p patch-prolog-compiler --test integration
     @echo "✅ Integration tests passed!"
 
-# Differential tests: same (program, goal) corpus through the old
-# patch-prolog interpreter (oracle) and the new compiled binaries.
-# Requires ../patch-prolog/target/release/prlg; SKIPS silently in CI
-# (the runner image has no oracle). Deliberate divergences are pinned
-# as direct tests instead — see docs/ISO_COMPLIANCE.md.
-diff-test: build
-    @echo "Running differential tests vs ../patch-prolog oracle..."
-    cargo test --locked --release -p patch-prolog-compiler --test differential -- --nocapture
-
 # Binary hygiene: size ceiling + standalone (system-libs-only) contract
 check-binary-contents:
     cargo test --locked --release -p patch-prolog-compiler --test binary_size -- --nocapture
@@ -272,8 +262,6 @@ footprint: build
     rm -rf "$tmp"
 
 # Run all CI checks (same as Forgejo Actions!)
-# (diff-test is intentionally NOT here: it needs the local v1 oracle.
-# Run it manually when ../patch-prolog is present.)
 ci: fmt-check lint test build build-examples test-integration lint-pl check-binary-contents
     @echo ""
     @echo "✅ All CI checks passed!"

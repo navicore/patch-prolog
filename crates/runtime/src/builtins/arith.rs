@@ -1,10 +1,8 @@
 //! Arithmetic expression evaluation (`is/2`, comparisons).
 //!
-//! Ported byte-for-byte from patch-prolog v1's `builtins.rs` (eval_arith
-//! plus the arith_* helpers). Semantics — floored `mod`, truncating `//`,
-//! float-yielding `/`, checked i64 overflow, NaN/Infinity rejection, and
-//! the exact zero-divisor labels — match v1 so error message text is
-//! identical (verified against the v1 oracle; see unit tests).
+//! Semantics — floored `mod`, truncating `//`, float-yielding `/`,
+//! checked i64 overflow, NaN/Infinity rejection, and the exact
+//! zero-divisor labels — are pinned by unit tests.
 //!
 //! NOTE on the immediate-integer range: cell `INT` is a 61-bit immediate
 //! but `eval` computes in full i64. A result that fits i64 yet overflows
@@ -15,14 +13,14 @@
 use crate::cell::*;
 use crate::machine::Machine;
 
-/// An evaluated arithmetic value: integer or float (mirrors v1 ArithVal).
+/// An evaluated arithmetic value: integer or float.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ArithValue {
     Int(i64),
     Float(f64),
 }
 
-// ---- error raising (structured balls; rendered text is v1-identical) ------
+// ---- error raising (structured balls; rendered text pinned by tests) ------
 
 fn overflow(m: &mut Machine, operation: &str) {
     let ctx = format!("Arithmetic error: integer overflow in {operation}");
@@ -34,10 +32,10 @@ fn zero_divisor(m: &mut Machine, label: &str) {
     crate::errors::evaluation(m, "zero_divisor", &ctx);
 }
 
-/// v1's `int_args_required`: the culprit term is the placeholder atom id 0,
-/// which in v1's interner resolves to "member". We reproduce v1's rendered
-/// string verbatim (the culprit is meaningless — a v1 quirk we mirror so
-/// output stays byte-identical). See report.
+/// The culprit term for a non-evaluable atom is the placeholder atom id 0,
+/// which resolves to "member". The rendered string is reproduced verbatim
+/// (the culprit is meaningless — a quirk we mirror so error text stays
+/// stable).
 fn int_args_required(m: &mut Machine, op: &str) {
     let culprit = make_atom(m.atoms.intern("member"));
     let ctx = format!("{op} requires integer arguments");
@@ -49,7 +47,7 @@ fn shift_undefined(m: &mut Machine, op: &str) {
     crate::errors::evaluation(m, "undefined", &ctx);
 }
 
-/// NaN/Infinity rejection after a float operation (v1 `check_float`).
+/// NaN/Infinity rejection after a float operation.
 fn check_float(m: &mut Machine, f: f64) -> Result<ArithValue, ()> {
     if f.is_nan() {
         crate::errors::evaluation(m, "undefined", "Arithmetic error: NaN result");
@@ -69,7 +67,7 @@ fn as_f64(v: ArithValue) -> f64 {
     }
 }
 
-// ---- value comparison (v1 arith_lt / arith_gt / arith_eq) ----------------
+// ---- value comparison (arith_lt / arith_gt / arith_eq) ----------------
 
 pub fn arith_lt(a: ArithValue, b: ArithValue) -> bool {
     use ArithValue::*;
@@ -111,7 +109,7 @@ fn predicate_indicator(m: &mut Machine, name: u32, arity: i64) -> Word {
 }
 
 /// Evaluate `expr` (a heap word) to an arithmetic value. On `Err(())`,
-/// `m.error` is already populated with v1-identical message text. The unit
+/// `m.error` is already populated with the message text. The unit
 /// error type is intentional: the rich error lives in `m.error` (the M3 ABI
 /// contract), so callers only need to know success vs failure.
 #[allow(clippy::result_unit_err)]
@@ -151,7 +149,7 @@ fn eval_struct(m: &mut Machine, w: Word) -> Result<ArithValue, ()> {
     let idx = payload(w) as usize;
     let (functor, arity) = unpack_functor(m.heap[idx]);
     let name = m.atoms.resolve(functor).to_string();
-    // Evaluate arguments first (left-to-right), matching v1's recursion.
+    // Evaluate arguments first (left-to-right).
     let a0 = m.heap[idx + 1];
     match (name.as_str(), arity) {
         ("+", 2) => {
@@ -256,7 +254,7 @@ fn bin(m: &mut Machine, idx: usize) -> Result<(ArithValue, ArithValue), ()> {
     Ok((a, b))
 }
 
-// ---- binary operations (v1 arith_*) --------------------------------------
+// ---- binary operations (arith_*) --------------------------------------
 
 fn add(m: &mut Machine, a: ArithValue, b: ArithValue) -> Result<ArithValue, ()> {
     use ArithValue::*;

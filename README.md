@@ -24,12 +24,10 @@ plgc build rules.pl -o my-linter      # ~676K standalone binary
 echo $?   # 0 = no solutions (clean), 1 = solutions found
 ```
 
-This project supersedes [patch-prolog](https://git.navicore.tech/navicore/patch-prolog),
-which shipped an excellent Prolog *engine* but never a compiler. The
-language semantics (ISO subset, v1's full builtin vocabulary, the
-embedded list stdlib, safety guarantees) carry over at byte-level wire
-parity, verified by a ported 200-assertion corpus and a differential
-harness against the v1 implementation. The execution model is built on
+The
+language semantics (ISO subset, the full builtin vocabulary, the
+embedded list stdlib, safety guarantees) are pinned by a 200-assertion
+integration corpus. The execution model is built on
 the architecture proven by
 [patch-seq](https://git.navicore.tech/navicore/patch-seq): LLVM IR text
 generation, clang linking, and a Rust runtime staticlib embedded in the
