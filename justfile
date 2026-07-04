@@ -114,16 +114,34 @@ wasm-smoke: build-runtime-wasm-all
 # queries byte-identically to native — modulo the reactor's always-present
 # "output" field (D4), which is stripped before the compare. Then proves the
 # musttail→return_call lowering holds on V8 at 1,000,000-deep recursion.
-# Tier 2 reactor smoke gate. TEMPORARILY DISABLED: the reactor now emits bson
-# (the worker must carry captured `write/1` output, which the text encoder
-# drops), but the host glue (reactor.mjs) still decodes JSON text, and the
-# bson→JSON host decode needs the engine's atom table exposed over the ABI
-# (bson term values are atom-id-keyed TermBuf). That work is the wasm track —
-# docs/design/IO.md. Until it lands, this gate is an explicit, named deferral,
-# not a silent skip. Re-enable by restoring the body below once the host glue
-# decodes bson.
-wasm-reactor-smoke:
-    @echo "⏭  wasm-reactor-smoke: PENDING (wasm track) — reactor emits bson; host bson→JSON glue + atom-table ABI not yet implemented. See docs/design/IO.md."
+# Tier 2 reactor smoke (run in the separate wasm workflow, not main `just ci`).
+# Needs: wasm32-unknown-unknown, llvm-tools-preview, and node on PATH. Compiles
+# examples/deps.pl to a reactor module, instantiates it under Node's V8 (the
+# Workers engine), and asserts the bson→JSON host glue against fixtures
+# (scripts/reactor-smoke.mjs). Then proves the musttail→return_call lowering
+# holds on V8 at 1,000,000-deep recursion. (docs/design/WASM_HOST_GLUE.md)
+wasm-reactor-smoke: build-runtime-wasm-all
+    #!/usr/bin/env bash
+    set -euo pipefail
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+    echo "Compiling examples/deps.pl → reactor..."
+    cargo run -q --features wasm -p patch-prolog-compiler --bin plgc -- \
+        build examples/deps.pl -o "$work/deps.worker.wasm" --target worker
+    # Fixture mode: the driver asserts the bson→JSON decode for known queries.
+    node scripts/reactor-smoke.mjs "$work/deps.worker.wasm"
+    # Constant-stack proof on V8 (the headline gate finding): 1,000,000-deep
+    # call/1 recursion returns in a V8 isolate via return_call. A high
+    # per-request step_limit (3rd arg) keeps the step ceiling from tripping.
+    printf 'count(0).\ncount(N) :- N > 0, N1 is N - 1, call(count(N1)).\n' > "$work/rec.pl"
+    cargo run -q --features wasm -p patch-prolog-compiler --bin plgc -- \
+        build "$work/rec.pl" -o "$work/rec.worker.wasm" --target worker
+    deep=$(node scripts/reactor-smoke.mjs "$work/rec.worker.wasm" "count(1000000)" 100000000)
+    if [ "$deep" = '{"count":1,"exhausted":true,"output":"","solutions":[{}]}' ]; then
+        echo "✅ constant stack: 1,000,000-deep call/1 in a V8 isolate (return_call)"
+    else
+        echo "❌ deep recursion unexpected: $deep"; exit 1
+    fi
 
 # Compile a .pl to a reactor module and serve it on local workerd (Tier 2,
 # WASM_TIER2_PLAN.md D2g). Needs: wasm32-unknown-unknown, llvm-tools-preview,
@@ -151,7 +169,7 @@ wasm-worker-serve prog: build-runtime-wasm-reactor
 # llvm-tools-preview, wasmtime, node) the base CI image may lack — so a missing
 # piece fails THIS gate without breaking the core build/test/lint.
 wasm-ci: wasm-lint wasm-smoke wasm-reactor-smoke
-    @echo "✅ wasm gates: Tier 1 wasi passed; Tier 2 reactor deferred (wasm track — bson host glue)"
+    @echo "✅ wasm gates passed (Tier 1 wasi + Tier 2 reactor)"
 
 # Clippy over the wasm-feature-gated compiler code (worker glue, reactor link,
 # embedded archives) — the default `just lint` doesn't enable the feature, so
