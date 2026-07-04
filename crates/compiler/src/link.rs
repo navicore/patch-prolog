@@ -395,6 +395,7 @@ const REACTOR_EXPORTS: &[&str] = &[
     "plg_rt_run_query",
     "plg_rt_alloc",
     "plg_rt_free",
+    "plg_rt_atom_name",
 ];
 
 /// Link an LLVM IR file into a `wasm32-unknown-unknown` *reactor* module

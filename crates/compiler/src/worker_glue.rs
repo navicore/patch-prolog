@@ -35,6 +35,7 @@ export const REACTOR_EXPORTS = [
   "plg_rt_run_query",
   "plg_rt_alloc",
   "plg_rt_free",
+  "plg_rt_atom_name",
   "memory",
 ];
 
@@ -46,6 +47,31 @@ export function assertExports(ex) {
   }
 }
 
+// The reactor emits a bson envelope; the engine has no JSON. This glue decodes
+// bson→JSON host-side (docs/design/WASM_HOST_GLUE.md): bson term values are
+// BinData TermBuf with atom-IDS, resolved via plg_rt_atom_name (which reads the
+// runtime interner — program AND query atoms). All conversion logic is host-side.
+
+// Atom-id → name cache, scoped per module instance (a WeakMap keyed on the
+// exports object, which is unique per wasm instance). Atoms are immutable and
+// only added during solve, so a per-instance cache is valid across queries and
+// grows monotonically — and different programs (different atom tables) can't
+// conflate, which a module-level cache would.
+const _atomCaches = new WeakMap();
+function resolveAtom(ex, id) {
+  let cache = _atomCaches.get(ex);
+  if (!cache) { cache = new Map(); _atomCaches.set(ex, cache); }
+  let name = cache.get(id);
+  if (name !== undefined) return name;
+  const packed = ex.plg_rt_atom_name(id);
+  if (packed === 0n) return undefined; // out of range (shouldn't happen)
+  const ptr = Number(packed >> 32n);
+  const len = Number(packed & 0xffffffffn);
+  name = new TextDecoder().decode(new Uint8Array(ex.memory.buffer, ptr, len));
+  cache.set(id, name);
+  return name;
+}
+
 // limit/stepLimit/depthLimit map to the per-request ABI knobs; 0 = the module
 // default (WASM_TIER2_PLAN.md A3). stepLimit is i64, hence the BigInt.
 export function runQuery(ex, query, { limit = 0, stepLimit = 0n, depthLimit = 0 } = {}) {
@@ -54,19 +80,127 @@ export function runQuery(ex, query, { limit = 0, stepLimit = 0n, depthLimit = 0 
   new Uint8Array(ex.memory.buffer, qptr, bytes.length).set(bytes);
   const packed = ex.plg_rt_run_query(qptr, bytes.length, limit, BigInt(stepLimit), depthLimit);
   ex.plg_rt_free(qptr, bytes.length);
-  // Packed (len << 32) | ptr — the i64 return is a BigInt. Read the result view
-  // AFTER the call so a memory growth during solving can't leave it detached.
+  // Packed (len << 32) | ptr — the i64 return is a BigInt. Copy the result
+  // bytes BEFORE freeing so parsing is independent of wasm memory growth.
   const len = Number(packed >> 32n);
   const ptr = Number(packed & 0xffffffffn);
-  // FIXME (wasm track): the reactor now emits a BSON envelope, not JSON text.
-  // This `TextDecoder` decode therefore yields garbage until the host glue
-  // decodes bson→JSON — which needs the engine's atom table exposed over the
-  // ABI (bson term values are atom-id-keyed TermBuf, not names). See
-  // docs/design/IO.md and the gated `wasm-reactor-smoke` recipe. The decode +
-  // atom lookup + term render + JSON encode all belong here (host-side).
-  const json = new TextDecoder().decode(new Uint8Array(ex.memory.buffer, ptr, len));
+  const bson = new Uint8Array(ex.memory.buffer, ptr, len).slice();
   ex.plg_rt_free(ptr, len);
-  return json;
+  return envelopeToJson(bson, ex);
+}
+
+// ── bson document decode (the subset the reactor emits) ───────────────────
+function rdI32(b, o) { return new DataView(b.buffer, b.byteOffset, b.byteLength).getInt32(o, true); }
+function rdCStr(b, o) { let e = o; while (b[e] !== 0) e++; return [new TextDecoder().decode(b.subarray(o, e)), e + 1]; }
+function rdStr(b, o) {
+  const n = rdI32(b, o); const s = new TextDecoder().decode(b.subarray(o + 4, o + 4 + n - 1));
+  return [s, o + 4 + n];
+}
+// parseDoc returns [obj, endOff]; endOff = start + total (the doc is self-delimiting).
+function parseDoc(b, o) {
+  const start = o, total = rdI32(b, o); o += 4;
+  const obj = {};
+  while (b[o] !== 0) {
+    const ty = b[o++]; let k; [k, o] = rdCStr(b, o);
+    let v; [v, o] = rdValue(b, o, ty); obj[k] = v;
+  }
+  return [obj, start + total];
+}
+function parseArr(b, o) {
+  const start = o, total = rdI32(b, o); o += 4;
+  const tmp = {};
+  while (b[o] !== 0) {
+    const ty = b[o++]; let k; [k, o] = rdCStr(b, o);
+    let v; [v, o] = rdValue(b, o, ty); tmp[k] = v;
+  }
+  const arr = []; for (let i = 0; String(i) in tmp; i++) arr.push(tmp[String(i)]);
+  return [arr, start + total];
+}
+function rdValue(b, o, ty) {
+  switch (ty) {
+    case 0x02: return rdStr(b, o);                       // string
+    case 0x03: return parseDoc(b, o);                    // document
+    case 0x04: return parseArr(b, o);                    // array
+    case 0x05: { const n = rdI32(b, o); return [b.subarray(o + 5, o + 5 + n), o + 5 + n]; } // binary
+    case 0x08: return [b[o] !== 0, o + 1];               // bool
+    case 0x10: return [rdI32(b, o), o + 4];              // int32
+    default: throw new Error(`bson: unsupported element type ${ty}`);
+  }
+}
+
+// ── envelope assembly + term rendering ────────────────────────────────────
+function envelopeToJson(bson, ex) {
+  const [doc] = parseDoc(bson, 0);
+  if ("error" in doc) return JSON.stringify({ error: doc.error });
+  const env = { count: doc.count, exhausted: doc.exhausted };
+  if ("output" in doc) env.output = doc.output;
+  env.solutions = doc.solutions.map((sol) => {
+    const o = {};
+    for (const k in sol) o[k] = decodeTermBuf(sol[k], ex);
+    return o;
+  });
+  return JSON.stringify(env);
+}
+
+// TermBuf BinData payload: [ver:u8=1][cell_count:u32 LE][root:u64 LE][cells…].
+// Cell ABI mirrors plg-shared::cell: tag = word & 7, payload = word >> 3.
+const TAG_ATOM = 1n, TAG_INT = 2n, TAG_STR = 3n, TAG_LST = 4n, TAG_FLT = 5n, TAG_BIG = 6n;
+function decodeTermBuf(b, ex) {
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const cellCount = dv.getUint32(1, true);
+  const root = dv.getBigUint64(5, true);
+  const cells = new Array(cellCount);
+  for (let i = 0; i < cellCount; i++) cells[i] = dv.getBigUint64(13 + i * 8, true);
+  return renderWord(root, cells, ex, new Set());
+}
+function bitsToFloat(bits) {
+  const buf = new ArrayBuffer(8); new DataView(buf).setBigUint64(0, bits, true);
+  return new DataView(buf).getFloat64(0, true);
+}
+function asI64(u) { return u >= (1n << 63n) ? u - (1n << 64n) : u; }
+function isNilName(name) { return name === "[]"; }
+
+// Render a cell word as a native JS value (→ JSON): atom→string (nil→[]),
+// int/float/big→number, compound→{functor,args}, proper list→array, improper
+// list→{head,tail}, unbound/cycle→"_". `visiting` holds STR/LST buffer indices
+// on the render stack so shared subterms render fully but cycles cut to "_".
+function renderWord(w, cells, ex, visiting) {
+  const tag = w & 7n, payload = w >> 3n;
+  if (tag === TAG_ATOM) {
+    const name = resolveAtom(ex, Number(payload));
+    return isNilName(name) ? [] : name;
+  }
+  if (tag === TAG_INT) return Number(asI64(w) >> 3n);
+  if (tag === TAG_FLT) return bitsToFloat(cells[Number(payload)]);
+  if (tag === TAG_BIG) return Number(asI64(cells[Number(payload)]));
+  if (tag === TAG_STR) {
+    const idx = Number(payload);
+    if (visiting.has(idx)) return "_";
+    visiting.add(idx);
+    const header = cells[idx];
+    const functor = resolveAtom(ex, Number(header >> 32n));
+    const arity = Number(header & 0xffffffffn);
+    const args = [];
+    for (let k = 0; k < arity; k++) args.push(renderWord(cells[idx + 1 + k], cells, ex, visiting));
+    visiting.delete(idx);
+    return { functor, args };
+  }
+  if (tag === TAG_LST) {
+    const elems = [], added = [];
+    let cur = w, cut = false;
+    while ((cur & 7n) === TAG_LST) {
+      const ci = Number(cur >> 3n);
+      if (visiting.has(ci)) { cut = true; break; }
+      visiting.add(ci); added.push(ci);
+      elems.push(renderWord(cells[ci], cells, ex, visiting)); // head
+      cur = cells[ci + 1];                                                              // tail
+    }
+    for (const ci of added) visiting.delete(ci);
+    if (cut) return { head: elems, tail: "_" };
+    if ((cur & 7n) === TAG_ATOM && isNilName(resolveAtom(ex, Number(cur >> 3n)))) return elems;
+    return { head: elems, tail: renderWord(cur, cells, ex, visiting) };
+  }
+  return "_"; // REF (unbound) or unknown
 }
 "#;
 
