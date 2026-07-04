@@ -8,36 +8,41 @@ use harness::compile;
 use std::process::Command;
 use std::sync::OnceLock;
 
-/// Default binary (no `io_format` directive) — advertises `[text]` only.
+/// Default binary (no `io_format` directive) — advertises the default
+/// `[text, bson]` (bson is a core format, available without a directive).
 fn default_prog() -> &'static harness::Compiled {
     static C: OnceLock<harness::Compiled> = OnceLock::new();
     C.get_or_init(|| compile("parent(tom, bob).\nparent(tom, liz).\n"))
 }
 
-/// Declares `[text, bson]`.
+/// Declares `[text, bson]` explicitly (same as the default).
 fn both() -> &'static harness::Compiled {
     static C: OnceLock<harness::Compiled> = OnceLock::new();
     C.get_or_init(|| compile(":- io_format([text, bson]).\nparent(tom, bob).\nparent(tom, liz).\n"))
 }
 
-/// Declares `[bson]` only.
+/// Declares `[bson]` only — restriction forces bson, sheds text.
 fn bson_only() -> &'static harness::Compiled {
     static C: OnceLock<harness::Compiled> = OnceLock::new();
     C.get_or_init(|| compile(":- io_format([bson]).\nf(a).\n"))
 }
 
-#[test]
-fn default_binary_answers_text() {
-    let (out, code) = default_prog().query("parent(tom, X)", &[]);
-    assert_eq!(out, "X = bob\nX = liz\n");
-    assert_eq!(code, 1);
+/// Declares `[text]` only — restriction forces text, sheds bson.
+fn text_only() -> &'static harness::Compiled {
+    static C: OnceLock<harness::Compiled> = OnceLock::new();
+    C.get_or_init(|| compile(":- io_format([text]).\nf(a).\n"))
 }
 
 #[test]
-fn default_binary_rejects_bson() {
-    let (out, code) = default_prog().query("parent(tom, X)", &["--format", "bson"]);
-    assert_eq!(code, 2, "undeclared format → exit 2");
-    assert!(out.is_empty(), "usage error emits nothing on stdout");
+fn default_binary_serves_text_and_bson() {
+    // bson is a core format: a freshly-built binary speaks it without a
+    // directive. text stays the default OUTPUT (human-readable).
+    let (out, code) = default_prog().query("parent(tom, X)", &[]);
+    assert_eq!(out, "X = bob\nX = liz\n");
+    assert_eq!(code, 1);
+    let (env, code) = default_prog().query_bson("parent(tom, X)", &[]);
+    assert_eq!(code, 1);
+    assert_eq!(env.count, Some(2));
 }
 
 #[test]
@@ -67,12 +72,21 @@ fn bson_limit_is_honored() {
 }
 
 #[test]
-fn bson_only_rejects_text() {
+fn bson_only_serves_bson_and_rejects_text() {
     let (_, code) = bson_only().query("f(X)", &["--format", "text"]);
     assert_eq!(code, 2, "text on a [bson]-only binary ⇒ exit 2");
     let (env, code) = bson_only().query_bson("f(X)", &[]);
     assert_eq!(code, 1);
     assert_eq!(env.count, Some(1));
+}
+
+#[test]
+fn text_only_rejects_bson() {
+    // A program can RESTRICT to text-only via the directive; bson is then
+    // undeclared and rejected (and dead-stripped — see below).
+    let (out, code) = text_only().query("f(X)", &["--format", "bson"]);
+    assert_eq!(code, 2, "bson on a text-only binary ⇒ exit 2");
+    assert!(out.is_empty());
 }
 
 #[test]
@@ -133,11 +147,21 @@ fn bson_input_limit_honored() {
 }
 
 #[test]
-fn default_binary_rejects_bson_input() {
+fn default_accepts_bson_input() {
+    // bson input works out of the box (default advertises bson).
     let req = bson_request("parent(tom, X)", None);
-    let (_out, code) =
+    let (out, code) =
         default_prog().run_with_stdin(&["--input-format", "bson", "--format", "text"], &req);
-    assert_eq!(code, 2, "bson input on a [text]-only binary ⇒ exit 2");
+    assert_eq!(code, 1);
+    assert_eq!(out, b"X = bob\nX = liz\n");
+}
+
+#[test]
+fn text_only_rejects_bson_input() {
+    let req = bson_request("f(a)", None);
+    let (_out, code) =
+        text_only().run_with_stdin(&["--input-format", "bson", "--format", "text"], &req);
+    assert_eq!(code, 2, "bson input on a text-only binary ⇒ exit 2");
 }
 
 #[test]
@@ -147,29 +171,32 @@ fn argv_query_still_works_in_both_binary() {
     assert_eq!(out, "X = bob\nX = liz\n");
 }
 
-/// Dead-stripping: a binary advertising only text must not link the bson
-/// encoder descriptor; a bson-only binary must not link text. (IO.md — a
-/// `[text]`-only binary pays zero bson cost, and neither links JSON.)
+/// Dead-stripping: a default binary links BOTH core encoders (bson is core,
+/// not opt-in); a RESTRICTED binary sheds what it doesn't advertise. No JSON
+/// encoder exists anywhere.
 #[test]
-fn undeclared_encoders_are_dead_stripped() {
+fn dead_stripping_follows_the_directive() {
     let has = |bin: &std::path::Path, sym: &str| -> bool {
         let o = Command::new("nm").arg(bin).output().unwrap();
         String::from_utf8_lossy(&o.stdout).contains(sym)
     };
+    // Default: both linked (bson is available without a directive).
     assert!(has(&default_prog().bin, "PLG_ENC_TEXT"));
+    assert!(has(&default_prog().bin, "PLG_ENC_BSON"));
+    // Restrict to text-only ⇒ bson dead-stripped.
+    assert!(has(&text_only().bin, "PLG_ENC_TEXT"));
     assert!(
-        !has(&default_prog().bin, "PLG_ENC_BSON"),
-        "bson dead-stripped from a text-only binary"
+        !has(&text_only().bin, "PLG_ENC_BSON"),
+        "bson stripped from a text-only binary"
     );
-    assert!(
-        !has(&default_prog().bin, "PLG_ENC_JSON"),
-        "no JSON encoder exists anywhere"
-    );
+    // Restrict to bson-only ⇒ text dead-stripped.
     assert!(has(&bson_only().bin, "PLG_ENC_BSON"));
     assert!(
         !has(&bson_only().bin, "PLG_ENC_TEXT"),
-        "text dead-stripped from a bson-only binary"
+        "text stripped from a bson-only binary"
     );
+    // No JSON encoder exists anywhere.
+    assert!(!has(&default_prog().bin, "PLG_ENC_JSON"));
 }
 
 /// bson error path: a runtime error under `--format bson` emits a valid bson

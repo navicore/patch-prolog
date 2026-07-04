@@ -86,7 +86,8 @@ contract).
 
 `@plg_caps` is the wire-encoding capability table (docs/design/IO.md): one
 pointer per encoding the program declared via `:- io_format([...])`
-(default `[text]`), each pointing at a runtime `EncoderDesc` static
+(default `[text, bson]` — both core formats available out of the box; the
+directive is opt-out, to restrict), each pointing at a runtime `EncoderDesc` static
 (`@PLG_ENC_TEXT` / `@PLG_ENC_BSON`). `plg_rt_main` resolves `--format` by
 scanning it; encoders NOT listed are unreferenced, so link-time `--gc-sections`
 strips their code (a `[text]`-only binary links no bson). The engine speaks

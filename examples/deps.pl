@@ -1,4 +1,6 @@
 % A build/package dependency graph.
+%:- io_format([text, bson]).
+
 depends_on(app, auth).
 depends_on(app, ui).
 depends_on(auth, crypto).

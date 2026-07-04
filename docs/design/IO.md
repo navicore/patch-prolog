@@ -3,7 +3,8 @@
 Status: **implemented as `text` + `bson`, no JSON** (issue #38). The engine
 speaks two wire encodings — `text` (readable, default) and `bson` (binary,
 TermBuf-in-BinData) — gated by a codegen-baked capability table
-(`:- io_format([...])`, default `[text]`) with dead-stripping. JSON is **not**
+(`:- io_format([...])`, default `[text, bson]` — both core formats available
+out of the box; the directive is opt-out, to restrict) with dead-stripping. JSON is **not**
 an engine format; a host wanting it derives it from bson at the host boundary
 (the WASM reactor emits bson; its host glue decodes bson→JSON). The body below
 is the original design record — it predates the JSON-removal decision and still
