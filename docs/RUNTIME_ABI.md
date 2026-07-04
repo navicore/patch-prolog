@@ -84,7 +84,7 @@ The registry is sorted by (functor, arity) for binary search; `:- dynamic`
 predicates with no clauses point at `@plg_rt_pred_fail` (silent-fail
 contract).
 
-`@plg_caps` is the wire-encoding capability table (docs/design/IO.md): one
+`@plg_caps` is the wire-encoding capability table: one
 pointer per encoding the program declared via `:- io_format([...])`
 (default `[text, bson]` — both core formats available out of the box; the
 directive is opt-out, to restrict), each pointing at a runtime `EncoderDesc` static

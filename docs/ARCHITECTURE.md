@@ -124,7 +124,7 @@ derives it from bson at the host boundary — the engine never serializes JSON.
   the envelope to solutions (no `count`/`exhausted`).
 - bson: a self-delimiting bson document `{count, exhausted, solutions[], output?}`;
   term values are `BinData(0x00)` carrying a lossless `TermBuf` (cyclic terms
-  round-trip; text cuts them). See [docs/design/IO.md](design/IO.md).
+  round-trip; text cuts them).
 
 ## Build system
 
