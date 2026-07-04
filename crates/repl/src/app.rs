@@ -7,6 +7,7 @@
 use crate::completion;
 use crate::engine::{self, Compiled};
 use crate::input::{Editor, Outcome};
+use crate::persist;
 use crate::run::{self, Fetch};
 use crate::session::{Input, MetaCmd, Session, classify};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -61,16 +62,49 @@ pub struct App {
     /// Shared command-history store (vim-line): ring + dedup + draft stash.
     /// Drives `k`/`j` and arrow recall; persisted across sessions.
     store: Store,
+    /// The directory this REPL session is keyed to (for per-directory
+    /// program persistence — see `persist.rs`). Captured once at startup.
+    cwd: PathBuf,
     /// `Some` while paging a query's solutions with `;`.
     paging: Option<Paging>,
 }
 
 impl App {
+    #[allow(clippy::field_reassign_with_default)] // Default + post-init, like load_history below
     pub fn new() -> Self {
         let mut app = App::default();
+        app.cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         app.load_history();
         app.log("plgr — patch-prolog REPL.  :help for commands, :quit to exit.");
+        app.restore_session();
         app
+    }
+
+    /// Restore this directory's persisted session, if any. Loaded clauses
+    /// recompile so the first query works immediately; a `% cwd:` metadata
+    /// line (if present) is stripped by `persist::load`.
+    fn restore_session(&mut self) {
+        let Some(src) = persist::load(&self.cwd) else {
+            return;
+        };
+        if src.trim().is_empty() {
+            return;
+        }
+        match self.session.load_source(&src) {
+            Ok(n) if n > 0 => {
+                self.recompile();
+                self.log(format!(
+                    "  restored {n} clause(s) from this directory's session."
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    /// Write the current session source to this directory's persisted file
+    /// (best effort). An empty session deletes the file so a `:reset` sticks.
+    pub fn save_session(&self) {
+        persist::save(&self.cwd, &self.session.source());
     }
 
     fn log(&mut self, msg: impl Into<String>) {
@@ -442,6 +476,7 @@ impl App {
                 }
             }
             MetaCmd::Reset => {
+                persist::remove(&self.cwd);
                 self.session.reset();
                 self.compiled = None;
                 self.log("  session cleared");
@@ -510,8 +545,9 @@ const HELP: &str = "\
     :list                     show the session buffer
     :edit                     edit the whole session in $EDITOR, recompile
     :save FILE                write the session buffer to FILE
-    :reset                    clear the session
+    :reset                    clear the session (and its saved state for this dir)
     :help / :quit             this help / exit
+  the session is saved per-directory and restored on restart;
   multi-line clauses continue until a line ends with `.`";
 
 #[cfg(test)]
