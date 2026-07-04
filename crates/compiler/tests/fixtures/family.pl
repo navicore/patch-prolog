@@ -1,4 +1,5 @@
 % Classic family relationships example.
+:- io_format([text, bson]).
 parent(tom, mary).
 parent(tom, james).
 parent(tom, ann).

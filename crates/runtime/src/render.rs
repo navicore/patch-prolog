@@ -1,10 +1,7 @@
-//! Solution rendering: the v1 wire contract, byte-compatible.
-//!
-//! JSON is hand-rolled (no serde in the runtime — binary size) but must
-//! match serde_json's output for the value shapes v1 produced: object
-//! keys in sorted order (serde_json's default BTreeMap), the same
-//! string escaping, and `{"functor":...,"args":[...]}` sorting to
-//! `{"args":...,"functor":...}` exactly as v1 emitted it.
+//! Solution rendering: the readable text form (`term_to_string`) plus the
+//! raw term word the bson encoder walks. (No JSON rendering — the engine
+//! speaks text + bson; JSON, if a host wants it, is derived from bson at the
+//! host boundary. docs/design/IO.md.)
 
 use crate::cell::*;
 use crate::machine::Machine;
@@ -14,16 +11,15 @@ use plg_shared::atom::ATOM_NIL;
 /// rendered immediately (terms are undone by backtracking afterwards).
 pub struct RenderedSolution {
     /// per query variable, `_` excluded. The bson encoder walks `word` via
-    /// `copyterm::copy_to_buf`; the json/text encoders use the strings.
+    /// `copyterm::copy_to_buf`; the text encoder uses the `text` string.
     pub bindings: Vec<Binding>,
 }
 
 /// One query-variable binding, materialized at solution time. `word` is the
 /// already-dereferenced value term (zero extra computation over producing the
-/// strings); the bson encoder walks it via `copyterm::copy_to_buf`.
+/// text); the bson encoder walks it via `copyterm::copy_to_buf`.
 pub struct Binding {
     pub name: String,
-    pub json: String,
     pub text: String,
     pub word: Word,
 }
@@ -39,32 +35,12 @@ pub fn capture_solution(m: &Machine) -> RenderedSolution {
             let w = m.deref(make_ref(*idx));
             Binding {
                 name: name.clone(),
-                json: term_to_json(m, w),
                 text: term_to_string(m, w),
                 word: w,
             }
         })
         .collect();
     RenderedSolution { bindings }
-}
-
-/// serde_json-compatible string escaping.
-pub fn json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{08}' => out.push_str("\\b"),
-            '\u{0c}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 /// Float formatting compatible with v1: text used Rust `{}`; JSON used
@@ -75,68 +51,6 @@ fn fmt_float(f: f64) -> String {
         format!("{f:.1}")
     } else {
         format!("{f}")
-    }
-}
-
-pub fn term_to_json(m: &Machine, w: Word) -> String {
-    term_to_json_v(m, w, &mut Vec::new())
-}
-
-/// `visiting` holds the heap indices of STR/LST cells currently being
-/// expanded: re-encountering one means the term is cyclic (legal
-/// without occurs check), and the cycle is cut by rendering a variable
-/// — exactly v1's cycle-safe `apply()` behavior (`X = f(X)` renders as
-/// `f(_N)`).
-fn term_to_json_v(m: &Machine, w: Word, visiting: &mut Vec<usize>) -> String {
-    let w = m.deref(w);
-    match tag_of(w) {
-        TAG_ATOM => format!("\"{}\"", json_escape(m.atoms.resolve(atom_id(w)))),
-        TAG_INT => int_value(w).to_string(),
-        TAG_BIG => (m.heap[payload(w) as usize] as i64).to_string(),
-        TAG_FLT => fmt_float(f64::from_bits(m.heap[payload(w) as usize])),
-        TAG_REF => format!("\"_{}\"", payload(w)),
-        TAG_STR => {
-            let idx = payload(w) as usize;
-            if visiting.contains(&idx) {
-                return format!("\"_{idx}\""); // cycle cut (v1 behavior)
-            }
-            visiting.push(idx);
-            let (f, n) = unpack_functor(m.heap[idx]);
-            let args: Vec<String> = (0..n as usize)
-                .map(|i| term_to_json_v(m, m.heap[idx + 1 + i], visiting))
-                .collect();
-            visiting.pop();
-            // serde_json sorted keys: "args" < "functor"
-            format!(
-                "{{\"args\":[{}],\"functor\":\"{}\"}}",
-                args.join(","),
-                json_escape(m.atoms.resolve(f))
-            )
-        }
-        TAG_LST => {
-            let idx = payload(w) as usize;
-            if visiting.contains(&idx) {
-                return format!("\"_{idx}\"");
-            }
-            visiting.push(idx);
-            let (elements, tail) = collect_list_v(m, w, visiting);
-            let items: Vec<String> = elements
-                .iter()
-                .map(|e| term_to_json_v(m, *e, visiting))
-                .collect();
-            let out = match tail {
-                None => format!("[{}]", items.join(",")),
-                // serde_json sorted keys: "list" < "tail"
-                Some(t) => format!(
-                    "{{\"list\":[{}],\"tail\":{}}}",
-                    items.join(","),
-                    term_to_json_v(m, t, visiting)
-                ),
-            };
-            visiting.pop();
-            out
-        }
-        _ => unreachable!("bad tag"),
     }
 }
 
@@ -378,22 +292,15 @@ mod tests {
     }
 
     #[test]
-    fn json_escape_matches_serde() {
-        assert_eq!(json_escape("a\"b\\c\nd"), "a\\\"b\\\\c\\nd");
-        assert_eq!(json_escape("\u{01}"), "\\u0001");
-    }
-
-    #[test]
     fn atoms_ints_render() {
         let m = machine();
         let foo = m.atoms.lookup("foo").unwrap();
-        assert_eq!(term_to_json(&m, make_atom(foo)), "\"foo\"");
-        assert_eq!(term_to_json(&m, make_int(-7)), "-7");
+        assert_eq!(term_to_string(&m, make_atom(foo)), "foo");
         assert_eq!(term_to_string(&m, make_int(-7)), "-7");
     }
 
     #[test]
-    fn compound_renders_sorted_keys() {
+    fn compound_renders_readable() {
         let mut m = machine();
         let foo = m.atoms.lookup("foo").unwrap();
         let bar = m.atoms.lookup("bar").unwrap();
@@ -402,10 +309,6 @@ mod tests {
         m.heap.push(make_atom(bar));
         m.heap.push(make_int(1));
         let w = make(TAG_STR, idx as u64);
-        assert_eq!(
-            term_to_json(&m, w),
-            "{\"args\":[\"bar\",1],\"functor\":\"foo\"}"
-        );
         assert_eq!(term_to_string(&m, w), "foo(bar, 1)");
     }
 
@@ -421,7 +324,6 @@ mod tests {
         };
         let two = push_flt(&mut m, 2.0);
         assert_eq!(term_to_string(&m, two), "2.0");
-        assert_eq!(term_to_json(&m, two), "2.0");
         // format_term (error-message byte contract) keeps the ".0" too, so a
         // float culprit in an error term doesn't read back as an integer.
         let mut em = String::new();
@@ -482,7 +384,6 @@ mod tests {
         m.heap.push(make_int(1));
         m.heap.push(l2);
         let l1 = make(TAG_LST, i1 as u64);
-        assert_eq!(term_to_json(&m, l1), "[1,2]");
         assert_eq!(term_to_string(&m, l1), "[1, 2]");
 
         let v = m.new_var();
@@ -490,8 +391,6 @@ mod tests {
         m.heap.push(make_int(1));
         m.heap.push(v);
         let lp = make(TAG_LST, ip as u64);
-        let json = term_to_json(&m, lp);
-        assert!(json.starts_with("{\"list\":[1],\"tail\":\"_"), "{json}");
         assert!(term_to_string(&m, lp).starts_with("[1|_"));
     }
 }

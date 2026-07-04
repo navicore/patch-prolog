@@ -33,8 +33,8 @@ pub struct ProgramDirectives {
     /// A goal referencing a predicate in this set fails silently when no
     /// clauses match, instead of throwing `existence_error`.
     pub dynamic: Vec<(AtomId, usize)>,
-    /// Wire-encoding names the program declares via `:- io_format([...]).`
-    /// (e.g. `[json, bson]`). Default `[json]`. The codegen-baked capability
+    /// Wire-encoding names the program declares via `:- io_format([...])`
+    /// (e.g. `[text, bson]`). Default `[text]`. The codegen-baked capability
     /// table gates `--format`; encoders not listed are dead-stripped from the
     /// binary. See docs/design/IO.md.
     pub io_format: Vec<String>,

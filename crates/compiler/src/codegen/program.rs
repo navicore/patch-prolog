@@ -18,7 +18,7 @@ declare void @plg_rt_set_machine(ptr)
 ; capability table takes their addresses in a constant initializer, so each
 ; must be declared here. Only those a binary's `@plg_caps` actually lists are
 ; referenced and linked; the rest are dead-stripped by `--gc-sections`.
-@PLG_ENC_JSON = external global i8
+@PLG_ENC_TEXT = external global i8
 @PLG_ENC_BSON = external global i8
 declare i32 @plg_rt_step(ptr)
 declare i64 @plg_rt_new_var(ptr)
@@ -152,7 +152,7 @@ pub fn codegen_program(
     cg.out.push('\n');
 
     // --- Wire-encoding capability table (docs/design/IO.md): which `--format`
-    // values this binary advertises. Default `[json]`.
+    // values this binary advertises. Default `[text]`.
     let caps_len = cg.emit_capabilities(&directives.io_format)?;
     cg.out.push('\n');
 

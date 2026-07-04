@@ -46,7 +46,7 @@ this engine generates native code per predicate instead.
 |---|---|---|
 | `plg-shared` | rlib | `AtomId` + well-known atoms, `Term`, `StringInterner`, `FirstArgKey`, operator table. Linked into BOTH compiler and runtime — zero dependencies, by rule. |
 | `plg-frontend` | rlib | Tokenizer + operator-precedence parser + ISO error types (ported from v1). Compiler-side only. |
-| `plg-runtime` | **staticlib** + rlib | The machine substrate compiled code calls into: heap/trail/choice points, generic unify, ~60 builtins, the minimal goal-only `--query` parser, JSON/text output, process entry. Ships inside every compiled binary. |
+| `plg-runtime` | **staticlib** + rlib | The machine substrate compiled code calls into: heap/trail/choice points, generic unify, ~60 builtins, the minimal goal-only `--query` parser, text/bson wire output, process entry. Ships inside every compiled binary. |
 | `plg-compiler` | bin `plgc` + rlib | CLI, codegen (IR text emission), clang driver, runtime embedding. |
 | `plg-lsp` | bin `plgl` | Language server (diagnostics, completion, hover, goto-definition). A frontend consumer — never links the runtime. |
 | `plg-repl` | bin `plgr` | Interactive REPL that drives the compiler; never interprets. |
@@ -108,24 +108,21 @@ how `call/1` and `findall/3` re-enter compiled code. Predicates declared
 
 ## Wire contract (compiled binaries)
 
-`--format` selects one of the wire encodings the binary advertises via
-`:- io_format([...])` (default `[json]`; `bson` available when declared). The
-human `text` form (`X = foo`) is always available as a display rendering, not
-a wire encoding. `--input-format text|bson` (default `text`) selects the input
-path: `text` takes the query from argv `--query`; `bson` reads a one-field
-request document `{"query":"...","limit"?:N}` from stdin (the capability
-gates both directions — bson input requires bson advertised). Input and
-output encodings are orthogonal. An undeclared format exits 2. Default
-behaviour is preserved from v1 so existing harnesses keep working:
+The engine speaks **two** wire encodings, **no JSON**: `text` (readable, the
+`X = foo` form, default) and `bson` (binary, dense, typed). A program declares
+which its binary advertises via `:- io_format([...])` (default `[text]`);
+`--format`/`--input-format` outside that set exit 2. Encoders not advertised
+are dead-stripped from the binary (`--gc-sections`). A host wanting JSON
+derives it from bson at the host boundary — the engine never serializes JSON.
 
-- `--query "goal(X)"`, `--limit N`, `--format json|text|bson`, `--input-format text|bson`
-- exit `0` no solutions · `1` solutions found · `2` query parse/usage error ·
+- `--query "goal(X)"`, `--limit N`, `--format text|bson`, `--input-format text|bson`
+- exit `0` no solutions · `1` solutions found · `2` parse/usage error ·
   `3` runtime error
-- json: `{"solutions":[{"X": ...}], "count": N, "exhausted": bool}`
-- bson: a self-delimiting bson document of the same shape; term values are
-  `BinData(0x00)` carrying a lossless `TermBuf` (cyclic terms survive —
-  json cuts them to `_N`). Encoders not advertised are dead-stripped from
-  the binary. See [docs/design/IO.md](design/IO.md).
+- text: the readable solutions form (`X = foo` / `true.` / `false.`); projects
+  the envelope to solutions (no `count`/`exhausted`).
+- bson: a self-delimiting bson document `{count, exhausted, solutions[], output?}`;
+  term values are `BinData(0x00)` carrying a lossless `TermBuf` (cyclic terms
+  round-trip; text cuts them). See [docs/design/IO.md](design/IO.md).
 
 ## Build system
 

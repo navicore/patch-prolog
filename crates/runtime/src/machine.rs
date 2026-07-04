@@ -199,7 +199,7 @@ pub struct Machine {
     pub output: OutputSink,
     /// Wire-encoding capability table: pointers to the `EncoderDesc` statics
     /// codegen baked for the encodings this binary advertises (`io_format/1`,
-    /// default `[json]`). `entry.rs` resolves `--format` against it; encoders
+    /// default `[text]`). `entry.rs` resolves `--format` against it; encoders
     /// not listed were dead-stripped and won't resolve. (docs/design/IO.md)
     pub capabilities: Vec<*const crate::wire::EncoderDesc>,
 }

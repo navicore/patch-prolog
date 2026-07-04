@@ -72,7 +72,7 @@ reallocation and backtracking truncation.
 ```llvm
 @plg_atom_strs    = [N x ptr]              ; atom names, id order
 @plg_registry     = [K x { i32, i32, ptr }] ; functor, arity, entry fn
-@plg_caps         = [C x ptr]              ; advertised EncoderDesc ptrs
+@plg_caps         = [C x ptr]              ; advertised EncoderDesc ptrs (io_format/1)
 @plg_srcmap       = [S x { i32, i32, i32 }] ; site_id → (file, line, col)
 @plg_files        = [F x ptr]              ; filename cstrings
 ```
@@ -86,10 +86,11 @@ contract).
 
 `@plg_caps` is the wire-encoding capability table (docs/design/IO.md): one
 pointer per encoding the program declared via `:- io_format([...])`
-(default `[json]`), each pointing at a runtime `EncoderDesc` static
-(`@PLG_ENC_JSON` / `@PLG_ENC_BSON`). `plg_rt_main` resolves `--format` by
+(default `[text]`), each pointing at a runtime `EncoderDesc` static
+(`@PLG_ENC_TEXT` / `@PLG_ENC_BSON`). `plg_rt_main` resolves `--format` by
 scanning it; encoders NOT listed are unreferenced, so link-time `--gc-sections`
-strips their code (a `[json]`-only binary links no bson).
+strips their code (a `[text]`-only binary links no bson). The engine speaks
+`text` + `bson`, **no JSON** — a host wanting JSON derives it from bson.
 
 ## Term words (tag in low 3 bits)
 

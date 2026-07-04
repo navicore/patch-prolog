@@ -5,11 +5,12 @@
 //!   plg_init                       (emitted by the generated module) → builds
 //!                                  the Machine, hands it to `plg_rt_set_machine`
 //!   plg_rt_alloc(len) → ptr        host writes the query bytes here
-//!   plg_rt_run_query(ptr,len,…) → u64   packed (len<<32 | ptr) of a JSON buffer
+//!   plg_rt_run_query(ptr,len,…) → u64   packed (len<<32 | ptr) of a bson buffer
 //!   plg_rt_free(ptr,len)           host frees the result (or the query buffer)
 //!
-//! JSON formatting and the query path are NOT duplicated here — both go
-//! through `crate::core`, the single I/O-free core the WASI shell shares.
+//! Bson formatting and the query path are NOT duplicated here — both go
+//! through `crate::core` (solve) and `crate::wire` (the bson encoding), the
+//! single I/O-free core the WASI shell shares.
 //!
 //! ## Concurrency contract (D3 / WASM.md finding #2)
 //!
@@ -21,7 +22,7 @@
 
 use crate::core::{self, QueryResult};
 use crate::machine::{Machine, OutputSink};
-use crate::wire::{Envelope, PLG_ENC_JSON, WireError};
+use crate::wire::{Envelope, PLG_ENC_BSON, WireError};
 use std::alloc::{Layout, alloc, dealloc};
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 
@@ -59,7 +60,7 @@ static DEFAULT_DEPTH_LIMIT: AtomicU64 = AtomicU64::new(0);
 /// Called once from the generated `plg_init` with the `plg_rt_init` result.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn plg_rt_set_machine(m: *mut Machine) {
-    // No stdout in a V8 isolate: capture `write/1` output into the result JSON
+    // No stdout in a V8 isolate: capture `write/1` output into the result bson
     // (D4) instead of streaming it nowhere.
     unsafe { (*m).output = OutputSink::Capture(String::new()) };
     // Snapshot the limits codegen/`plg_init` baked in, so a per-request `0`
@@ -91,7 +92,7 @@ pub unsafe extern "C" fn plg_rt_free(ptr: *mut u8, len: u32) {
 }
 
 /// Run one query (UTF-8 at `qptr..qptr+qlen`) and return packed
-/// `(len << 32) | ptr` of a JSON byte buffer the host reads then frees via
+/// `(len << 32) | ptr` of a bson byte buffer the host reads then frees via
 /// `plg_rt_free`. The packed return assumes **wasm32** (the pointer fits in the
 /// low 32 bits); wasm64 would need a wider/two-value result (WASM.md finding #7).
 ///
@@ -141,12 +142,15 @@ pub unsafe extern "C" fn plg_rt_run_query(
 
     let mut buf = Vec::new();
     // Writes never fail (a `Vec` sink), so the `io::Result`s are infallible.
+    // The reactor emits bson (the binary machine format); the host glue
+    // decodes bson→JSON for HTTP clients, so the engine itself never
+    // serializes JSON. (docs/design/IO.md.)
     match core::run_query(m, q) {
         QueryResult::ParseError(msg) => {
-            let _ = (PLG_ENC_JSON.write_error)(&mut buf, &WireError::Parse(msg));
+            let _ = (PLG_ENC_BSON.write_error)(&mut buf, &WireError::Parse(msg));
         }
         QueryResult::RuntimeError(msg) => {
-            let _ = (PLG_ENC_JSON.write_error)(&mut buf, &WireError::Runtime(msg));
+            let _ = (PLG_ENC_BSON.write_error)(&mut buf, &WireError::Runtime(msg));
         }
         QueryResult::Solutions => {
             let exhausted = core::exhausted(m);
@@ -155,7 +159,7 @@ pub unsafe extern "C" fn plg_rt_run_query(
             // field. Intended D4 contract: a stable shape for hosts, present
             // even when empty.
             let env = Envelope::from_machine(m, exhausted);
-            let _ = (PLG_ENC_JSON.write_envelope)(&mut buf, m, &env);
+            let _ = (PLG_ENC_BSON.write_envelope)(&mut buf, m, &env);
         }
     }
 

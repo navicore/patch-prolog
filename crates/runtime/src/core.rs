@@ -1,19 +1,19 @@
 //! I/O-free query core: parse + solve, producing the message bytes for the
-//! two failure classes. The envelope *shape* and its plural *encodings* now
-//! live in [`crate::wire`] — this module is the solve side plus the shared
-//! `exhausted` rule, with no commitment to *where* output bytes go. Both the
-//! WASI/CLI shell (`entry.rs`) and the Tier-2 reactor (`reactor.rs`) call
-//! `run_query` here, then build a [`crate::wire::Envelope`] and hand it to a
-//! chosen [`crate::wire::Encoder`] — so the shape has one source and can't
-//! drift between transports.
+//! two failure classes. The envelope *shape* and its plural *encodings* live
+//! in [`crate::wire`] — this module is the solve side plus the shared
+//! `exhausted` rule, with no commitment to *where* output bytes go or how
+//! they're encoded. Both the CLI shell (`entry.rs`) and the Tier-2 reactor
+//! (`reactor.rs`) call `run_query` here, then build a [`crate::wire::Envelope`]
+//! and hand it to a chosen [`crate::wire::EncoderDesc`] — so the shape has one
+//! source and can't drift between transports.
 
 use crate::machine::Machine;
 use crate::{query, solve};
 
-/// Outcome of running one query, with the prefixed message the v1 contract
+/// Outcome of running one query, with the prefixed message the wire contract
 /// puts on the wire for the two failure classes. The caller maps these to its
-/// own surface — exit codes 2/3 for the CLI, an error object for the reactor —
-/// but the message bytes are produced once, here.
+/// own surface — exit codes 2/3 for the CLI, an error document for the reactor
+/// — but the message bytes are produced once, here.
 pub enum QueryResult {
     /// Solved; solutions live in `m.solutions`.
     Solutions,
@@ -40,9 +40,9 @@ pub fn run_query(m: &mut Machine, q: &str) -> QueryResult {
     }
 }
 
-/// The v1 `exhausted` flag: the search ran to completion unless a `--limit`
+/// The `exhausted` flag: the search ran to completion unless a `--limit`
 /// stopped it exactly at the cap. Single-sourced so the CLI and the reactor
-/// compute it identically (finding #4 — the spike hard-coded `true`).
+/// compute it identically.
 pub fn exhausted(m: &Machine) -> bool {
     m.solution_limit.is_none_or(|l| m.solutions.len() < l)
 }

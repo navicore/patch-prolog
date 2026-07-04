@@ -345,21 +345,30 @@ fn test_parse_program_ignores_directives() {
 }
 
 #[test]
+fn test_unknown_directive_errors() {
+    let mut interner = StringInterner::new();
+    let result = Parser::parse_program_with_directives(":- unknown_thing(foo).", &mut interner);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.message.contains("Unknown directive"), "got: {err}");
+}
+
+#[test]
 fn test_io_format_directive_list() {
     let mut interner = StringInterner::new();
     let (_clauses, dirs) =
-        Parser::parse_program_with_directives(":- io_format([json, bson]). f(a).", &mut interner)
+        Parser::parse_program_with_directives(":- io_format([text, bson]). f(a).", &mut interner)
             .unwrap();
-    assert_eq!(dirs.io_format, vec!["json".to_string(), "bson".to_string()]);
+    assert_eq!(dirs.io_format, vec!["text".to_string(), "bson".to_string()]);
 }
 
 #[test]
 fn test_io_format_directive_comma_chain() {
     let mut interner = StringInterner::new();
     let (_clauses, dirs) =
-        Parser::parse_program_with_directives(":- io_format((json, bson)).", &mut interner)
+        Parser::parse_program_with_directives(":- io_format((text, bson)).", &mut interner)
             .unwrap();
-    assert_eq!(dirs.io_format, vec!["json".to_string(), "bson".to_string()]);
+    assert_eq!(dirs.io_format, vec!["text".to_string(), "bson".to_string()]);
 }
 
 #[test]
@@ -371,36 +380,26 @@ fn test_io_format_directive_single_atom() {
 }
 
 #[test]
-fn test_io_format_directive_no_parse_level_dedup() {
+fn test_io_format_no_parse_level_dedup() {
     // Dedup is codegen's job (it owns the cross-file merge); the parser
     // preserves source order including duplicates.
     let mut interner = StringInterner::new();
     let (_clauses, dirs) =
-        Parser::parse_program_with_directives(":- io_format([json, json, bson]).", &mut interner)
+        Parser::parse_program_with_directives(":- io_format([text, text, bson]).", &mut interner)
             .unwrap();
     assert_eq!(
         dirs.io_format,
-        vec!["json".to_string(), "json".to_string(), "bson".to_string()]
+        vec!["text".to_string(), "text".to_string(), "bson".to_string()]
     );
 }
 
 #[test]
-fn test_io_format_directive_rejects_improper_list() {
+fn test_io_format_rejects_improper_list() {
     let mut interner = StringInterner::new();
     let result =
-        Parser::parse_program_with_directives(":- io_format([json | bson]).", &mut interner);
+        Parser::parse_program_with_directives(":- io_format([text | bson]).", &mut interner);
     assert!(result.is_err(), "improper list must be rejected");
-    let err = result.unwrap_err();
-    assert!(err.message.contains("proper list"), "got: {err}");
-}
-
-#[test]
-fn test_unknown_directive_errors() {
-    let mut interner = StringInterner::new();
-    let result = Parser::parse_program_with_directives(":- unknown_thing(foo).", &mut interner);
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(err.message.contains("Unknown directive"), "got: {err}");
+    assert!(result.unwrap_err().message.contains("proper list"));
 }
 
 #[test]
