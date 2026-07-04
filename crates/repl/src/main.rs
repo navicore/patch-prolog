@@ -12,6 +12,7 @@ mod app;
 mod completion;
 mod engine;
 mod input;
+mod persist;
 mod run;
 mod session;
 mod ui;
@@ -65,6 +66,7 @@ fn run(file: Option<PathBuf>) -> Result<(), String> {
 
     let result = event_loop(&mut terminal, &mut app);
     app.save_history();
+    app.save_session();
 
     let _ = disable_raw_mode();
     let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
