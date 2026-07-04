@@ -785,7 +785,7 @@ mod tests {
             .map(|s| {
                 s.bindings
                     .iter()
-                    .map(|(n, _, t)| format!("{n}={t}"))
+                    .map(|b| format!("{}={}", b.name, b.text))
                     .collect::<Vec<_>>()
                     .join(",")
             })
@@ -848,7 +848,7 @@ mod m4_tests {
             .map(|s| {
                 s.bindings
                     .iter()
-                    .map(|(n, _, t)| format!("{n}={t}"))
+                    .map(|b| format!("{}={}", b.name, b.text))
                     .collect::<Vec<_>>()
                     .join(",")
             })

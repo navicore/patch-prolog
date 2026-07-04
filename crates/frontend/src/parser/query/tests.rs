@@ -354,6 +354,55 @@ fn test_unknown_directive_errors() {
 }
 
 #[test]
+fn test_io_format_directive_list() {
+    let mut interner = StringInterner::new();
+    let (_clauses, dirs) =
+        Parser::parse_program_with_directives(":- io_format([text, bson]). f(a).", &mut interner)
+            .unwrap();
+    assert_eq!(dirs.io_format, vec!["text".to_string(), "bson".to_string()]);
+}
+
+#[test]
+fn test_io_format_directive_comma_chain() {
+    let mut interner = StringInterner::new();
+    let (_clauses, dirs) =
+        Parser::parse_program_with_directives(":- io_format((text, bson)).", &mut interner)
+            .unwrap();
+    assert_eq!(dirs.io_format, vec!["text".to_string(), "bson".to_string()]);
+}
+
+#[test]
+fn test_io_format_directive_single_atom() {
+    let mut interner = StringInterner::new();
+    let (_clauses, dirs) =
+        Parser::parse_program_with_directives(":- io_format(bson).", &mut interner).unwrap();
+    assert_eq!(dirs.io_format, vec!["bson".to_string()]);
+}
+
+#[test]
+fn test_io_format_no_parse_level_dedup() {
+    // Dedup is codegen's job (it owns the cross-file merge); the parser
+    // preserves source order including duplicates.
+    let mut interner = StringInterner::new();
+    let (_clauses, dirs) =
+        Parser::parse_program_with_directives(":- io_format([text, text, bson]).", &mut interner)
+            .unwrap();
+    assert_eq!(
+        dirs.io_format,
+        vec!["text".to_string(), "text".to_string(), "bson".to_string()]
+    );
+}
+
+#[test]
+fn test_io_format_rejects_improper_list() {
+    let mut interner = StringInterner::new();
+    let result =
+        Parser::parse_program_with_directives(":- io_format([text | bson]).", &mut interner);
+    assert!(result.is_err(), "improper list must be rejected");
+    assert!(result.unwrap_err().message.contains("proper list"));
+}
+
+#[test]
 fn parse_error_span_covers_unexpected_token() {
     let mut interner = StringInterner::new();
     // `]` sits where a term is expected: "go :- bar(" is 10 bytes, `]` at 10.

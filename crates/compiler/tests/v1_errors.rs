@@ -117,7 +117,7 @@ fn undefined_predicate_is_existence_error() {
 fn dynamic_predicate_silently_fails() {
     // v1 test_dynamic_predicate_silently_fails_when_undefined.
     let (out, code) = prog().query("field(X)", &[]);
-    assert_eq!(out, "{\"count\":0,\"exhausted\":true,\"solutions\":[]}\n");
+    assert_eq!(out, "false.\n");
     assert_eq!(code, 0);
 }
 
@@ -125,7 +125,7 @@ fn dynamic_predicate_silently_fails() {
 fn ground_index_miss_fails() {
     // v1 test_index_ground_miss_returns_empty.
     let (out, code) = prog().query("color(purple)", &[]);
-    assert_eq!(out, "{\"count\":0,\"exhausted\":true,\"solutions\":[]}\n");
+    assert_eq!(out, "false.\n");
     assert_eq!(code, 0);
 }
 
@@ -177,10 +177,7 @@ fn query_parse_errors_exit_2() {
         "X is 1, foo bar",
     ] {
         let (out, code) = prog().query(q, &[]);
-        assert!(
-            out.starts_with("{\"error\":\"Parse error:"),
-            "query {q}: {out}"
-        );
+        assert!(out.starts_with("error: Parse error:"), "query {q}: {out}");
         assert_eq!(code, 2, "query: {q}");
     }
 }
@@ -194,7 +191,10 @@ fn valid_queries_still_parse() {
     // directive prefix (CLI-surface difference, see top-of-file skip list).
     for q in ["color(X)", "color(X)."] {
         let (out, code) = prog().query(q, &[]);
-        assert!(out.contains("\"count\":2"), "query {q}: {out}");
+        assert!(
+            out.contains("X = red") && out.contains("X = blue"),
+            "query {q}: {out}"
+        );
         assert_eq!(code, 1, "query: {q}");
     }
 }

@@ -58,6 +58,12 @@ export function runQuery(ex, query, { limit = 0, stepLimit = 0n, depthLimit = 0 
   // AFTER the call so a memory growth during solving can't leave it detached.
   const len = Number(packed >> 32n);
   const ptr = Number(packed & 0xffffffffn);
+  // FIXME (wasm track): the reactor now emits a BSON envelope, not JSON text.
+  // This `TextDecoder` decode therefore yields garbage until the host glue
+  // decodes bson→JSON — which needs the engine's atom table exposed over the
+  // ABI (bson term values are atom-id-keyed TermBuf, not names). See
+  // docs/design/IO.md and the gated `wasm-reactor-smoke` recipe. The decode +
+  // atom lookup + term render + JSON encode all belong here (host-side).
   const json = new TextDecoder().decode(new Uint8Array(ex.memory.buffer, ptr, len));
   ex.plg_rt_free(ptr, len);
   return json;

@@ -1,15 +1,20 @@
 //! Process entry: `plg_rt_init` + `plg_rt_main`, called from the thin
-//! generated `main`. Owns argv parsing (hand-rolled — no clap inside
-//! compiled binaries), output, and the v1 exit-code contract:
+//! generated `main`. Owns argv parsing (hand-rolled — no clap inside compiled
+//! binaries), output, and the exit-code contract:
 //!
 //!   0 = no solutions, 1 = solutions found,
-//!   2 = query parse error, 3 = runtime error
+//!   2 = query parse / usage error, 3 = runtime error
+//!
+//! Wire encodings are `text` (readable, default) and `bson` (binary), gated by
+//! the codegen-baked capability table (`io_format/1`, default `[text]`). No
+//! JSON — a host wanting JSON derives it from bson. See docs/design/IO.md.
 
 use crate::core::{self, QueryResult};
 use crate::machine::{Machine, RegistryEntry, SrcLoc};
+use crate::wire::{EncoderDesc, Envelope, WireError};
 use plg_shared::StringInterner;
 use std::ffi::CStr;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::raw::c_char;
 
 /// Build the Machine from the tables codegen baked into the binary.
@@ -29,6 +34,8 @@ pub unsafe extern "C" fn plg_rt_init(
     srcmap_len: u32,
     files: *const *const c_char,
     files_len: u32,
+    caps: *const *const crate::wire::EncoderDesc,
+    caps_len: u32,
 ) -> *mut Machine {
     let mut atoms = StringInterner::new();
     for i in 0..atom_count as usize {
@@ -43,8 +50,6 @@ pub unsafe extern "C" fn plg_rt_init(
         registry.is_sorted_by_key(|e| (e.functor, e.arity)),
         "registry must be sorted for binary search"
     );
-    // Source-location side-table (SPANS.md Layer 3). Both tables are empty
-    // (`len == 0`) for binaries built without provenance.
     let srcmap: Vec<SrcLoc> = if srcmap_len == 0 {
         Vec::new()
     } else {
@@ -59,19 +64,24 @@ pub unsafe extern "C" fn plg_rt_init(
         .collect();
     let mut m = Machine::new(atoms, registry);
     m.set_provenance(srcmap, files);
+    m.capabilities = (0..caps_len as usize)
+        .map(|i| unsafe { *caps.add(i) })
+        .collect();
     Box::into_raw(m)
 }
 
 struct Args {
-    query: String,
+    query: Option<String>,
     limit: Option<usize>,
     format: String,
+    input_format: String,
 }
 
 fn parse_args(argv: Vec<String>) -> Result<Args, String> {
     let mut query = None;
     let mut limit = None;
-    let mut format = "json".to_string(); // v1 default
+    let mut format = "text".to_string(); // default wire encoding
+    let mut input_format = "text".to_string(); // default: argv `--query`
     let mut it = argv.into_iter().peekable();
     while let Some(arg) = it.next() {
         let (flag, inline_value) = match arg.split_once('=') {
@@ -94,58 +104,59 @@ fn parse_args(argv: Vec<String>) -> Result<Args, String> {
                 )
             }
             "-f" | "--format" => format = value(&mut it)?,
+            "--input-format" => input_format = value(&mut it)?,
             "-h" | "--help" => {
-                return Err("usage: --query <goal> [--limit N] [--format json|text]".to_string());
+                return Err(
+                    "usage: --query <goal> [--limit N] [--format text|bson] [--input-format text|bson]"
+                        .to_string(),
+                );
             }
             other => return Err(format!("unexpected argument: {other}")),
         }
     }
-    let query = query.ok_or("missing required argument: --query <goal>".to_string())?;
     Ok(Args {
         query,
         limit,
         format,
+        input_format,
     })
 }
 
-/// v1's output_error: JSON errors go to stdout, text errors to stderr.
-/// The JSON shape is the shared core's; only the routing is CLI-specific.
-fn output_error(format: &str, message: &str) {
-    if format == "json" {
-        let mut out = io::stdout().lock();
-        let _ = core::write_error_json(&mut out, message);
-        let _ = out.write_all(b"\n");
-    } else {
-        eprintln!("Error: {message}");
-    }
-}
-
-fn output_json(m: &Machine, exhausted: bool) {
+/// Emit solutions for a solved query through the chosen encoder. `can_stream()`
+/// drives the line discipline: streamed encodings (text) get a trailing flush
+/// via the line buffer; non-streamable encodings (bson) get an explicit flush
+/// (Rust's stdout is a `LineWriter`, and bson's no-newline bytes would never
+/// flush on exit without it).
+fn output_solutions(enc: &EncoderDesc, m: &Machine, exhausted: bool) {
     let mut out = io::stdout().lock();
-    // `None` output: the CLI streamed any `write/1` bytes to stdout already, so
-    // its JSON stays byte-identical to v1 (no `output` field).
-    let _ = core::write_solutions_json(&mut out, m, exhausted, None);
-    let _ = out.write_all(b"\n");
+    let env = Envelope::from_machine(m, exhausted);
+    let _ = (enc.write_envelope)(&mut out, m, &env);
+    if !(enc.can_stream)() {
+        let _ = out.flush();
+    }
 }
 
-fn output_text(m: &Machine) {
-    if m.solutions.is_empty() {
-        println!("false.");
-        return;
-    }
-    for sol in &m.solutions {
-        if sol.bindings.is_empty() {
-            println!("true.");
-        } else {
-            for (name, _, text) in &sol.bindings {
-                println!("{name} = {text}");
+/// Emit an error through the chosen encoder. The caller constructs the
+/// `WireError` with the correct class (`Parse` vs `Runtime`) so the distinction
+/// is honest on the wire.
+fn output_result(enc: Option<&EncoderDesc>, err: WireError) {
+    let message = match &err {
+        WireError::Parse(m) | WireError::Runtime(m) => m.as_str(),
+    };
+    match enc {
+        Some(e) => {
+            let mut out = io::stdout().lock();
+            let _ = (e.write_error)(&mut out, &err);
+            if !(e.can_stream)() {
+                let _ = out.flush();
             }
         }
+        None => eprintln!("Error: {message}"),
     }
 }
 
-/// Run the query named in argv against the compiled program. Returns
-/// the process exit code.
+/// Run the query named in argv (or a bson request on stdin) against the
+/// compiled program. Returns the process exit code.
 ///
 /// # Safety
 /// Called once from generated `main` with the process argc/argv.
@@ -171,45 +182,102 @@ pub unsafe extern "C" fn plg_rt_main(
             return 2;
         }
     };
-    if args.format != "json" && args.format != "text" {
-        output_error("text", &format!("Unknown format: {}", args.format));
-        return 2;
+    // Resolve the output encoding against the capability table (the encoders
+    // this binary advertises via `io_format/1`, default `[text]`). An unknown
+    // or undeclared wire format is a usage error (exit 2); there is no valid
+    // encoder to serialize the error, so it goes to stderr.
+    let enc: Option<&'static EncoderDesc> = match unsafe {
+        EncoderDesc::find(m.capabilities.as_ptr(), m.capabilities.len(), &args.format)
+    } {
+        Some(e) => Some(e),
+        None => {
+            eprintln!("Unknown or undeclared format: {}", args.format);
+            return 2;
+        }
+    };
+    // Resolve the query string and limit by input mode. Default (`text`) takes
+    // the query from argv `--query` (required). `--input-format bson` reads a
+    // one-field request document `{query, limit?}` from stdin; it requires the
+    // binary to advertise `bson` (capability gates both directions). argv
+    // `--limit`, when present, overrides any limit from the bson document.
+    let (query, argv_limit) = match args.input_format.as_str() {
+        "text" => {
+            let q = match args.query {
+                Some(q) => q,
+                None => {
+                    eprintln!("missing required argument: --query <goal>");
+                    return 2;
+                }
+            };
+            (q, args.limit)
+        }
+        "bson" => {
+            if unsafe {
+                EncoderDesc::find(m.capabilities.as_ptr(), m.capabilities.len(), "bson").is_none()
+            } {
+                eprintln!("Unknown or undeclared input format: bson");
+                return 2;
+            }
+            let mut stdin_buf = Vec::new();
+            if let Err(e) = std::io::stdin().read_to_end(&mut stdin_buf) {
+                output_result(
+                    enc,
+                    WireError::Parse(format!("bson request read error: {e}")),
+                );
+                return 2;
+            }
+            match crate::wire::parse_bson_request(&stdin_buf) {
+                Ok(req) => (req.query, args.limit.or(req.limit)),
+                Err(e) => {
+                    // A malformed bson request is a parse error at the framing
+                    // layer; encode it like any other parse error rather than
+                    // breaking the "I only speak bson" contract.
+                    output_result(
+                        enc,
+                        WireError::Parse(format!("bson request parse error: {e}")),
+                    );
+                    return 2;
+                }
+            }
+        }
+        other => {
+            eprintln!("Unknown --input-format: {other} (expected text|bson)");
+            return 2;
+        }
+    };
+    // A non-streamable encoding (binary) can't coexist with raw `write/1` text
+    // bytes on stdout, so run in capture mode: `write/1` bytes land in the
+    // envelope's `output` field. (IO.md — the encoding dictates the sink.)
+    if let Some(e) = enc
+        && !(e.can_stream)()
+    {
+        m.output = crate::machine::OutputSink::Capture(String::new());
     }
-    m.solution_limit = args.limit;
-    // Documented extension over v1 (which hardcoded 10_000): the step
-    // ceiling is tunable via environment so big-but-legitimate queries
-    // can raise it without changing the CLI contract.
+    m.solution_limit = argv_limit;
     if let Ok(s) = std::env::var("PLG_MAX_STEPS")
         && let Ok(n) = s.parse::<u64>()
     {
         m.step_limit = n;
     }
-    // Same knob for the metacall depth bound (#23): tune it to the stack the
-    // binary will run under — lower it for a small `ulimit -s`, raise it on a
-    // generous stack. Mirrors `PLG_MAX_STEPS`; the default (1000) is set in
-    // `Machine::new`.
     if let Ok(s) = std::env::var("PLG_METACALL_DEPTH")
         && let Ok(n) = s.parse::<usize>()
     {
         m.metacall_depth_limit = n;
     }
 
-    match core::run_query(m, &args.query) {
+    match core::run_query(m, &query) {
         QueryResult::ParseError(msg) => {
-            output_error(&args.format, &msg);
+            output_result(enc, WireError::Parse(msg));
             2
         }
         QueryResult::RuntimeError(msg) => {
-            output_error(&args.format, &msg);
+            output_result(enc, WireError::Runtime(msg));
             3
         }
         QueryResult::Solutions => {
             let count = m.solutions.len();
             let exhausted = core::exhausted(m);
-            match args.format.as_str() {
-                "json" => output_json(m, exhausted),
-                _ => output_text(m),
-            }
+            output_solutions(enc.unwrap(), m, exhausted);
             if count > 0 { 1 } else { 0 }
         }
     }
@@ -225,21 +293,31 @@ mod tests {
 
     #[test]
     fn parses_flags_with_space_and_equals() {
-        let a = args(&["--query", "p(X)", "--limit", "3", "--format", "text"]).unwrap();
-        assert_eq!(a.query, "p(X)");
+        let a = args(&["--query", "p(X)", "--limit", "3", "--format", "bson"]).unwrap();
+        assert_eq!(a.query.as_deref(), Some("p(X)"));
         assert_eq!(a.limit, Some(3));
-        assert_eq!(a.format, "text");
+        assert_eq!(a.format, "bson");
+        assert_eq!(a.input_format, "text", "default input-format is text");
 
         let a = args(&["--query=p(X)", "-l", "1"]).unwrap();
-        assert_eq!(a.query, "p(X)");
+        assert_eq!(a.query.as_deref(), Some("p(X)"));
         assert_eq!(a.limit, Some(1));
-        assert_eq!(a.format, "json", "default format is json (v1)");
+        assert_eq!(a.format, "text", "default format is text");
     }
 
     #[test]
-    fn missing_query_is_an_error() {
-        assert!(args(&["--format", "json"]).is_err());
+    fn parses_input_format_flag() {
+        let a = args(&["--query", "p(X)", "--input-format", "bson"]).unwrap();
+        assert_eq!(a.input_format, "bson");
+        // --query is optional at the parse layer (required only for text-input
+        // mode, enforced in plg_rt_main).
+        assert!(args(&["--input-format", "bson"]).is_ok());
+    }
+
+    #[test]
+    fn missing_value_flags_are_errors() {
         assert!(args(&["--query"]).is_err());
         assert!(args(&["--bogus", "x"]).is_err());
+        assert!(args(&["--input-format"]).is_err());
     }
 }

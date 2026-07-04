@@ -1,6 +1,11 @@
 //! Compiled-binary integration tests: compile fixture programs ONCE
 //! per program (clang dominates test time), then assert stdout bytes
-//! and exit codes for many queries — the v1 wire contract.
+//! and exit codes for many queries — the wire contract.
+//!
+//! Output is the readable `text` format by default (so value/order/error
+//! assertions read as `X = mary`); `count`/`exhausted` checks — which text
+//! doesn't carry — go through `query_bson` (the binary envelope). No JSON: a
+//! host wanting it derives it from bson. See docs/design/IO.md.
 
 mod harness;
 use harness::{Compiled, compile};
@@ -15,65 +20,58 @@ fn family() -> &'static Compiled {
 #[test]
 fn facts_enumerate_in_program_order() {
     let (out, code) = family().query("parent(tom, X)", &[]);
-    assert_eq!(
-        out,
-        "{\"count\":3,\"exhausted\":true,\"solutions\":[{\"X\":\"mary\"},{\"X\":\"james\"},{\"X\":\"ann\"}]}\n"
-    );
+    assert_eq!(out, "X = mary\nX = james\nX = ann\n");
     assert_eq!(code, 1);
+    // count/exhausted live in the bson envelope (text projects to solutions).
+    let (env, _) = family().query_bson("parent(tom, X)", &[]);
+    assert_eq!(env.count, Some(3));
+    assert_eq!(env.exhausted, Some(true));
 }
 
 #[test]
 fn ground_query_success_and_failure() {
     let (out, code) = family().query("parent(tom, mary)", &[]);
-    assert_eq!(out, "{\"count\":1,\"exhausted\":true,\"solutions\":[{}]}\n");
+    assert_eq!(out, "true.\n");
     assert_eq!(code, 1);
 
     let (out, code) = family().query("parent(mary, tom)", &[]);
-    assert_eq!(out, "{\"count\":0,\"exhausted\":true,\"solutions\":[]}\n");
+    assert_eq!(out, "false.\n");
     assert_eq!(code, 0, "no solutions => exit 0 (linter-clean)");
 }
 
 #[test]
 fn rule_with_conjunction() {
     let (out, code) = family().query("grandparent(tom, X)", &[]);
-    assert_eq!(
-        out,
-        "{\"count\":2,\"exhausted\":true,\"solutions\":[{\"X\":\"bob\"},{\"X\":\"carol\"}]}\n"
-    );
+    assert_eq!(out, "X = bob\nX = carol\n");
     assert_eq!(code, 1);
 }
 
 #[test]
 fn recursive_predicate_backtracks_through_both_clauses() {
     let (out, code) = family().query("ancestor(tom, X)", &[]);
-    assert_eq!(
-        out,
-        "{\"count\":5,\"exhausted\":true,\"solutions\":[{\"X\":\"mary\"},{\"X\":\"james\"},{\"X\":\"ann\"},{\"X\":\"bob\"},{\"X\":\"carol\"}]}\n"
-    );
+    assert_eq!(out, "X = mary\nX = james\nX = ann\nX = bob\nX = carol\n");
     assert_eq!(code, 1);
 }
 
 #[test]
 fn conjunctive_query_shares_bindings() {
     let (out, code) = family().query("parent(tom, X), parent(X, Y)", &[]);
-    assert_eq!(
-        out,
-        "{\"count\":2,\"exhausted\":true,\"solutions\":[{\"X\":\"mary\",\"Y\":\"bob\"},{\"X\":\"james\",\"Y\":\"carol\"}]}\n"
-    );
+    assert_eq!(out, "X = mary\nY = bob\nX = james\nY = carol\n");
     assert_eq!(code, 1);
 }
 
 #[test]
 fn limit_and_exhausted_flag() {
-    // limit < solutions: exhausted=false
-    let (out, _) = family().query("parent(tom, X)", &["--limit", "2"]);
-    assert!(out.contains("\"count\":2,\"exhausted\":false"), "{out}");
-    // limit == solutions: also exhausted=false (v1 formula: count < limit)
-    let (out, _) = family().query("parent(tom, X)", &["--limit", "3"]);
-    assert!(out.contains("\"count\":3,\"exhausted\":false"), "{out}");
-    // limit > solutions: exhausted=true
-    let (out, _) = family().query("parent(tom, X)", &["--limit", "5"]);
-    assert!(out.contains("\"count\":3,\"exhausted\":true"), "{out}");
+    // exhausted semantics live only in the bson envelope.
+    let (env, _) = family().query_bson("parent(tom, X)", &["--limit", "2"]);
+    assert_eq!(env.count, Some(2), "limit < solutions");
+    assert_eq!(env.exhausted, Some(false), "limit hit ⇒ not exhausted");
+    let (env, _) = family().query_bson("parent(tom, X)", &["--limit", "3"]);
+    assert_eq!(env.count, Some(3), "limit == solutions");
+    assert_eq!(env.exhausted, Some(false), "count < limit ⇒ not exhausted");
+    let (env, _) = family().query_bson("parent(tom, X)", &["--limit", "5"]);
+    assert_eq!(env.count, Some(3), "limit > solutions");
+    assert_eq!(env.exhausted, Some(true));
 }
 
 #[test]
@@ -93,18 +91,19 @@ fn text_format() {
 #[test]
 fn unknown_predicate_is_runtime_error_exit_3() {
     let (out, code) = family().query("nosuch(X)", &[]);
-    assert_eq!(
-        out,
-        "{\"error\":\"Runtime error: error(existence_error(procedure, /(nosuch, 1)), Undefined procedure: nosuch/1)\"}\n"
-    );
     assert_eq!(code, 3);
+    assert!(out.contains("error: Runtime error:"), "{out}");
+    assert!(
+        out.contains("existence_error(procedure, /(nosuch, 1))"),
+        "{out}"
+    );
 }
 
 #[test]
 fn query_parse_error_exit_2() {
     let (out, code) = family().query("parent(tom", &[]);
-    assert!(out.starts_with("{\"error\":\"Parse error:"), "{out}");
     assert_eq!(code, 2);
+    assert!(out.starts_with("error: Parse error:"), "{out}");
 }
 
 #[test]
@@ -116,11 +115,11 @@ fn dynamic_predicate_fails_silently() {
     );
     // Querying the dynamic predicate directly: no solutions, exit 0.
     let (out, code) = c.query("extra_data(X, Y)", &[]);
-    assert_eq!(out, "{\"count\":0,\"exhausted\":true,\"solutions\":[]}\n");
+    assert_eq!(out, "false.\n");
     assert_eq!(code, 0);
     // Through a rule body: also clean failure, not existence_error.
     let (out, code) = c.query("violation(X)", &[]);
-    assert_eq!(out, "{\"count\":0,\"exhausted\":true,\"solutions\":[]}\n");
+    assert_eq!(out, "false.\n");
     assert_eq!(code, 0);
 }
 
@@ -128,11 +127,11 @@ fn dynamic_predicate_fails_silently() {
 fn undefined_in_rule_body_raises_when_reached() {
     let c = compile("go(X) :- missing(X).\nok(yes).\n");
     let (out, code) = c.query("go(X)", &[]);
+    assert_eq!(code, 3);
     assert!(
         out.contains("existence_error(procedure, /(missing, 1))"),
         "{out}"
     );
-    assert_eq!(code, 3);
     // Unreached undefined predicates don't error.
     let (_, code) = c.query("ok(X)", &[]);
     assert_eq!(code, 1);
@@ -172,7 +171,7 @@ fn existence_error_in_disjunctive_body_carries_coarse_span() {
 #[test]
 fn query_side_existence_error_has_no_location_suffix() {
     // A directly-queried undefined predicate has no compiled call site;
-    // its message must stay byte-identical to v1 (no ` at ...` suffix).
+    // its message must stay free of the ` at ...` provenance suffix.
     let c = compile("ok(yes).\n");
     let (out, code) = c.query("nope(X)", &[]);
     assert_eq!(code, 3);
@@ -216,7 +215,7 @@ fn arithmetic_comparison_error_carries_source_location() {
 #[test]
 fn query_side_arith_error_has_no_location_suffix() {
     // Runtime-walked arithmetic (a query) has no compiled call site; the
-    // message stays byte-identical to v1.
+    // message stays free of the provenance suffix.
     let c = compile("ok(yes).\n");
     let (out, code) = c.query("_ is 1 // 0", &[]);
     assert_eq!(code, 3);
@@ -246,7 +245,7 @@ fn sort_type_error_carries_source_location() {
 
 #[test]
 fn query_side_type_check_error_has_no_location_suffix() {
-    // Runtime-walked det builtin (a query): no compiled site, byte-identical v1.
+    // Runtime-walked det builtin (a query): no compiled site, no suffix.
     let c = compile("ok(yes).\n");
     let (out, code) = c.query("atom_length(123, _)", &[]);
     assert_eq!(code, 3);
@@ -304,41 +303,34 @@ fn every_raising_det_builtin_carries_provenance() {
 fn step_limit_is_uncatchable_resource_error() {
     let c = compile("loop :- loop.\n");
     let (out, code) = c.query("loop", &[]);
-    assert_eq!(
-        out,
-        "{\"error\":\"Runtime error: error(resource_error(steps), Maximum step limit exceeded (10000))\"}\n"
-    );
     assert_eq!(code, 3);
+    assert!(
+        out.contains("Runtime error: error(resource_error(steps)"),
+        "{out}"
+    );
+    assert!(out.contains("Maximum step limit exceeded (10000)"), "{out}");
 }
 
 #[test]
 fn structured_terms_in_facts_and_queries() {
     let c = compile(
-        "point(coord(1, 2)).\n\
+        ":- io_format([text, bson]).\n\
+         point(coord(1, 2)).\n\
          point(coord(3, 4)).\n\
          shape(box(coord(0, 0), coord(10, 10))).\n\
          items([a, b, c]).\n",
     );
+    // Values render readably in text.
     let (out, _) = c.query("point(coord(X, Y))", &[]);
-    assert_eq!(
-        out,
-        "{\"count\":2,\"exhausted\":true,\"solutions\":[{\"X\":1,\"Y\":2},{\"X\":3,\"Y\":4}]}\n"
-    );
-    let (out, _) = c.query("point(P)", &["--limit", "1"]);
-    assert_eq!(
-        out,
-        "{\"count\":1,\"exhausted\":false,\"solutions\":[{\"P\":{\"args\":[1,2],\"functor\":\"coord\"}}]}\n"
-    );
+    assert_eq!(out, "X = 1\nY = 2\nX = 3\nY = 4\n");
     let (out, _) = c.query("items(L)", &[]);
-    assert_eq!(
-        out,
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"L\":[\"a\",\"b\",\"c\"]}]}\n"
-    );
+    assert_eq!(out, "L = [a, b, c]\n");
     let (out, _) = c.query("items([H|T])", &[]);
-    assert_eq!(
-        out,
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"H\":\"a\",\"T\":[\"b\",\"c\"]}]}\n"
-    );
+    assert_eq!(out, "H = a\nT = [b, c]\n");
+    // A limit-hit surfaces as exhausted=false in the bson envelope.
+    let (env, _) = c.query_bson("point(P)", &["--limit", "1"]);
+    assert_eq!(env.count, Some(1));
+    assert_eq!(env.exhausted, Some(false));
 }
 
 #[test]

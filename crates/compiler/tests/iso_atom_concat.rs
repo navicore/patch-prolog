@@ -9,7 +9,7 @@
 //!   (NOT `type_error`, which is reserved for a bound term of the wrong type).
 //!
 //! These pin ISO behaviour directly; the old forward-only `type_error`-on-split
-//! contract was a bug.
+//! contract was a bug. Output is the readable text format (default).
 
 mod harness;
 use harness::{Compiled, compile};
@@ -30,10 +30,7 @@ fn check(goal: &str, expected: &str) {
 #[track_caller]
 fn fails(goal: &str) {
     let (out, code) = prog().query(goal, &[]);
-    assert_eq!(
-        out, "{\"count\":0,\"exhausted\":true,\"solutions\":[]}\n",
-        "goal {goal} should have no solutions"
-    );
+    assert_eq!(out, "false.\n", "goal {goal} should have no solutions");
     assert_eq!(code, 0, "goal: {goal}");
 }
 
@@ -49,28 +46,16 @@ fn errors(goal: &str, needle: &str) {
 
 #[test]
 fn forward_assembly() {
-    check(
-        "atom_concat(foo, bar, X)",
-        r#"{"count":1,"exhausted":true,"solutions":[{"X":"foobar"}]}"#,
-    );
+    check("atom_concat(foo, bar, X)", "X = foobar");
     // Both bound: a verification, binding nothing.
-    check(
-        "atom_concat(foo, bar, foobar)",
-        r#"{"count":1,"exhausted":true,"solutions":[{}]}"#,
-    );
+    check("atom_concat(foo, bar, foobar)", "true.");
     fails("atom_concat(foo, bar, nope)");
 }
 
 #[test]
 fn known_prefix_or_suffix_selects_the_split() {
-    check(
-        "atom_concat(X, bar, foobar)",
-        r#"{"count":1,"exhausted":true,"solutions":[{"X":"foo"}]}"#,
-    );
-    check(
-        "atom_concat(foo, Y, foobar)",
-        r#"{"count":1,"exhausted":true,"solutions":[{"Y":"bar"}]}"#,
-    );
+    check("atom_concat(X, bar, foobar)", "X = foo");
+    check("atom_concat(foo, Y, foobar)", "Y = bar");
     // A prefix/suffix that doesn't line up has no solution (it does not error).
     fails("atom_concat(X, xyz, foobar)");
     fails("atom_concat(zzz, Y, foobar)");
@@ -80,22 +65,16 @@ fn known_prefix_or_suffix_selects_the_split() {
 fn both_unbound_enumerates_every_decomposition() {
     check(
         "atom_concat(A, B, abc)",
-        r#"{"count":4,"exhausted":true,"solutions":[{"A":"","B":"abc"},{"A":"a","B":"bc"},{"A":"ab","B":"c"},{"A":"abc","B":""}]}"#,
+        "A = \nB = abc\nA = a\nB = bc\nA = ab\nB = c\nA = abc\nB =",
     );
     // The empty atom decomposes exactly one way: into two empty atoms.
-    check(
-        "atom_concat(A, B, '')",
-        r#"{"count":1,"exhausted":true,"solutions":[{"A":"","B":""}]}"#,
-    );
+    check("atom_concat(A, B, '')", "A = \nB =");
 }
 
 #[test]
 fn shared_variable_keeps_only_equal_halves() {
     // atom_concat(X, X, C) succeeds only at the split whose halves match.
-    check(
-        "atom_concat(X, X, abab)",
-        r#"{"count":1,"exhausted":true,"solutions":[{"X":"ab"}]}"#,
-    );
+    check("atom_concat(X, X, abab)", "X = ab");
     fails("atom_concat(X, X, abc)");
 }
 
@@ -104,7 +83,7 @@ fn unicode_splits_on_char_boundaries() {
     // Multi-byte atoms must split between characters, never inside a code point.
     check(
         "atom_concat(A, B, héllo)",
-        r#"{"count":6,"exhausted":true,"solutions":[{"A":"","B":"héllo"},{"A":"h","B":"éllo"},{"A":"hé","B":"llo"},{"A":"hél","B":"lo"},{"A":"héll","B":"o"},{"A":"héllo","B":""}]}"#,
+        "A = \nB = héllo\nA = h\nB = éllo\nA = hé\nB = llo\nA = hél\nB = lo\nA = héll\nB = o\nA = héllo\nB =",
     );
 }
 
@@ -130,10 +109,7 @@ fn split_mode_works_inside_a_compiled_clause_body() {
     let c = compile("prefix(P, W) :- atom_concat(P, _, W).\n");
     let (out, code) = c.query("prefix(P, abc)", &[]);
     assert_eq!(code, 1, "{out}");
-    assert_eq!(
-        out.trim_end(),
-        r#"{"count":4,"exhausted":true,"solutions":[{"P":""},{"P":"a"},{"P":"ab"},{"P":"abc"}]}"#,
-    );
+    assert_eq!(out.trim_end(), "P = \nP = a\nP = ab\nP = abc",);
 }
 
 #[test]
@@ -142,6 +118,6 @@ fn split_mode_reachable_via_metacall() {
     // which must also enumerate splits.
     check(
         "call(atom_concat(A, B, ab))",
-        r#"{"count":3,"exhausted":true,"solutions":[{"A":"","B":"ab"},{"A":"a","B":"b"},{"A":"ab","B":""}]}"#,
+        "A = \nB = ab\nA = a\nB = b\nA = ab\nB =",
     );
 }

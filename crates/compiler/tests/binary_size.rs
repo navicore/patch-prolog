@@ -22,9 +22,9 @@ fn hello_world_binary_stays_lean() {
         "hello-world binary is {bytes} bytes (limit {MAX_HELLO_BYTES}); \
          did the release link lose -Wl,--strip-debug or grow the runtime?"
     );
-    // And it still answers.
+    // And it still answers (default text format).
     let (out, code) = c.query("hello(X)", &[]);
-    assert!(out.contains("\"X\":\"world\""), "{out}");
+    assert!(out.contains("X = world"), "{out}");
     assert_eq!(code, 1);
 }
 

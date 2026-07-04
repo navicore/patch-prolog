@@ -1,7 +1,7 @@
 //! M3 integration tests: cut, disjunction, if-then-else, negation,
-//! once, unification builtins, comparisons, and arithmetic — asserted
-//! byte-for-byte against outputs captured from the v1 oracle
-//! (`prlg run`) on 2026-06-04.
+//! once, unification builtins, comparisons, and arithmetic. Output is the
+//! readable text format (semantics originally captured from the v1 oracle
+//! on 2026-06-04; the rendered format differs — no JSON, docs/design/IO.md).
 
 mod harness;
 use harness::Compiled;
@@ -39,152 +39,67 @@ fn check(goal: &str, expected_out: &str, expected_code: i32) {
 
 #[test]
 fn cut_commits_to_first_clause() {
-    check(
-        "max(3, 7, M)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"M\":7}]}",
-        1,
-    );
-    check(
-        "max(9, 2, M)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"M\":9}]}",
-        1,
-    );
+    check("max(3, 7, M)", "M = 7", 1);
+    check("max(9, 2, M)", "M = 9", 1);
 }
 
 #[test]
 fn arith_comparisons_and_indexing_coexist() {
-    // classify/2 mixes keyed (0) and var-keyed clauses.
-    check(
-        "classify(-5, C)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"C\":\"neg\"}]}",
-        1,
-    );
-    check(
-        "classify(0, C)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"C\":\"zero\"}]}",
-        1,
-    );
-    check(
-        "classify(9, C)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"C\":\"pos\"}]}",
-        1,
-    );
+    check("classify(-5, C)", "C = neg", 1);
+    check("classify(0, C)", "C = zero", 1);
+    check("classify(9, C)", "C = pos", 1);
 }
 
 #[test]
 fn is_evaluates_through_recursion() {
-    check(
-        "sumlist([1,2,3,4], S)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"S\":10}]}",
-        1,
-    );
+    check("sumlist([1,2,3,4], S)", "S = 10", 1);
 }
 
 #[test]
 fn disjunction_enumerates_both_branches() {
-    check(
-        "related(b, X)",
-        "{\"count\":2,\"exhausted\":true,\"solutions\":[{\"X\":\"c\"},{\"X\":\"a\"}]}",
-        1,
-    );
+    check("related(b, X)", "X = c\nX = a", 1);
 }
 
 #[test]
 fn negation_as_failure() {
-    check(
-        "notparent(c, a)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{}]}",
-        1,
-    );
-    check(
-        "notparent(a, b)",
-        "{\"count\":0,\"exhausted\":true,\"solutions\":[]}",
-        0,
-    );
+    check("notparent(c, a)", "true.", 1);
+    check("notparent(a, b)", "false.", 0);
 }
 
 #[test]
 fn if_then_else_both_arms() {
-    check(
-        "status(a, S)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"S\":\"has_kids\"}]}",
-        1,
-    );
-    check(
-        "status(c, S)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"S\":\"childless\"}]}",
-        1,
-    );
+    check("status(a, S)", "S = has_kids", 1);
+    check("status(c, S)", "S = childless", 1);
 }
 
 #[test]
 fn once_commits_to_first_solution() {
-    check(
-        "firstkid(a, K)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"K\":\"b\"}]}",
-        1,
-    );
+    check("firstkid(a, K)", "K = b", 1);
 }
 
 #[test]
 fn structural_equality_and_not_unify() {
-    check(
-        "samesame(foo, foo)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{}]}",
-        1,
-    );
-    check(
-        "samesame(foo, bar)",
-        "{\"count\":0,\"exhausted\":true,\"solutions\":[]}",
-        0,
-    );
-    check(
-        "diff(foo, bar)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{}]}",
-        1,
-    );
-    check(
-        "diff(foo, foo)",
-        "{\"count\":0,\"exhausted\":true,\"solutions\":[]}",
-        0,
-    );
+    check("samesame(foo, foo)", "true.", 1);
+    check("samesame(foo, bar)", "false.", 0);
+    check("diff(foo, bar)", "true.", 1);
+    check("diff(foo, foo)", "false.", 0);
 }
 
 #[test]
 fn top_level_arithmetic_queries() {
-    check(
-        "X is 2 + 3 * 4",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":14}]}",
-        1,
-    );
-    check(
-        "X is 7 // 2",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":3}]}",
-        1,
-    );
+    check("X is 2 + 3 * 4", "X = 14", 1);
+    check("X is 7 // 2", "X = 3", 1);
     // Floored mod: sign follows the divisor (ISO_COMPLIANCE.md).
-    check(
-        "X is -7 mod 3",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":2}]}",
-        1,
-    );
-    check(
-        "1 < 2",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{}]}",
-        1,
-    );
-    check(
-        "compare(O, foo, bar)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"O\":\">\"}]}",
-        1,
-    );
+    check("X is -7 mod 3", "X = 2", 1);
+    check("1 < 2", "true.", 1);
+    check("compare(O, foo, bar)", "O = >", 1);
 }
 
 #[test]
 fn arithmetic_errors_match_v1() {
     check(
         "X is 1 // 0",
-        "{\"error\":\"Runtime error: error(evaluation_error(zero_divisor), Division by zero (integer division))\"}",
+        "error: Runtime error: error(evaluation_error(zero_divisor), Division by zero (integer division))",
         3,
     );
     // DELIBERATE ISO-over-v1 divergence (issue #36): the culprit for a
@@ -192,7 +107,7 @@ fn arithmetic_errors_match_v1() {
     // not the bare atom v1 produced. The compound path was already correct.
     check(
         "X is foo + 1",
-        "{\"error\":\"Runtime error: error(type_error(evaluable, /(foo, 0)), Cannot evaluate as arithmetic)\"}",
+        "error: Runtime error: error(type_error(evaluable, /(foo, 0)), Cannot evaluate as arithmetic)",
         3,
     );
 }
@@ -205,10 +120,7 @@ fn cut_is_transparent_in_disjunction_iso_rule() {
     // branch and (non-ISO) leaked `fallback` as a second solution.
     let c = harness::compile("t(X) :- (m(X), X > 1, ! ; X = fallback).\nm(1).\nm(2).\nm(3).\n");
     let (out, code) = c.query("t(X)", &[]);
-    assert_eq!(
-        out,
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":2}]}\n"
-    );
+    assert_eq!(out, "X = 2\n");
     assert_eq!(code, 1);
 }
 
@@ -223,33 +135,21 @@ fn cut_is_local_in_call_like_contexts() {
          oncecut(X) :- once((m(X), !)).\n",
     );
     let (out, _) = c.query("condcut(X, S)", &[]);
-    assert_eq!(
-        out,
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"S\":\"hit\",\"X\":1}]}\n"
-    );
+    assert_eq!(out, "S = hit\nX = 1\n");
     let (out, _) = c.query("nafcut(2)", &[]);
-    assert_eq!(out, "{\"count\":1,\"exhausted\":true,\"solutions\":[{}]}\n");
+    assert_eq!(out, "true.\n");
     let (out, _) = c.query("oncecut(X)", &[]);
-    assert_eq!(
-        out,
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":1}]}\n"
-    );
+    assert_eq!(out, "X = 1\n");
 }
 
 #[test]
 fn float_literals_in_queries() {
     let c = harness::compile("near(X, Y) :- Z is X - Y, Z < 1, Z > -1.\n");
     let (out, _) = c.query("X is 1.5 + 2.5", &[]);
-    assert_eq!(
-        out,
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":4.0}]}\n"
-    );
+    assert_eq!(out, "X = 4.0\n");
     // Standard order: Float < Integer at numeric equality.
     let (out, _) = c.query("compare(O, 1, 1.0)", &[]);
-    assert_eq!(
-        out,
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"O\":\">\"}]}\n"
-    );
+    assert_eq!(out, "O = >\n");
 }
 
 #[test]

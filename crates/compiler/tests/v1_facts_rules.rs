@@ -3,8 +3,10 @@
 //! cut, negation-as-failure, once/call, and the solution limit.
 //!
 //! v1 asserted in-process solution *counts* and first-binding values;
-//! here we assert the byte-for-byte JSON wire contract of the compiled
-//! plgc binary (the contract is identical to v1's runner).
+//! here we assert the readable text wire output of the compiled plgc
+//! binary (value/order), with `count`/`exhausted` checks via the bson
+//! envelope. The semantics are v1-validated; only the rendered format
+//! differs (no JSON — docs/design/IO.md).
 //!
 //! Variable placeholders (`_N`) are normalized via `norm()` because plgc
 //! numbers fresh variables differently from v1 (known adaptation #1).
@@ -63,19 +65,8 @@ fn family() -> &'static Compiled {
 
 #[test]
 fn family_relationships() {
-    // v1 test_family_relationships: grandparent yields 2, sibling(ann) = bob.
-    check(
-        family(),
-        "grandparent(tom, X)",
-        "{\"count\":2,\"exhausted\":true,\"solutions\":[{\"X\":\"ann\"},{\"X\":\"bob\"}]}",
-        1,
-    );
-    check(
-        family(),
-        "sibling(ann, X)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":\"bob\"}]}",
-        1,
-    );
+    check(family(), "grandparent(tom, X)", "X = ann\nX = bob", 1);
+    check(family(), "sibling(ann, X)", "X = bob", 1);
 }
 
 const ANCESTOR: &str = "\
@@ -93,11 +84,10 @@ fn ancestor() -> &'static Compiled {
 
 #[test]
 fn complex_recursive_query() {
-    // v1 test_complex_recursive_query: mary, ann, alice.
     check(
         ancestor(),
         "ancestor(tom, X)",
-        "{\"count\":3,\"exhausted\":true,\"solutions\":[{\"X\":\"mary\"},{\"X\":\"ann\"},{\"X\":\"alice\"}]}",
+        "X = mary\nX = ann\nX = alice",
         1,
     );
 }
@@ -111,14 +101,8 @@ factorial(N, F) :- N > 0, N1 is N - 1, factorial(N1, F1), F is N * F1.
 
 #[test]
 fn arithmetic_pipeline() {
-    // v1 test_arithmetic_pipeline: factorial(5) = 120.
     let c = compile(FACTORIAL);
-    check(
-        &c,
-        "factorial(5, X)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":120}]}",
-        1,
-    );
+    check(&c, "factorial(5, X)", "X = 120", 1);
 }
 
 // ---- type-checking predicates ----------------------------------------
@@ -131,26 +115,10 @@ classify(X, atom) :- atom(X).
 
 #[test]
 fn type_checking_in_rules() {
-    // v1 test_type_checking_in_rules.
     let c = compile(TYPECLASS);
-    check(
-        &c,
-        "classify(42, T)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"T\":\"integer\"}]}",
-        1,
-    );
-    check(
-        &c,
-        "classify(3.14, T)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"T\":\"float\"}]}",
-        1,
-    );
-    check(
-        &c,
-        "classify(hello, T)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"T\":\"atom\"}]}",
-        1,
-    );
+    check(&c, "classify(42, T)", "T = integer", 1);
+    check(&c, "classify(3.14, T)", "T = float", 1);
+    check(&c, "classify(hello, T)", "T = atom", 1);
 }
 
 // ---- if-then-else / disjunction --------------------------------------
@@ -169,59 +137,26 @@ fn control() -> &'static Compiled {
 
 #[test]
 fn if_then_else_in_rule() {
-    // v1 test_if_then_else_in_rule.
-    check(
-        control(),
-        "absval(-5, Y)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"Y\":5}]}",
-        1,
-    );
-    check(
-        control(),
-        "absval(3, Y)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"Y\":3}]}",
-        1,
-    );
+    check(control(), "absval(-5, Y)", "Y = 5", 1);
+    check(control(), "absval(3, Y)", "Y = 3", 1);
 }
 
 #[test]
 fn disjunction_in_rule() {
-    // v1 test_disjunction_in_rule.
     check(
         control(),
         "primary_color(X)",
-        "{\"count\":3,\"exhausted\":true,\"solutions\":[{\"X\":\"red\"},{\"X\":\"green\"},{\"X\":\"blue\"}]}",
+        "X = red\nX = green\nX = blue",
         1,
     );
 }
 
 #[test]
 fn if_then_else_keeps_bindings() {
-    // v1 test_if_then_else_keeps_bindings + condition_bindings_propagate.
-    check(
-        control(),
-        "classify2(5, R)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"R\":\"positive\"}]}",
-        1,
-    );
-    check(
-        control(),
-        "classify2(-1, R)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"R\":\"non_positive\"}]}",
-        1,
-    );
-    check(
-        control(),
-        "test_match(hello, R)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"R\":\"matched\"}]}",
-        1,
-    );
-    check(
-        control(),
-        "test_match(world, R)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"R\":\"no_match\"}]}",
-        1,
-    );
+    check(control(), "classify2(5, R)", "R = positive", 1);
+    check(control(), "classify2(-1, R)", "R = non_positive", 1);
+    check(control(), "test_match(hello, R)", "R = matched", 1);
+    check(control(), "test_match(world, R)", "R = no_match", 1);
 }
 
 // ---- cut / negation / once / call ------------------------------------
@@ -245,76 +180,34 @@ fn cut() -> &'static Compiled {
 
 #[test]
 fn cut_prevents_backtracking() {
-    // v1 test_cut_prevents_backtracking.
-    check(
-        cut(),
-        "classify(5, C)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"C\":\"positive\"}]}",
-        1,
-    );
-    check(
-        cut(),
-        "classify(0, C)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"C\":\"zero\"}]}",
-        1,
-    );
-    check(
-        cut(),
-        "classify(-3, C)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"C\":\"negative\"}]}",
-        1,
-    );
+    check(cut(), "classify(5, C)", "C = positive", 1);
+    check(cut(), "classify(0, C)", "C = zero", 1);
+    check(cut(), "classify(-3, C)", "C = negative", 1);
 }
 
 #[test]
 fn cut_prevents_all_alternatives() {
-    // v1 test_cut_prevents_all_alternatives.
-    check(
-        cut(),
-        "foo(X), !",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":\"a\"}]}",
-        1,
-    );
-    check(
-        cut(),
-        "foo(X), !, X = b",
-        "{\"count\":0,\"exhausted\":true,\"solutions\":[]}",
-        0,
-    );
+    check(cut(), "foo(X), !", "X = a", 1);
+    check(cut(), "foo(X), !, X = b", "false.", 0);
 }
 
 #[test]
 fn cut_in_once() {
     // v1 test_cut_in_once: once with cut yields no solution.
-    check(
-        cut(),
-        "once((foo(X), !, X = b))",
-        "{\"count\":0,\"exhausted\":true,\"solutions\":[]}",
-        0,
-    );
+    check(cut(), "once((foo(X), !, X = b))", "false.", 0);
 }
 
 #[test]
 fn cut_in_try_solve_no_leak_after_once() {
     // v1 test_cut_in_try_solve_no_leak_after_once: once(!) must not leak
     // the cut into the following predicate iteration.
-    check(
-        cut(),
-        "once(!), q(X)",
-        "{\"count\":3,\"exhausted\":true,\"solutions\":[{\"X\":\"a\"},{\"X\":\"b\"},{\"X\":\"c\"}]}",
-        1,
-    );
+    check(cut(), "once(!), q(X)", "X = a\nX = b\nX = c", 1);
 }
 
 #[test]
 fn negation_as_failure_pipeline() {
     // v1 test_negation_as_failure_pipeline: only tweety can fly.
-    check(
-        cut(),
-        "can_fly(X)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":\"tweety\"}]}",
-        1,
-    );
+    check(cut(), "can_fly(X)", "X = tweety", 1);
 }
 
 // ---- once / call meta-call -------------------------------------------
@@ -337,86 +230,57 @@ fn meta() -> &'static Compiled {
 
 #[test]
 fn once_limits_to_first_solution() {
-    // v1 test_once_limits_to_first_solution + test_once_in_rule.
-    check(
-        meta(),
-        "once(color(X))",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":\"red\"}]}",
-        1,
-    );
-    check(
-        meta(),
-        "first_n(X)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":1}]}",
-        1,
-    );
+    check(meta(), "once(color(X))", "X = red", 1);
+    check(meta(), "first_n(X)", "X = 1", 1);
 }
 
 #[test]
 fn call_meta_predicate() {
-    // v1 test_call_meta_predicate + call_n_* variants.
     check(
         meta(),
         "applyg(color(X))",
-        "{\"count\":3,\"exhausted\":true,\"solutions\":[{\"X\":\"red\"},{\"X\":\"green\"},{\"X\":\"blue\"}]}",
+        "X = red\nX = green\nX = blue",
         1,
     );
-    check(
-        meta(),
-        "call(color, X)",
-        "{\"count\":3,\"exhausted\":true,\"solutions\":[{\"X\":\"red\"},{\"X\":\"green\"},{\"X\":\"blue\"}]}",
-        1,
-    );
+    check(meta(), "call(color, X)", "X = red\nX = green\nX = blue", 1);
     check(
         meta(),
         "call(foo(a), X, Y)",
-        "{\"count\":2,\"exhausted\":true,\"solutions\":[{\"X\":1,\"Y\":2},{\"X\":3,\"Y\":4}]}",
+        "X = 1\nY = 2\nX = 3\nY = 4",
         1,
     );
     check(
         meta(),
         "apply1(color, X)",
-        "{\"count\":3,\"exhausted\":true,\"solutions\":[{\"X\":\"red\"},{\"X\":\"green\"},{\"X\":\"blue\"}]}",
+        "X = red\nX = green\nX = blue",
         1,
     );
-    check(
-        meta(),
-        "call(bar)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{}]}",
-        1,
-    );
+    check(meta(), "call(bar)", "true.", 1);
 }
 
 #[test]
 fn call_n_with_stdlib_member_and_nesting() {
-    // v1 test_call_n_with_stdlib_member + test_call_n_nested.
     check(
         meta(),
         "call(member, X, [1, 2, 3])",
-        "{\"count\":3,\"exhausted\":true,\"solutions\":[{\"X\":1},{\"X\":2},{\"X\":3}]}",
+        "X = 1\nX = 2\nX = 3",
         1,
     );
     check(
         meta(),
         "call(call(member, X), [a, b, c])",
-        "{\"count\":3,\"exhausted\":true,\"solutions\":[{\"X\":\"a\"},{\"X\":\"b\"},{\"X\":\"c\"}]}",
+        "X = a\nX = b\nX = c",
         1,
     );
 }
 
 #[test]
 fn call_n_operator_atom_and_findall_inner_goal() {
-    // v1 test_call_n_with_operator_atom + test_call_n_can_construct_findall_inner_goal.
-    check(
-        meta(),
-        "call('=', X, foo)",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":\"foo\"}]}",
-        1,
-    );
+    check(meta(), "call('=', X, foo)", "X = foo", 1);
     check(
         meta(),
         "findall(W, call(weight, _, W), Ws), Ws = [150, 120, 8]",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"W\":\"_V\",\"Ws\":[150,120,8]}]}",
+        "W = _V\nWs = [150, 120, 8]",
         1,
     );
 }
@@ -438,24 +302,23 @@ fn call_n_errors() {
 
 #[test]
 fn solution_limit_respected() {
-    // v1 test_solution_limit_respected (n(1)..n(10)) using --limit.
-    let c = compile("n(1). n(2). n(3). n(4). n(5). n(6). n(7). n(8). n(9). n(10).\n");
-    let (out, _) = c.query("n(X)", &["--limit", "3"]);
-    assert!(out.contains("\"count\":3,\"exhausted\":false"), "{out}");
-    let (out, _) = c.query("n(X)", &["--limit", "100"]);
-    assert!(out.contains("\"count\":10,\"exhausted\":true"), "{out}");
+    // v1 test_solution_limit_respected (n(1)..n(10)) using --limit. exhausted
+    // semantics live in the bson envelope, so the program advertises both.
+    let c = compile(
+        ":- io_format([text, bson]).\nn(1). n(2). n(3). n(4). n(5). n(6). n(7). n(8). n(9). n(10).\n",
+    );
+    let (env, _) = c.query_bson("n(X)", &["--limit", "3"]);
+    assert_eq!(env.count, Some(3));
+    assert_eq!(env.exhausted, Some(false));
+    let (env, _) = c.query_bson("n(X)", &["--limit", "100"]);
+    assert_eq!(env.count, Some(10));
+    assert_eq!(env.exhausted, Some(true));
 }
 
 // Cut is opaque inside \+ (ISO and v1 agree): `foo(X),!,X=b` commits
-// to X=a, fails, so \+ succeeds — with X reported unbound. The live
-// oracle confirms {"X":"_0"} (v1's own test only asserted count==1).
+// to X=a, fails, so \+ succeeds — with X reported unbound.
 // Fixed in M4 by the walker cut-barrier mechanics (qbarrier).
 #[test]
 fn cut_in_negation_succeeds_with_unbound_var() {
-    check(
-        cut(),
-        "\\+((foo(X), !, X = b))",
-        "{\"count\":1,\"exhausted\":true,\"solutions\":[{\"X\":\"_V\"}]}",
-        1,
-    );
+    check(cut(), "\\+((foo(X), !, X = b))", "X = _V", 1);
 }

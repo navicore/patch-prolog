@@ -63,6 +63,52 @@ impl CodeGen<'_> {
         rows.len()
     }
 
+    /// The wire-encoding capability table (docs/design/IO.md). A `@plg_caps`
+    /// array of pointers to runtime `EncoderDesc` statics — one per encoding
+    /// the program declared via `:- io_format([...])`, default `[text]`. The
+    /// runtime scans it to resolve `--format`; encoders NOT listed here are
+    /// unreferenced by this binary, so link-time `--gc-sections` strips their
+    /// code (a `[text]`-only binary links no bson). Returns the table length
+    /// for the `plg_rt_init` handoff.
+    pub fn emit_capabilities(&mut self, declared: &[String]) -> Result<usize, String> {
+        let defaults: [&str; 1] = ["text"];
+        let names: Vec<&str> = if declared.is_empty() {
+            defaults.to_vec()
+        } else {
+            declared.iter().map(|s| s.as_str()).collect()
+        };
+        // Map declared names to descriptor symbols, validating + deduping as
+        // we go (codegen owns dedup since it sees the cross-file merge).
+        let mut syms: Vec<&str> = Vec::new();
+        for n in &names {
+            let sym = match *n {
+                "text" => "@PLG_ENC_TEXT",
+                "bson" => "@PLG_ENC_BSON",
+                other => {
+                    return Err(format!(
+                        "io_format: unknown encoder `{other}` (known: text, bson)"
+                    ));
+                }
+            };
+            if !syms.contains(&sym) {
+                syms.push(sym);
+            }
+        }
+        let refs: Vec<String> = syms.iter().map(|s| format!("ptr {s}")).collect();
+        let n = syms.len();
+        let arr = if n == 0 {
+            String::new()
+        } else {
+            refs.join(", ")
+        };
+        writeln!(
+            self.out,
+            "@plg_caps = internal constant [{n} x ptr] [{arr}]"
+        )
+        .unwrap();
+        Ok(n)
+    }
+
     /// Source-location side-table (SPANS.md Layer 3). Emitted AFTER the
     /// predicates, since `site_id` accumulates the rows during clause
     /// emission. Returns `(srcmap_len, files_len)` for the `plg_rt_init`

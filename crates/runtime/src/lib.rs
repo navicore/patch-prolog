@@ -22,3 +22,4 @@ pub mod reactor;
 pub mod render;
 pub mod solve;
 pub mod unify;
+pub mod wire;

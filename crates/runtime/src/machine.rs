@@ -197,6 +197,11 @@ pub struct Machine {
     /// Sink for `write/1`/`writeln/1`/`nl/0`. Defaults to `Stdout`; the
     /// reactor swaps in `Capture` so output survives an isolate with no stdout.
     pub output: OutputSink,
+    /// Wire-encoding capability table: pointers to the `EncoderDesc` statics
+    /// codegen baked for the encodings this binary advertises (`io_format/1`,
+    /// default `[text]`). `entry.rs` resolves `--format` against it; encoders
+    /// not listed were dead-stripped and won't resolve. (docs/design/IO.md)
+    pub capabilities: Vec<*const crate::wire::EncoderDesc>,
 }
 
 unsafe extern "C" fn no_continuation(_m: *mut Machine, _env: u64) -> i32 {
@@ -235,6 +240,7 @@ impl Machine {
             solutions: Vec::new(),
             solution_limit: None,
             output: OutputSink::Stdout,
+            capabilities: Vec::new(),
         })
     }
 

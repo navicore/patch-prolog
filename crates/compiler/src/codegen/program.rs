@@ -10,9 +10,16 @@ use std::fmt::Write;
 /// Runtime functions generated code calls (the plg_rt_* ABI — see
 /// docs/design/RUNTIME_ABI.md; signatures mirror crates/runtime/src/abi.rs).
 const RUNTIME_DECLS: &str = "\
-declare ptr @plg_rt_init(ptr, i32, ptr, i32, ptr, i32, ptr, i32)
+declare ptr @plg_rt_init(ptr, i32, ptr, i32, ptr, i32, ptr, i32, ptr, i32)
 declare i32 @plg_rt_main(ptr, i32, ptr)
 declare void @plg_rt_set_machine(ptr)
+
+; Wire-encoding descriptors (docs/design/IO.md). Codegen's `@plg_caps`
+; capability table takes their addresses in a constant initializer, so each
+; must be declared here. Only those a binary's `@plg_caps` actually lists are
+; referenced and linked; the rest are dead-stripped by `--gc-sections`.
+@PLG_ENC_TEXT = external global i8
+@PLG_ENC_BSON = external global i8
 declare i32 @plg_rt_step(ptr)
 declare i64 @plg_rt_new_var(ptr)
 declare i64 @plg_rt_frame_alloc(ptr, i32)
@@ -144,12 +151,17 @@ pub fn codegen_program(
     let (srcmap_len, files_len) = cg.emit_provenance();
     cg.out.push('\n');
 
+    // --- Wire-encoding capability table (docs/design/IO.md): which `--format`
+    // values this binary advertises. Default `[text]`.
+    let caps_len = cg.emit_capabilities(&directives.io_format)?;
+    cg.out.push('\n');
+
     // --- Entry. Everything else lives in the runtime; the program module just
     // builds the Machine from its baked tables and hands control to the runtime.
     // The init call (atom table, registry, provenance side-tables) is identical
     // across targets; only what happens with the resulting Machine differs.
     let init_call = format!(
-        "%m = call ptr @plg_rt_init(ptr @plg_atom_strs, i32 {}, ptr @plg_registry, i32 {registry_len}, ptr @plg_srcmap, i32 {srcmap_len}, ptr @plg_files, i32 {files_len})",
+        "%m = call ptr @plg_rt_init(ptr @plg_atom_strs, i32 {}, ptr @plg_registry, i32 {registry_len}, ptr @plg_srcmap, i32 {srcmap_len}, ptr @plg_files, i32 {files_len}, ptr @plg_caps, i32 {caps_len})",
         interner.len()
     );
     match target {

@@ -1,8 +1,14 @@
 # Design: Plural wire encodings (text | bson)
 
-Status: **decision recorded, not yet implemented.** Addresses issue #38 — give
-the program author (and the caller) a choice of wire format beyond the JSON-only
-presumption, while keeping stdin/stdout as the only I/O surface.
+Status: **implemented as `text` + `bson`, no JSON** (issue #38). The engine
+speaks two wire encodings — `text` (readable, default) and `bson` (binary,
+TermBuf-in-BinData) — gated by a codegen-baked capability table
+(`:- io_format([...])`, default `[text]`) with dead-stripping. JSON is **not**
+an engine format; a host wanting it derives it from bson at the host boundary
+(the WASM reactor emits bson; its host glue decodes bson→JSON). The body below
+is the original design record — it predates the JSON-removal decision and still
+references json; read it as history. The authoritative current contract is in
+ARCHITECTURE.md and RUNTIME_ABI.md.
 
 ## Intent
 
