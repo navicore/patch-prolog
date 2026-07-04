@@ -35,6 +35,11 @@ pub struct Envelope<'a> {
     /// output streamed to stdout (the CLI text path). Encodings that can't
     /// stream require the caller to have run in capture mode so this is `Some`.
     pub program_output: Option<&'a str>,
+    /// The atom map (id → name, id = array index), when the bson output is
+    /// self-describing (`--atoms`). Lets a host decode bson term values (atom-
+    /// id-keyed TermBuf) from the single document — no external atom source.
+    /// Emitted post-query, so it covers query-introduced atoms too.
+    pub atoms: Option<&'a [String]>,
 }
 
 impl<'a> Envelope<'a> {
@@ -47,6 +52,7 @@ impl<'a> Envelope<'a> {
             exhausted,
             solutions: &m.solutions,
             program_output: m.captured_output(),
+            atoms: None,
         }
     }
 }
@@ -211,6 +217,55 @@ fn bson_doc_end(buf: &mut Vec<u8>, start: usize) {
     buf[start..start + 4].copy_from_slice(&len.to_le_bytes());
 }
 
+/// Emit the `atoms` array element (id = index → name string) into `buf`.
+/// Shared by the envelope's inline map and the standalone `--atoms` map.
+fn bson_atoms_array(buf: &mut Vec<u8>, names: &[String]) {
+    buf.push(T_ARRAY);
+    bson_cstring(buf, "atoms");
+    let arr = bson_doc_begin(buf);
+    for (i, name) in names.iter().enumerate() {
+        buf.push(T_STRING);
+        bson_cstring(buf, &i.to_string());
+        let len = i32::try_from(name.len() + 1).expect("atom name < 2GB");
+        buf.extend_from_slice(&len.to_le_bytes());
+        buf.extend_from_slice(name.as_bytes());
+        buf.push(0x00);
+    }
+    bson_doc_end(buf, arr);
+}
+
+/// Standalone `--atoms` bson output: `{count: N, atoms: [...]}` — just the atom
+/// map (program atoms only; no query has run, so no query-introduced atoms).
+/// For the case where a host wants the map once and its queries won't introduce
+/// new atoms (docs/design/BSON_ATOMS.md).
+pub fn write_atom_map_bson<W: Write>(w: &mut W, m: &Machine) -> io::Result<()> {
+    let names: Vec<String> = (0..m.atoms.len())
+        .map(|i| {
+            m.atoms
+                .try_resolve(i as u32)
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+    let mut buf = Vec::new();
+    let doc = bson_doc_begin(&mut buf);
+    buf.push(T_INT32);
+    bson_cstring(&mut buf, "count");
+    buf.extend_from_slice(&(names.len().min(i32::MAX as usize) as i32).to_le_bytes());
+    bson_atoms_array(&mut buf, &names);
+    bson_doc_end(&mut buf, doc);
+    w.write_all(&buf)
+}
+
+/// Standalone `--atoms` text output: `id\tname` per line (program atoms only).
+pub fn write_atom_map_text<W: Write>(w: &mut W, m: &Machine) -> io::Result<()> {
+    for i in 0..m.atoms.len() {
+        let name = m.atoms.try_resolve(i as u32).unwrap_or_default();
+        writeln!(w, "{i}\t{name}")?;
+    }
+    Ok(())
+}
+
 fn bson_write_envelope(w: &mut dyn Write, m: &Machine, e: &Envelope) -> io::Result<()> {
     let mut buf = Vec::new();
     let doc = bson_doc_begin(&mut buf);
@@ -230,6 +285,13 @@ fn bson_write_envelope(w: &mut dyn Write, m: &Machine, e: &Envelope) -> io::Resu
         buf.extend_from_slice(&len.to_le_bytes());
         buf.extend_from_slice(out.as_bytes());
         buf.push(0x00);
+    }
+
+    // Self-describing mode (`--atoms`): the atom map (id = index) so a host
+    // can resolve bson term atom ids from this same document. Post-query, so
+    // it covers query-introduced atoms too.
+    if let Some(names) = e.atoms {
+        bson_atoms_array(&mut buf, names);
     }
 
     buf.push(T_ARRAY);
@@ -449,6 +511,7 @@ mod tests {
             exhausted: true,
             solutions: &[],
             program_output: None,
+            atoms: None,
         };
         assert_eq!(
             String::from_utf8(bytes(|w| (PLG_ENC_TEXT.write_envelope)(w, &machine(), &e))).unwrap(),
@@ -466,6 +529,7 @@ mod tests {
             exhausted: false,
             solutions: &sols,
             program_output: None,
+            atoms: None,
         };
         assert_eq!(
             String::from_utf8(bytes(|w| (PLG_ENC_TEXT.write_envelope)(w, &machine(), &e1)))
@@ -477,6 +541,7 @@ mod tests {
             exhausted: true,
             solutions: &empty_sols,
             program_output: None,
+            atoms: None,
         };
         assert_eq!(
             String::from_utf8(bytes(|w| (PLG_ENC_TEXT.write_envelope)(w, &machine(), &e2)))
@@ -544,6 +609,7 @@ mod tests {
             exhausted: true,
             solutions: &[],
             program_output: None,
+            atoms: None,
         };
         let buf = bytes(|w| (PLG_ENC_BSON.write_envelope)(w, &m, &e));
         assert_valid_bson_doc(&buf);

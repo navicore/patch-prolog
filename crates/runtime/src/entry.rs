@@ -75,6 +75,7 @@ struct Args {
     limit: Option<usize>,
     format: String,
     input_format: String,
+    atoms: bool,
 }
 
 fn parse_args(argv: Vec<String>) -> Result<Args, String> {
@@ -82,6 +83,7 @@ fn parse_args(argv: Vec<String>) -> Result<Args, String> {
     let mut limit = None;
     let mut format = "text".to_string(); // default wire encoding
     let mut input_format = "text".to_string(); // default: argv `--query`
+    let mut atoms = false; // bson self-describing mode (--atoms)
     let mut it = argv.into_iter().peekable();
     while let Some(arg) = it.next() {
         let (flag, inline_value) = match arg.split_once('=') {
@@ -105,9 +107,10 @@ fn parse_args(argv: Vec<String>) -> Result<Args, String> {
             }
             "-f" | "--format" => format = value(&mut it)?,
             "--input-format" => input_format = value(&mut it)?,
+            "--atoms" => atoms = true,
             "-h" | "--help" => {
                 return Err(
-                    "usage: --query <goal> [--limit N] [--format text|bson] [--input-format text|bson]"
+                    "usage: --query <goal> [--limit N] [--format text|bson] [--input-format text|bson] [--atoms]"
                         .to_string(),
                 );
             }
@@ -119,6 +122,7 @@ fn parse_args(argv: Vec<String>) -> Result<Args, String> {
         limit,
         format,
         input_format,
+        atoms,
     })
 }
 
@@ -127,9 +131,27 @@ fn parse_args(argv: Vec<String>) -> Result<Args, String> {
 /// via the line buffer; non-streamable encodings (bson) get an explicit flush
 /// (Rust's stdout is a `LineWriter`, and bson's no-newline bytes would never
 /// flush on exit without it).
-fn output_solutions(enc: &EncoderDesc, m: &Machine, exhausted: bool) {
+fn output_solutions(enc: &EncoderDesc, m: &Machine, exhausted: bool, atoms: bool) {
     let mut out = io::stdout().lock();
-    let env = Envelope::from_machine(m, exhausted);
+    let mut env = Envelope::from_machine(m, exhausted);
+    // `--atoms`: bson self-describing mode — materialize the post-query atom
+    // map (program + query atoms) so the host can decode term values from this
+    // document. No-op for text (can_stream renders names directly).
+    let atom_names: Vec<String> = if atoms && !(enc.can_stream)() {
+        (0..m.atoms.len())
+            .map(|i| {
+                m.atoms
+                    .try_resolve(i as u32)
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if !atom_names.is_empty() {
+        env.atoms = Some(&atom_names);
+    }
     let _ = (enc.write_envelope)(&mut out, m, &env);
     if !(enc.can_stream)() {
         let _ = out.flush();
@@ -195,6 +217,20 @@ pub unsafe extern "C" fn plg_rt_main(
             return 2;
         }
     };
+    // Standalone `--atoms` (no query): emit the program atom map and exit.
+    // No query runs, so the map is program-atoms-only (the boundary: a query
+    // that introduces atoms needs the with-query `--atoms` form instead).
+    if args.atoms && args.query.is_none() && args.input_format == "text" {
+        let mut out = io::stdout().lock();
+        let e = enc.unwrap();
+        if (e.can_stream)() {
+            let _ = crate::wire::write_atom_map_text(&mut out, m);
+        } else {
+            let _ = crate::wire::write_atom_map_bson(&mut out, m);
+            let _ = out.flush();
+        }
+        return 0;
+    }
     // Resolve the query string and limit by input mode. Default (`text`) takes
     // the query from argv `--query` (required). `--input-format bson` reads a
     // one-field request document `{query, limit?}` from stdin; it requires the
@@ -277,7 +313,7 @@ pub unsafe extern "C" fn plg_rt_main(
         QueryResult::Solutions => {
             let count = m.solutions.len();
             let exhausted = core::exhausted(m);
-            output_solutions(enc.unwrap(), m, exhausted);
+            output_solutions(enc.unwrap(), m, exhausted, args.atoms);
             if count > 0 { 1 } else { 0 }
         }
     }

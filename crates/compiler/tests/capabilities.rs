@@ -207,3 +207,64 @@ fn bson_error_path_on_runtime_error() {
     assert_eq!(code, 3, "undefined predicate ⇒ runtime error ⇒ exit 3");
     assert!(env.error.is_some(), "error encoded as bson, not stderr");
 }
+
+// ── --atoms: bson self-describing mode (docs/design/BSON_ATOMS.md) ──────────
+
+#[test]
+fn atoms_embeds_the_atom_map_in_bson() {
+    let (env, code) = both().query_bson("parent(tom, X)", &["--atoms"]);
+    assert_eq!(code, 1);
+    let atoms = env.atoms.as_ref().expect("envelope carries an atoms array");
+    // Pre-seeded well-known atoms are fixed-order: 0=[], 1=., 2=true, 3=fail,
+    // 4=false. A known id resolves to its name.
+    assert_eq!(atoms.first(), Some(&"[]".to_string()));
+    assert_eq!(atoms.get(2), Some(&"true".to_string()));
+    // Program atoms appear too.
+    assert!(atoms.contains(&"parent".to_string()));
+}
+
+#[test]
+fn default_bson_has_no_atoms_field() {
+    let (env, _) = both().query_bson("parent(tom, X)", &[]);
+    assert!(env.atoms.is_none(), "no atoms field without --atoms");
+}
+
+#[test]
+fn atoms_is_a_noop_on_text() {
+    let (plain, _) = both().query("parent(tom, X)", &["--format", "text"]);
+    let (with_atoms, _) = both().query("parent(tom, X)", &["--format", "text", "--atoms"]);
+    assert_eq!(plain, with_atoms);
+}
+
+#[test]
+fn atoms_map_covers_query_introduced_atoms() {
+    // `f` and `g` are introduced by the query, not the program; they must
+    // appear in the post-query atom map (--atoms rides with the result).
+    let c = compile(":- io_format([text, bson]).\nk(a).\n");
+    let (env, _) = c.query_bson("X = f(g)", &["--atoms"]);
+    let atoms = env.atoms.expect("atoms present");
+    assert!(atoms.contains(&"f".to_string()), "query atom 'f' in map");
+    assert!(atoms.contains(&"g".to_string()), "query atom 'g' in map");
+}
+
+// ── standalone --atoms (no query): program atom map, one-shot ──────────────
+
+#[test]
+fn standalone_atoms_text_emits_program_map() {
+    let (out, code) = default_prog().run_with_stdin(&["--atoms", "--format", "text"], &[]);
+    assert_eq!(code, 0);
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.starts_with("0\t[]\n"), "id 0 is []: {text}");
+    assert!(text.contains("parent"), "program atom present");
+}
+
+#[test]
+fn standalone_atoms_bson_emits_program_map() {
+    // No query runs → the map is program-atoms-only (the standalone boundary).
+    let (bson, code) = default_prog().run_with_stdin(&["--atoms", "--format", "bson"], &[]);
+    assert_eq!(code, 0);
+    let env = harness::bson_decode(&bson).expect("valid bson atom-map document");
+    let atoms = env.atoms.expect("atoms array");
+    assert_eq!(atoms.first(), Some(&"[]".to_string()));
+    assert!(atoms.contains(&"parent".to_string()));
+}
