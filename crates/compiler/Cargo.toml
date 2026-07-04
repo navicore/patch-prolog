@@ -26,8 +26,8 @@ path = "src/lib.rs"
 wasm = []
 
 [dependencies]
-plg-shared = { path = "../shared", version = "=0.3.4", package = "patch-prolog-shared" }
-plg-frontend = { path = "../frontend", version = "=0.3.4", package = "patch-prolog-frontend" }
+plg-shared = { path = "../shared", version = "=0.4.0", package = "patch-prolog-shared" }
+plg-frontend = { path = "../frontend", version = "=0.4.0", package = "patch-prolog-frontend" }
 clap.workspace = true
 clap_complete.workspace = true
 tempfile.workspace = true
@@ -36,7 +36,7 @@ tempfile.workspace = true
 # Version must EXACTLY match workspace version — enforced by build.rs.
 # Declared as a build-dependency so cargo builds libplg_runtime.a
 # BEFORE this crate's build.rs looks for it.
-plg-runtime = { path = "../runtime", version = "=0.3.4", package = "patch-prolog-runtime" }
+plg-runtime = { path = "../runtime", version = "=0.4.0", package = "patch-prolog-runtime" }
 toml.workspace = true
 
 [dev-dependencies]
