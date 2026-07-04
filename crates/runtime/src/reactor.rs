@@ -7,6 +7,9 @@
 //!   plg_rt_alloc(len) → ptr        host writes the query bytes here
 //!   plg_rt_run_query(ptr,len,…) → u64   packed (len<<32 | ptr) of a bson buffer
 //!   plg_rt_free(ptr,len)           host frees the result (or the query buffer)
+//!   plg_rt_atom_name(id) → u64      packed (name_ptr<<32 | len) — the host
+//!                                  resolves bson term atom ids to names. Reads
+//!                                  the runtime interner (program + query atoms).
 //!
 //! Bson formatting and the query path are NOT duplicated here — both go
 //! through `crate::core` (solve) and `crate::wire` (the bson encoding), the
@@ -89,6 +92,27 @@ pub unsafe extern "C" fn plg_rt_free(ptr: *mut u8, len: u32) {
         return;
     }
     unsafe { dealloc(ptr, Layout::from_size_align_unchecked(len as usize, 1)) };
+}
+
+/// Resolve an atom id to its name, packed `(name_ptr << 32) | byte_len`. The
+/// host reads `len` bytes at `ptr` to get the UTF-8 name. This reads the
+/// **runtime interner**, which holds program atoms AND query-introduced atoms
+/// (ids ≥ the compile-time table) — the static `@plg_atom_strs` table can't
+/// resolve the latter. Returns `0` for an out-of-range id (defensive; should
+/// not occur — bson atom ids always come from this interner).
+///
+/// # Safety
+/// Requires `plg_init`. The returned pointer is into the interner's heap and
+/// is stable for the duration of host decode (the interner is only mutated
+/// during `plg_rt_run_query`, never between queries) — the host must read the
+/// bytes before the next query.
+#[unsafe(no_mangle)]
+pub extern "C" fn plg_rt_atom_name(id: u32) -> u64 {
+    let m = unsafe { &*MACHINE.load(Ordering::Relaxed) };
+    match m.atoms.try_resolve(id) {
+        Some(s) => ((s.as_ptr() as u64) << 32) | (s.len() as u64),
+        None => 0,
+    }
 }
 
 /// Run one query (UTF-8 at `qptr..qptr+qlen`) and return packed
