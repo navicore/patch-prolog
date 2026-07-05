@@ -4,7 +4,8 @@
 //! 1. Built-in predicates (from `plg_shared::builtins` — the shared
 //!    vocabulary table; only `completable()` names are offered, so
 //!    operators and `!` never appear as completions).
-//! 2. Stdlib predicates parsed from the embedded `plg_shared::STDLIB_PL`.
+//! 2. Stdlib predicates from the shared `plg_frontend::stdlib_predicates`
+//!    (parsed once from `plg_shared::STDLIB_PL`).
 //! 3. User-defined predicates discovered by parsing the current buffer.
 //!
 //! All three are filtered by the prefix the user is typing. Prefix detection
@@ -12,31 +13,12 @@
 //! (alphanumeric + underscore).
 
 use std::collections::BTreeSet;
-use std::sync::OnceLock;
 
-use plg_shared::STDLIB_PL;
+use plg_frontend::stdlib_predicates;
 use plg_shared::builtins::{atom_names, functor_names};
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, Position};
 
 use crate::buffer::{parse_best_effort, position_to_byte_offset, predicate_indicator};
-
-/// Stdlib predicate `(name, arity)` pairs — parsed once on first access.
-/// Shared with `definition` (which uses it to skip goto-def for
-/// engine-provided predicates that have no source in the user's buffer).
-pub(crate) fn stdlib_predicates() -> &'static [(String, usize)] {
-    static CACHE: OnceLock<Vec<(String, usize)>> = OnceLock::new();
-    CACHE.get_or_init(|| {
-        let mut seen = BTreeSet::new();
-        if let Some((clauses, _, interner)) = parse_best_effort(STDLIB_PL) {
-            for clause in clauses {
-                if let Some(pair) = predicate_indicator(&clause.head, &interner) {
-                    seen.insert(pair);
-                }
-            }
-        }
-        seen.into_iter().collect()
-    })
-}
 
 pub fn compute(content: &str, position: Position) -> Vec<CompletionItem> {
     let prefix = current_word_prefix(content, position);
