@@ -112,8 +112,12 @@ The input line is a **vim-style editor** (the `vim-line` crate).
   walk previously submitted lines. Your in-progress line is stashed and
   restored if you walk back down past the newest entry. History persists
   across sessions in `$HOME/.local/share/plgr_history`.
-- **Completion:** **Tab** completes the word under the cursor against the
-  builtins, the stdlib, and the predicates you've defined this session.
+- **Completion:** **Tab** completes the word under the cursor. For
+  program input it draws on the builtins, the stdlib
+  (`member`/`append`/`length`/…), and the predicates you've defined this
+  session. For a `:`-command line, Tab completes against the command names
+  instead (`:l` → `:list`/`:load`, `:e` → `:edit`). Tab completes to the
+  first match; cycling through multiple matches is a planned follow-up.
 
 ## Commands
 

@@ -14,6 +14,24 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::{Path, PathBuf};
 use vim_line::history::{Recall, Store};
 
+/// Which vocabulary `complete()` should draw from for a given input line.
+enum Mode {
+    Command,
+    Predicate,
+}
+
+/// Command-mode iff the line is a `:`-command — it starts with `:` but is NOT
+/// the `:-` directive (whose body is predicate code). Factored out of
+/// `complete()` so the dispatch rule is unit-testable without an `App`.
+fn completion_mode(text: &str) -> Mode {
+    let t = text.trim_start();
+    if t.starts_with(':') && !t.starts_with(":-") {
+        Mode::Command
+    } else {
+        Mode::Predicate
+    }
+}
+
 /// Solutions fetched per query batch. Small so we don't over-compute when
 /// the user only wants the first answer; doubled on demand as they page
 /// past it (the stateless-binary re-fetch the design notes).
@@ -229,7 +247,11 @@ impl App {
         let _ = std::fs::write(&path, body);
     }
 
-    /// Replace the word under the cursor with the first completion.
+    /// Replace the word under the cursor with the first completion. A
+    /// `:`-command line (one starting with `:` but not the `:-` directive)
+    /// completes against REPL commands; anything else completes against
+    /// predicates/atoms. Command completion offers all commands on an empty
+    /// prefix; predicate completion no-ops on empty (no vocabulary to filter).
     fn complete(&mut self) {
         let text = self.input.text();
         let prefix: String = text
@@ -240,13 +262,18 @@ impl App {
             .into_iter()
             .rev()
             .collect();
-        if prefix.is_empty() {
-            return;
-        }
-        let preds = self.session.predicate_names();
-        let cands = completion::candidates(&prefix, &preds);
+        let base = &text[..text.len() - prefix.len()];
+        let cands = match completion_mode(&text) {
+            Mode::Command => completion::command_candidates(&prefix),
+            Mode::Predicate => {
+                if prefix.is_empty() {
+                    return;
+                }
+                let preds = self.session.predicate_names();
+                completion::candidates(&prefix, &preds)
+            }
+        };
         if let Some(first) = cands.first() {
-            let base = &text[..text.len() - prefix.len()];
             self.input.set(&format!("{base}{first}"));
         }
     }
@@ -552,7 +579,35 @@ const HELP: &str = "\
 
 #[cfg(test)]
 mod tests {
-    use super::App;
+    use super::{App, Mode, completion_mode};
+
+    #[test]
+    fn command_mode_for_colon_lines() {
+        assert!(matches!(completion_mode(":l"), Mode::Command));
+        assert!(matches!(completion_mode(":"), Mode::Command));
+        assert!(matches!(completion_mode("   :load"), Mode::Command));
+        assert!(matches!(completion_mode(":x"), Mode::Command));
+    }
+
+    #[test]
+    fn directive_line_is_predicate_mode_not_command() {
+        // `:- dynamic(f/1).` is a directive — its body is predicate code, so
+        // it must complete against predicates, not REPL commands.
+        assert!(matches!(
+            completion_mode(":- dynamic(foo/1)"),
+            Mode::Predicate
+        ));
+    }
+
+    #[test]
+    fn plain_input_is_predicate_mode() {
+        assert!(matches!(
+            completion_mode("depends_on(app,"),
+            Mode::Predicate
+        ));
+        assert!(matches!(completion_mode("?- foo(X)"), Mode::Predicate));
+        assert!(matches!(completion_mode(""), Mode::Predicate));
+    }
 
     #[test]
     fn replace_session_rejects_bad_source_and_keeps_buffer() {
