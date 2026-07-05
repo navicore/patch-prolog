@@ -117,7 +117,8 @@ The input line is a **vim-style editor** (the `vim-line` crate).
   (`member`/`append`/`length`/…), and the predicates you've defined this
   session. For a `:`-command line, Tab completes against the command names
   instead (`:l` → `:list`/`:load`, `:e` → `:edit`). Tab completes to the
-  first match; cycling through multiple matches is a planned follow-up.
+  first match; repeated Tab cycles through the other matches, and any other
+  key ends the cycle.
 
 ## Commands
 

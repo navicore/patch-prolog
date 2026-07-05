@@ -65,6 +65,19 @@ struct Paging {
     exhausted: bool,
 }
 
+/// Active Tab-completion session: successive Tab presses cycle `idx` through
+/// `candidates`, rebuilding the line as `base + candidates[idx]`. A session is
+/// dropped by any non-Tab input (see `handle_key`), so it can never apply to
+/// text the user edited after the last Tab.
+struct CompletionState {
+    /// The text before the completed word — prepended to the active candidate.
+    base: String,
+    /// Sorted candidate list (command names or predicate/atom names).
+    candidates: Vec<String>,
+    /// Index of the candidate currently shown in the buffer.
+    idx: usize,
+}
+
 #[derive(Default)]
 pub struct App {
     pub session: Session,
@@ -85,6 +98,9 @@ pub struct App {
     cwd: PathBuf,
     /// `Some` while paging a query's solutions with `;`.
     paging: Option<Paging>,
+    /// `Some` while cycling through Tab-completion candidates. Cleared by any
+    /// non-Tab key so a session never outlives the text it applies to.
+    completion: Option<CompletionState>,
 }
 
 impl App {
@@ -177,6 +193,11 @@ impl App {
             self.page_key(key);
             return;
         }
+        // Any non-Tab input discards the completion session, so cycling can
+        // never apply to text the user edited after the last Tab.
+        if !matches!(key.code, KeyCode::Tab) {
+            self.completion = None;
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Char('c' | 'd') if ctrl => self.should_quit = true,
@@ -252,8 +273,26 @@ impl App {
     /// completes against REPL commands; anything else completes against
     /// predicates/atoms. Command completion offers all commands on an empty
     /// prefix; predicate completion no-ops on empty (no vocabulary to filter).
+    ///
+    /// Repeated Tab with an unchanged line cycles through the candidate list;
+    /// any other input ends the cycle (see `handle_key`).
     fn complete(&mut self) {
         let text = self.input.text();
+        // Cycle: a session is active and the line still equals the candidate
+        // we last applied → advance to the next (wrap to 0).
+        let cycling = self
+            .completion
+            .as_ref()
+            .map(|c| text == format!("{}{}", c.base, c.candidates[c.idx]))
+            .unwrap_or(false);
+        if cycling {
+            let c = self.completion.as_mut().unwrap();
+            c.idx = (c.idx + 1) % c.candidates.len();
+            self.input
+                .set(&format!("{}{}", c.base, c.candidates[c.idx]));
+            return;
+        }
+        // Fresh: extract the prefix under the cursor and compute candidates.
         let prefix: String = text
             .chars()
             .rev()
@@ -262,7 +301,7 @@ impl App {
             .into_iter()
             .rev()
             .collect();
-        let base = &text[..text.len() - prefix.len()];
+        let base = text[..text.len() - prefix.len()].to_string();
         let cands = match completion_mode(&text) {
             Mode::Command => completion::command_candidates(&prefix),
             Mode::Predicate => {
@@ -275,6 +314,11 @@ impl App {
         };
         if let Some(first) = cands.first() {
             self.input.set(&format!("{base}{first}"));
+            self.completion = Some(CompletionState {
+                base,
+                candidates: cands,
+                idx: 0,
+            });
         }
     }
 
@@ -580,6 +624,7 @@ const HELP: &str = "\
 #[cfg(test)]
 mod tests {
     use super::{App, Mode, completion_mode};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
     fn command_mode_for_colon_lines() {
@@ -607,6 +652,79 @@ mod tests {
         ));
         assert!(matches!(completion_mode("?- foo(X)"), Mode::Predicate));
         assert!(matches!(completion_mode(""), Mode::Predicate));
+    }
+
+    #[test]
+    fn tab_cycles_through_command_candidates_and_wraps() {
+        let mut app = App::default();
+        app.input.set(":l");
+        app.complete();
+        assert_eq!(app.input.text(), ":list");
+        app.complete();
+        assert_eq!(app.input.text(), ":load");
+        app.complete();
+        assert_eq!(app.input.text(), ":list", "must wrap back to the first");
+    }
+
+    #[test]
+    fn tab_cycles_through_predicate_candidates() {
+        // `atom` matches the `atom/1` type check + atom_chars/concat/length.
+        let mut app = App::default();
+        app.input.set("atom");
+        app.complete();
+        let first = app.input.text();
+        app.complete();
+        let second = app.input.text();
+        app.complete();
+        let third = app.input.text();
+        assert_ne!(first, second, "Tab should advance");
+        assert_ne!(second, third, "Tab should keep advancing");
+        assert!(
+            matches!(
+                first.as_str(),
+                "atom" | "atom_chars" | "atom_concat" | "atom_length"
+            ),
+            "{first} isn't an `atom*` candidate"
+        );
+    }
+
+    #[test]
+    fn non_tab_key_ends_the_cycle() {
+        let mut app = App::default();
+        app.input.set(":l");
+        app.complete();
+        assert!(app.completion.is_some());
+        // Any non-Tab key (here a cursor move) discards the session.
+        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        assert!(
+            app.completion.is_none(),
+            "non-Tab key must drop the session"
+        );
+    }
+
+    #[test]
+    fn empty_candidate_tab_is_a_no_op() {
+        let mut app = App::default();
+        app.input.set(":zzz");
+        app.complete();
+        assert_eq!(app.input.text(), ":zzz", "no match ⇒ buffer unchanged");
+        assert!(
+            app.completion.is_none(),
+            "no session created for no matches"
+        );
+    }
+
+    #[test]
+    fn edit_after_tab_recomputes_from_scratch() {
+        let mut app = App::default();
+        app.input.set(":l");
+        app.complete();
+        assert_eq!(app.input.text(), ":list");
+        // The non-Tab edit cleared the session; the next Tab recomputes.
+        app.completion = None;
+        app.input.set(":e");
+        app.complete();
+        assert_eq!(app.input.text(), ":edit");
     }
 
     #[test]
