@@ -16,11 +16,11 @@
 //! line start a clause for `<name>`?") that's both faster and more tolerant
 //! of mid-edit buffers without it.
 
+use plg_frontend::stdlib_predicates;
 use plg_shared::BUILTINS;
 use tower_lsp::lsp_types::{GotoDefinitionResponse, Location, Position, Range, Url};
 
 use crate::buffer::word_at_position;
-use crate::completion::stdlib_predicates;
 
 pub fn compute(content: &str, position: Position, uri: &Url) -> Option<GotoDefinitionResponse> {
     let name = word_at_position(content, position)?;
