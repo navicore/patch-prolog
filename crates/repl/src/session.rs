@@ -31,6 +31,55 @@ pub enum MetaCmd {
     Unknown(String),
 }
 
+/// One REPL `:`-command: a canonical name plus the aliases accepted at the
+/// prompt. The single source of truth for the command surface — `parse_meta`
+/// resolves a typed token against this, and completion offers the canonical
+/// names. Aliases are for typing/parsing, not completion output.
+pub struct CommandSpec {
+    pub name: &'static str,
+    pub aliases: &'static [&'static str],
+}
+
+impl CommandSpec {
+    /// True if `token` is this command's canonical name or one of its aliases.
+    fn matches(&self, token: &str) -> bool {
+        self.name == token || self.aliases.contains(&token)
+    }
+}
+
+/// The REPL command surface, in data. `parse_meta` and completion both read
+/// from this; a test pins them in sync.
+pub const COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        name: "quit",
+        aliases: &["q"],
+    },
+    CommandSpec {
+        name: "load",
+        aliases: &["l"],
+    },
+    CommandSpec {
+        name: "list",
+        aliases: &["ls"],
+    },
+    CommandSpec {
+        name: "reset",
+        aliases: &[],
+    },
+    CommandSpec {
+        name: "save",
+        aliases: &[],
+    },
+    CommandSpec {
+        name: "edit",
+        aliases: &["e"],
+    },
+    CommandSpec {
+        name: "help",
+        aliases: &["h"],
+    },
+];
+
 /// Classify a single, complete logical entry.
 pub fn classify(entry: &str) -> Input {
     let t = entry.trim();
@@ -55,18 +104,24 @@ pub fn classify(entry: &str) -> Input {
 fn parse_meta(s: &str) -> MetaCmd {
     let mut it = s.split_whitespace();
     let arg = |it: &mut std::str::SplitWhitespace| it.next().map(str::to_string);
-    match it.next().unwrap_or("") {
-        "q" | "quit" => MetaCmd::Quit,
-        "load" | "l" => match arg(&mut it) {
+    let head = it.next().unwrap_or("");
+    // Resolve the typed token against COMMANDS (canonical or alias), then
+    // dispatch on the canonical name with per-command argument handling.
+    let Some(spec) = COMMANDS.iter().find(|c| c.matches(head)) else {
+        return MetaCmd::Unknown(head.to_string());
+    };
+    match spec.name {
+        "quit" => MetaCmd::Quit,
+        "load" => match arg(&mut it) {
             Some(f) => MetaCmd::Load(f),
             None => MetaCmd::Unknown(":load needs a file path".into()),
         },
-        "list" | "ls" => MetaCmd::List,
+        "list" => MetaCmd::List,
         "reset" => MetaCmd::Reset,
         "save" => MetaCmd::Save(arg(&mut it)),
-        "edit" | "e" => MetaCmd::Edit,
-        "help" | "h" => MetaCmd::Help,
-        other => MetaCmd::Unknown(other.to_string()),
+        "edit" => MetaCmd::Edit,
+        "help" => MetaCmd::Help,
+        _ => unreachable!("COMMANDS names a command parse_meta doesn't handle"),
     }
 }
 
@@ -190,7 +245,7 @@ fn byte_offset(src: &str, line: usize, col: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{Session, split_clauses};
+    use super::{COMMANDS, CommandSpec, MetaCmd, Session, parse_meta, split_clauses};
 
     #[test]
     fn predicate_names_cover_heads_and_dynamic_decls() {
@@ -251,5 +306,54 @@ mod tests {
         );
         // ...and a `.` *inside* a block comment is not a clause boundary.
         assert_eq!(split_clauses("p(/* . */ x)."), ["p(/* . */ x)."]);
+    }
+
+    #[test]
+    fn commands_and_parse_meta_are_in_sync() {
+        // Every canonical name and alias parses to its MetaCmd (not Unknown)
+        // and resolves to the right canonical. A placeholder arg is supplied
+        // uniformly so `load` (which requires one) parses; the other commands
+        // ignore it.
+        for spec in COMMANDS {
+            for token in std::iter::once(spec.name).chain(spec.aliases.iter().copied()) {
+                let cmd = parse_meta(&format!("{token} _arg"));
+                assert!(!matches!(cmd, MetaCmd::Unknown(_)), "{token:?} → Unknown");
+                assert_eq!(canonical_of(cmd), spec.name, "{token:?} → wrong canonical");
+            }
+        }
+        // A token COMMANDS doesn't name is Unknown.
+        assert!(matches!(parse_meta("nope _arg"), MetaCmd::Unknown(_)));
+    }
+
+    /// The canonical name each MetaCmd variant corresponds to (for the sync
+    /// test). `Unknown` has none.
+    fn canonical_of(cmd: MetaCmd) -> &'static str {
+        match cmd {
+            MetaCmd::Quit => "quit",
+            MetaCmd::Load(_) => "load",
+            MetaCmd::List => "list",
+            MetaCmd::Reset => "reset",
+            MetaCmd::Save(_) => "save",
+            MetaCmd::Edit => "edit",
+            MetaCmd::Help => "help",
+            MetaCmd::Unknown(_) => "",
+        }
+    }
+
+    #[test]
+    fn commands_table_is_the_documented_surface() {
+        // The exact canonical set the completion/doc checkpoints assume.
+        let names: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
+        assert_eq!(
+            names,
+            ["quit", "load", "list", "reset", "save", "edit", "help"]
+        );
+        // `matches` accepts the canonical name and each alias.
+        let load = CommandSpec {
+            name: "load",
+            aliases: &["l"],
+        };
+        assert!(load.matches("load") && load.matches("l"));
+        assert!(!load.matches("list"));
     }
 }
