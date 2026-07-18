@@ -277,12 +277,16 @@ clean:
 # Development: quick format + build + test
 dev: fmt build test
 
+# Regenerate generated docs (docs/README.md) from the root README
+gen-docs:
+    ./scripts/generate-docs.sh
+
 # Build the mdbook documentation site into ./book/ (what CI publishes)
-docs:
+docs: gen-docs
     @echo "Building documentation..."
     mdbook build
     @echo "✅ Documentation built in book/"
 
 # Serve the docs locally with live reload
-docs-serve:
+docs-serve: gen-docs
     mdbook serve --open

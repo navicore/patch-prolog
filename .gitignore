@@ -35,3 +35,4 @@ libplg_runtime.a
 
 # mdbook generated output
 /book/
+docs/README.md

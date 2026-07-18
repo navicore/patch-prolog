@@ -4,11 +4,12 @@
 [![patch-prolog-repl](https://img.shields.io/crates/v/patch-prolog-repl.svg?label=patch-prolog-repl)](https://crates.io/crates/patch-prolog-repl)
 [![patch-prolog-lsp](https://img.shields.io/crates/v/patch-prolog-lsp.svg?label=patch-prolog-lsp)](https://crates.io/crates/patch-prolog-lsp)
 
-A **standalone Prolog compiler**. `plgc` compiles an ISO-subset Prolog
+**A standalone Prolog compiler.** `plgc` compiles an ISO-subset Prolog
 program to a single native binary with zero runtime dependencies — no
 Rust toolchain, no interpreter, no serialized clause database. Predicates
 become native code via LLVM.
 
+<!-- docs:skip-start -->
 **Home Code Repository** is at [git.navicore.tech](https://git.navicore.tech/navicore/patch-prolog)
 
 **PRs and issues** welcome at [codeberg.org mirror](https://codeberg.org/navicore/patch-prolog)
@@ -17,12 +18,19 @@ become native code via LLVM.
 
 **API docs (rustdoc)** per crate on docs.rs:
 [patch-prolog-shared](https://docs.rs/patch-prolog-shared) · [patch-prolog-frontend](https://docs.rs/patch-prolog-frontend) · [patch-prolog-runtime](https://docs.rs/patch-prolog-runtime) · [patch-prolog-compiler](https://docs.rs/patch-prolog-compiler) · [patch-prolog-lsp](https://docs.rs/patch-prolog-lsp) · [patch-prolog-repl](https://docs.rs/patch-prolog-repl)
+<!-- docs:skip-end -->
 
 ```sh
 plgc build rules.pl -o my-linter      # ~676K standalone binary
 ./my-linter --query "violation(Field, Reason)"
 echo $?   # 0 = no solutions (clean), 1 = solutions found
 ```
+
+The compiled binary contains **no clause interpreter** — control flow is
+generated per predicate as native code, and only primitive services (heap,
+trail, unification, builtins, query parsing, output) come from a small
+runtime statically linked in. The result runs anywhere with libc/libm and
+nothing else.
 
 The
 language semantics (ISO subset, the full builtin vocabulary, the
@@ -32,6 +40,16 @@ the architecture proven by
 [patch-seq](https://git.navicore.tech/navicore/patch-seq): LLVM IR text
 generation, clang linking, and a Rust runtime staticlib embedded in the
 compiler binary.
+
+## The toolchain
+
+Three binaries share the engine:
+
+| Binary | What it is |
+|---|---|
+| `plgc` | The compiler — `build`, `run`, and `check` your Prolog. |
+| `plgr` | An interactive REPL that drives the compiler (never interprets). |
+| `plgl` | A Language Server (diagnostics, completion, hover, go-to-definition). |
 
 ## Requirements
 
@@ -102,9 +120,13 @@ constant C stack.
 
 ## Documentation
 
+<!-- docs:skip-start -->
 The full documentation site is published at
 **<https://docs.navicore.tech/patch-prolog/>** — built from `docs/` with
-mdBook. Source pages:
+mdBook.
+<!-- docs:skip-end -->
+
+Source pages:
 [Getting Started](docs/getting-started.md) ·
 [Compiler Usage](docs/compiler-usage.md) ·
 [Language Guide](docs/language-guide.md) ·
@@ -116,9 +138,12 @@ mdBook. Source pages:
 [Examples](docs/examples.md) ·
 [Architecture](docs/ARCHITECTURE.md)
 
+<!-- docs:skip-start -->
 Build the site locally with `just docs-serve` (live reload) or `just docs`
 (one-shot into `book/`).
+<!-- docs:skip-end -->
 
+<!-- docs:skip-start -->
 ## Releasing
 
 Crates publish to [crates.io](https://crates.io) from **Forgejo Actions**
@@ -151,3 +176,4 @@ Required repo secrets (Forgejo → Settings → Actions → Secrets and Variable
 - `DOCS_CLIENT_ID` — anz client ID for publishing the mdbook
 - `DOCS_CLIENT_SECRET` — anz client secret for publishing the mdbook
 
+<!-- docs:skip-end -->
