@@ -12,7 +12,8 @@ build-dir = "book"
 default-theme = "rust"
 preferred-dark-theme = "ayu"
 git-repository-url = "https://git.navicore.tech/navicore/patch-prolog"
-edit-url-template = "https://git.navicore.tech/navicore/patch-prolog/_edit/main/docs/{path}"
+git-repository-icon = "fas-code-fork"
+edit-url-template = "https://git.navicore.tech/navicore/patch-prolog/_edit/main/{path}"
 site-url = "/patch-prolog/"
 
 [output.html.fold]
