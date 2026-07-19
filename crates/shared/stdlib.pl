@@ -10,8 +10,20 @@ append([], L, L).
 append([H|T], L, [H|R]) :- append(T, L, R).
 
 % length/2 - length of a list
+% Robust form: when N is bound, walk the list counting down and fail
+% fast on N < 0 (and on backtracking past the unique solution); when N is
+% unbound, build the list and count up. The naive `length(T,N1), N is N1+1`
+% diverges for `length(L,-1)` and for build-mode enumeration (the retry at
+% the deepest choice point recomputes N1 = 0-1 = -1 and never bottoms out).
 length([], 0).
-length([_|T], N) :- length(T, N1), N is N1 + 1.
+length([_|T], N) :-
+    (   integer(N)
+    ->  N > 0,
+        N1 is N - 1,
+        length(T, N1)
+    ;   length(T, N1),
+        N is N1 + 1
+    ).
 
 % last/2 - last element of a list
 last([X], X).

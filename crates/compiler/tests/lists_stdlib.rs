@@ -68,6 +68,69 @@ fn reverse_and_last() {
     check(prog(), "last([1, 2, 3], X)", "X = 3", 1);
 }
 
+// ---- length/2 robustness (issue #54) --------------------------------
+// The naive recursive definition diverged on three reachable inputs:
+// build-mode enumeration (`length(L, 3)` with no --limit), negative
+// length (`length(L, -1)`), and any generate-and-test using length/2 to
+// build a skeleton. The stdlib now fails fast when N is a bound negative
+// integer and is deterministic in build mode, so backtracking past the
+// unique solution fails cleanly instead of recursing into negative
+// counts. These tests assert completion + exit code — pre-fix they hit
+// resource_error(steps) (exit 3) after grinding through the step limit.
+
+#[test]
+fn length_build_mode_enumerates_once() {
+    // Pre-fix: diverged on enumeration. Now: exactly one solution, then
+    // no more — the engine exhausts and exits 1.
+    check(prog(), "length(L, 3)", "L = [_V, _V, _V]", 1);
+    check(prog(), "length(L, 0)", "L = []", 1);
+    check(prog(), "length([], N)", "N = 0", 1);
+}
+
+#[test]
+fn length_negative_bound_fails_fast() {
+    // Pre-fix: diverged, building an ever-longer list looking for a
+    // negative length. Now: no list has negative length → clean failure.
+    check(prog(), "length(L, -1)", "false.", 0);
+    check(prog(), "length(L, -5)", "false.", 0);
+}
+
+#[test]
+fn length_findall_in_build_mode_collects_once() {
+    // findall forces enumeration of length/2's choice points — the exact
+    // path that diverged pre-fix. Now it collects exactly one list.
+    check(
+        prog(),
+        "findall(L, length(L, 3), Ls)",
+        "L = _V\nLs = [[_V, _V, _V]]",
+        1,
+    );
+}
+
+// The textbook generate-and-test idiom (N-queens style): length/2 builds
+// the skeleton, then backtracking enumerates fillings. Pre-fix this
+// diverged as soon as the engine backtracked into length/2's choice points.
+const GENTEST: &str = "\
+fill_all([], _).
+fill_all([H|T], D) :- member(H, D), fill_all(T, D).
+gt(Sol) :- length(Sol, 2), fill_all(Sol, [a, b]).
+";
+
+fn gentest() -> &'static Compiled {
+    static C: OnceLock<Compiled> = OnceLock::new();
+    C.get_or_init(|| compile(GENTEST))
+}
+
+#[test]
+fn length_generate_and_test_completes() {
+    check(
+        gentest(),
+        "findall(S, gt(S), Ss)",
+        "S = _V\nSs = [[a, a], [a, b], [b, a], [b, b]]",
+        1,
+    );
+}
+
 #[test]
 fn is_list_predicate() {
     check(prog(), "X = [1,2,3], is_list(X)", "X = [1, 2, 3]", 1);
