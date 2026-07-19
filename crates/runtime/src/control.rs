@@ -8,7 +8,7 @@
 //! choice-point shapes, same commit heights), so a goal behaves
 //! identically whether it appears in a clause body or a query.
 
-use crate::builtins::pred;
+use crate::builtins::{atomops, miscops, pred, sortops, termops, typecheck};
 use crate::cell::*;
 use crate::machine::{ContFn, Machine, NO_SITE};
 use crate::solve::call_goal;
@@ -103,7 +103,6 @@ pub fn try_builtin(m: &mut Machine, name: &str, args_idx: usize, arity: u32) -> 
 /// mirrors codegen's DET_BUILTINS table (lower.rs); the diff corpus
 /// guards the pair. Returns None for non-builtins.
 fn det_builtin(mp: *mut Machine, name: &str, arity: u32, a: &[Word]) -> Option<bool> {
-    use crate::builtins::{atomops, miscops, sortops, termops, typecheck};
     let r = match (name, arity) {
         ("var", 1) => typecheck::plg_rt_b_var_1(mp, a[0]),
         ("nonvar", 1) => typecheck::plg_rt_b_nonvar_1(mp, a[0]),

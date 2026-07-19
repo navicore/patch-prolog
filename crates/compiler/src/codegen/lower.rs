@@ -2,6 +2,7 @@
 //! consumes. Control constructs and deterministic builtins are
 //! recognized here by functor name; everything else is a `Call`.
 
+use super::term_emit::collect_vars;
 use plg_shared::{AtomId, Span, Spanned, StringInterner, Term};
 
 /// Arithmetic comparison op codes — ABI contract with `plg_rt_b_arith_cmp`.
@@ -271,7 +272,6 @@ fn scratch_in(g: &LGoal) -> usize {
 /// Collect variables mentioned anywhere in a goal tree (first-appearance
 /// order), so the clause frame can carry them.
 pub fn collect_goal_vars(g: &LGoal, out: &mut Vec<plg_shared::term::VarId>) {
-    use super::term_emit::collect_vars;
     match &g.node {
         LGoalKind::Call { args, .. } => {
             for a in args {
