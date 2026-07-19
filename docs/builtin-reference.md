@@ -129,7 +129,7 @@ Defined in Prolog (`stdlib.pl`) and compiled into every binary.
 |---|---|
 | `member/2` | `member(X, List)` — succeeds once for each element of List. |
 | `append/3` | `append(A, B, C)` — C is A concatenated with B (relational; works in reverse). |
-| `length/2` | `length(List, N)` — N is the number of elements in List. |
+| `length/2` | `length(List, N)` — N is the number of elements in List. Bidirectional: with List bound it counts; with N bound to a non-negative integer it builds a skeleton of that length (deterministic); with N bound negative it fails. With both unbound it enumerates lists of increasing length (0, 1, 2, …). |
 | `last/2` | `last(List, X)` — X is the last element of List. |
 | `reverse/2` | `reverse(List, Rev)` — Rev is List in reverse order. |
 | `nth0/3` | `nth0(N, List, X)` — X is the element at zero-based index N. |
