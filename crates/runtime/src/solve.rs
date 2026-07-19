@@ -10,7 +10,7 @@
 use crate::cell::*;
 #[cfg(test)]
 use crate::machine::ContFn;
-use crate::machine::{MAX_ARGS, Machine};
+use crate::machine::{CpKind, MAX_ARGS, Machine};
 use crate::render;
 
 pub enum Outcome {
@@ -72,7 +72,6 @@ pub fn drive(m: &mut Machine, floor: usize, mut r: i32) -> i32 {
 /// recovery goal, returning its result. `None` if no frame matches
 /// above `floor` (the error remains set).
 fn unwind_to_catch(m: &mut Machine, floor: usize) -> Option<i32> {
-    use crate::machine::CpKind;
     while m.cps.len() > floor {
         let cp = m.cps.pop().unwrap();
         m.rewind_to(cp.trail_mark, cp.heap_mark);

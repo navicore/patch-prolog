@@ -11,7 +11,7 @@ pub mod link;
 pub mod worker_glue;
 
 use codegen::CgSource;
-use plg_frontend::{CgClause, ParseError, Parser, ProgramDirectives, SourceMap};
+use plg_frontend::{CgClause, ParseError, Parser, ProgramDirectives, SourceMap, lint};
 use plg_shared::{Clause, Span, Spanned, StringInterner};
 use std::path::Path;
 
@@ -213,7 +213,6 @@ pub fn check_files(sources: &[&Path]) -> Result<(), String> {
 /// compilation unit (stdlib included) so stdlib calls aren't flagged.
 /// `Err` only on a parse failure. Callers decide warning vs. error.
 pub fn undefined_predicate_lints(sources: &[&Path]) -> Result<Vec<String>, String> {
-    use plg_frontend::lint;
     let (clauses, directives, interner) = parse_sources(sources)?;
     Ok(lint::undefined_calls(&clauses, &directives, &interner)
         .iter()
