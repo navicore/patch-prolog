@@ -22,7 +22,7 @@ become native code via LLVM.
 
 ```sh
 plgc build rules.pl -o my-linter      # ~676K standalone binary
-./my-linter --query "violation(Field, Reason)"
+./my-linter --query "violation([field(id,integer)], Field, Reason)"
 echo $?   # 0 = no solutions (clean), 1 = solutions found
 ```
 
