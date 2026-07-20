@@ -107,7 +107,8 @@ read stdout at all:
 | `3` | A runtime error (e.g. an uncaught exception, the step limit). |
 
 ```sh
-if ./my-linter --query "violation(_, _)" >/dev/null; then
+./my-linter --query "violation([field(id,integer)], _, _)" >/dev/null
+if [ $? -eq 1 ]; then
     echo "lint violations found"; exit 1
 fi
 ```

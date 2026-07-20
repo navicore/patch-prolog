@@ -1,4 +1,24 @@
 % A build/package dependency graph.
+%
+% Try it (compiles to a temp binary and runs the query):
+%   plgc run examples/deps.pl --query "needs(app, X)" --format text
+%     X = auth
+%     X = ui
+%     X = crypto
+%     X = render
+%     X = crypto          % reached twice: via auth and via ui -> render
+%
+% Other queries to try:
+%   depends_on(app, X)                        % direct dependencies only
+%   shares_dep(auth, render)                  % true — both need crypto
+%   shared_deps(auth, B, Ds)                  % B = render, Ds = [crypto]
+%   findall(D, needs(app, D), Ds)             % collect all answers in a list
+%
+% Or build a standalone binary:
+%   plgc build examples/deps.pl -o deps
+%   ./deps --query "needs(app, X)" --format text
+%
+% See docs/examples.md for a full walkthrough.
 %:- io_format([text, bson]).
 
 depends_on(app, auth).

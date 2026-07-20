@@ -5,6 +5,7 @@
 family
 linting
 deps
+*.wasm
 
 # LLVM IR output
 *.ll

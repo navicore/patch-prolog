@@ -1,5 +1,13 @@
 %
-%pull these into your repl with :edit
+% Snippets from "The Craft of Prolog" — load into the repl with:
+%   plgr
+%   :load examples/craft_of_prolog.pl
+% then query interactively, e.g.:
+%   abs_diff(3, 10, D).              % D = 7
+%   birthday(Who, date(dec, Day)).   % Who = noelen, Day = 25
+%
+% They compile standalone too:
+%   plgc run examples/craft_of_prolog.pl --query "abs_diff(3, 10, D)" --format text
 %
 %
 %abs diff
