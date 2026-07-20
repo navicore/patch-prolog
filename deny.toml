@@ -1,0 +1,21 @@
+# cargo-deny configuration — license compliance gate.
+#
+# The project is MIT; every dependency must be permissive. `cargo deny check
+# licenses` (via `just license-audit`, part of `just ci`) fails if a new
+# dependency introduces a license outside this allow-list — that is the cue
+# to reject the dep, not to widen the list.
+#
+# Note on OR-expressions: deps like `MIT OR Apache-2.0 OR LGPL-2.1-or-later`
+# (r-efi) and `MIT OR MPL-2.0` pass because we *elect* the permissive option;
+# copyleft ids below are never allowed on their own.
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Zlib",
+    "BSL-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+]

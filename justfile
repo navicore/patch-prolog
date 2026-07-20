@@ -239,6 +239,12 @@ lint:
     @echo "Running clippy..."
     cargo clippy --locked --workspace --all-targets -- -D warnings
 
+# Audit dependency licenses against deny.toml (requires cargo-deny)
+license-audit:
+    @echo "Auditing dependency licenses..."
+    cargo deny check licenses
+    @echo "✅ License audit passed!"
+
 # Format all code
 fmt:
     @echo "Formatting code..."
@@ -262,7 +268,7 @@ footprint: build
     rm -rf "$tmp"
 
 # Run all CI checks (same as Forgejo Actions!)
-ci: fmt-check lint test build build-examples test-integration lint-pl check-binary-contents
+ci: fmt-check lint license-audit test build build-examples test-integration lint-pl check-binary-contents
     @echo ""
     @echo "✅ All CI checks passed!"
 

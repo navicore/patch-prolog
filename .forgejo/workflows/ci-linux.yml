@@ -29,6 +29,7 @@ jobs:
         cargo clippy --version
         clang --version
         just --version
+        cargo deny --version
 
     - name: Cache cargo registry
       uses: actions/cache@v5
