@@ -267,8 +267,35 @@ footprint: build
     echo "hello-world binary footprint: $size"
     rm -rf "$tmp"
 
+# CI gate: the hello-world release binary must stay under the ceiling.
+# The ceiling is a product constraint (edge/worker distribution budgets),
+# not a test convenience — do not raise it to silence a failure.
+#
+# Builds in a FRESH target dir scoped to the compiler package: exactly one
+# runtime archive variant exists there, so the measurement is deterministic
+# by construction (#63 — in a workspace-warmed target/, deps/ holds several
+# differently-sized libplg_runtime variants and build.rs's mtime scan is
+# scheduling-dependent). Measures the same artifact shape `cargo install`
+# produces. Costs a few minutes (full release build, no shared cache).
+size-gate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    max=1400000
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cargo build --locked --release -p patch-prolog-compiler --target-dir "$tmp/target"
+    printf 'hello(world).\n' > "$tmp/hello.pl"
+    "$tmp/target/release/plgc" build "$tmp/hello.pl" -o "$tmp/hello"
+    size=$(wc -c < "$tmp/hello")
+    echo "hello-world release binary: $size bytes (ceiling $max)"
+    if [ "$size" -ge "$max" ]; then
+        echo "❌ size-gate: hello-world binary exceeds the ceiling" >&2
+        exit 1
+    fi
+    echo "✅ size-gate passed"
+
 # Run all CI checks (same as Forgejo Actions!)
-ci: fmt-check lint license-audit test build build-examples test-integration lint-pl check-binary-contents
+ci: fmt-check lint license-audit test build build-examples test-integration lint-pl check-binary-contents size-gate
     @echo ""
     @echo "✅ All CI checks passed!"
 
