@@ -8,6 +8,7 @@
 - [Compiler Usage](compiler-usage.md)
 - [WASM Target](wasm-target.md)
 - [WASM Worker (edge)](wasm-worker.md)
+- [Tutorial: Edge Release Decisions](tutorial-coldchain.md)
 
 # Language
 
