@@ -4,24 +4,28 @@
 //! host boundary.)
 
 use crate::cell::*;
+use crate::copyterm::{TermBuf, copy_to_buf};
 use crate::machine::Machine;
 use plg_shared::atom::ATOM_NIL;
 
 /// One captured solution: bindings sorted by variable name,
-/// rendered immediately (terms are undone by backtracking afterwards).
+/// rendered AND snapshotted immediately — heap terms are undone by
+/// backtracking afterwards, so anything cell-backed must be copied out
+/// before the next solution is pursued (#58).
 pub struct RenderedSolution {
-    /// per query variable, `_` excluded. The bson encoder walks `word` via
-    /// `copyterm::copy_to_buf`; the text encoder uses the `text` string.
+    /// per query variable, `_` excluded. The bson encoder serializes `buf`;
+    /// the text encoder uses the `text` string.
     pub bindings: Vec<Binding>,
 }
 
-/// One query-variable binding, materialized at solution time. `word` is the
-/// already-dereferenced value term (zero extra computation over producing the
-/// text); the bson encoder walks it via `copyterm::copy_to_buf`.
+/// One query-variable binding, materialized at solution time. `text` is the
+/// readable form; `buf` is a relocatable snapshot of the (already
+/// dereferenced) value term — a raw heap word would alias later solutions'
+/// cells once backtracking rewinds and reuses the arena.
 pub struct Binding {
     pub name: String,
     pub text: String,
-    pub word: Word,
+    pub buf: TermBuf,
 }
 
 /// Capture the current solution from the machine's query variables.
@@ -36,7 +40,7 @@ pub fn capture_solution(m: &Machine) -> RenderedSolution {
             Binding {
                 name: name.clone(),
                 text: term_to_string(m, w),
-                word: w,
+                buf: copy_to_buf(m, w),
             }
         })
         .collect();

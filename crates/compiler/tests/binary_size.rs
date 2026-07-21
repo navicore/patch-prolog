@@ -1,28 +1,23 @@
-//! Binary hygiene: release binaries must stay lean and standalone.
+//! Binary hygiene: release binaries must stay standalone.
 //!
-//! The release link strips the runtime archive's DWARF
-//! (`-Wl,--strip-debug`) — without it a ~550K hello-world balloons to
-//! ~4.4M. This guard catches regressions in the link flags or runaway
-//! growth in what the runtime drags in.
+//! The size ceiling is enforced by `just size-gate` (in `just ci`), which
+//! builds the release compiler in a fresh target dir — deterministic by
+//! construction. It used to be a cargo test here, but the debug test
+//! environment embeds whichever libplg_runtime variant build.rs's mtime
+//! scan lands on, and under `cargo test --workspace` several differently-
+//! sized variants coexist (#63) — the measurement flapped. What remains
+//! here is the standalone-contract check, which is variant-independent.
 
 mod harness;
 
 #[allow(unused_imports)]
 use std::process::Command;
 
-/// Generous ceiling: hello-world is ~676K today; alert at 2x-ish.
-const MAX_HELLO_BYTES: u64 = 1_400_000;
-
+/// The compiled hello-world still answers (default text format). The size
+/// ceiling lives in `just size-gate` — see the header comment.
 #[test]
-fn hello_world_binary_stays_lean() {
+fn hello_world_binary_answers() {
     let c = harness::compile("hello(world).\n");
-    let bytes = std::fs::metadata(&c.bin).expect("stat binary").len();
-    assert!(
-        bytes < MAX_HELLO_BYTES,
-        "hello-world binary is {bytes} bytes (limit {MAX_HELLO_BYTES}); \
-         did the release link lose -Wl,--strip-debug or grow the runtime?"
-    );
-    // And it still answers (default text format).
     let (out, code) = c.query("hello(X)", &[]);
     assert!(out.contains("X = world"), "{out}");
     assert_eq!(code, 1);

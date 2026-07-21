@@ -166,8 +166,16 @@ pub fn compile_files(
     let (clauses, directives, interner, cg_sources) = parse_sources_cg(sources)?;
     let ir = codegen::codegen_program(&clauses, &directives, &interner, &cg_sources, target)?;
 
+    // `-o missing/dir/prog` should create the directory, not die on the
+    // internal IR temp write with a bare ENOENT (#60).
+    if let Some(parent) = output_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create output directory '{}': {e}", parent.display()))?;
+    }
+
     let ir_path = output_path.with_extension("ll");
-    std::fs::write(&ir_path, &ir).map_err(|e| format!("Failed to write IR file: {e}"))?;
+    std::fs::write(&ir_path, &ir)
+        .map_err(|e| format!("Failed to write IR file '{}': {e}", ir_path.display()))?;
 
     let result = match target {
         Target::Native => link::link_ir(&ir_path, output_path, opt),

@@ -189,6 +189,29 @@ fn try_build_accepts_valid_program() {
     assert_eq!(code, 0, "stderr: {err}");
 }
 
+/// Issue #60: `-o` into a nonexistent directory must create it rather than
+/// die on the internal IR temp write with a bare ENOENT.
+#[test]
+fn output_into_nonexistent_directory_is_created() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("prog.pl");
+    std::fs::write(&src, "ok(yes).\n").expect("write source");
+    let bin = dir.path().join("missing").join("sub").join("prog");
+    let out = Command::new(env!("CARGO_BIN_EXE_plgc"))
+        .arg("build")
+        .arg(&src)
+        .arg("-o")
+        .arg(&bin)
+        .output()
+        .expect("run plgc");
+    assert!(
+        out.status.success(),
+        "build should succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(bin.exists());
+}
+
 // Reference the harness path env so the binary is always built first
 // (compile() already does, but keep this explicit for the shell-out path).
 #[test]
