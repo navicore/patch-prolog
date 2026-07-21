@@ -195,8 +195,8 @@ No imperative version of this policy gives you that query for free.
 ## Step 5 — compile to a worker module
 
 ```sh
-mkdir -p edge
 plgc build --target worker examples/coldchain.pl -o edge/coldchain.worker.wasm
+# (the missing edge/ directory is created for you)
 # note: wrote reactor.mjs, worker.js, wrangler.toml, config.capnp next to …
 ```
 
@@ -231,6 +231,17 @@ Errors keep their native text:
 ```sh
 curl -s --get --data-urlencode 'query=release(romaine,' http://localhost:8080/
 # {"error":"Parse error: unexpected end of query"}
+```
+
+And the Step 4 party trick works at the edge — the backward query, answered
+by a warm isolate, auditing every compiled-in sample lot in one request:
+
+```sh
+curl -s --get --data-urlencode 'query=release_sample(Lot, D, Rs)' http://localhost:8080/
+```
+
+```json
+{"count":4,"exhausted":true,"output":"","solutions":[{"D":"reject","Lot":"lot_1","Rs":[{"functor":"why","args":["reject",{"functor":"implicated_source","args":["basil","mx_sonora"]}]}]},{"D":"quarantine","Lot":"lot_2","Rs":[{"functor":"why","args":["quarantine",{"functor":"excursion_exceeded","args":[240,120]}]}]},{"D":"release","Lot":"lot_3","Rs":[]},{"D":"hold_for_testing","Lot":"lot_4","Rs":[{"functor":"why","args":["hold",{"functor":"untested_watchlist","args":["mesclun","us_ca"]}]}]}]}
 ```
 
 ## Step 7 — make it a REST service
