@@ -20,7 +20,7 @@
 //! naming an encoder statically. Link-time `--gc-sections` then strips any
 //! encoder whose descriptor isn't in the table.
 
-use crate::copyterm::{self, TermBuf};
+use crate::copyterm::TermBuf;
 use crate::machine::Machine;
 use crate::render::RenderedSolution;
 use std::io::{self, Write};
@@ -266,7 +266,7 @@ pub fn write_atom_map_text<W: Write>(w: &mut W, m: &Machine) -> io::Result<()> {
     Ok(())
 }
 
-fn bson_write_envelope(w: &mut dyn Write, m: &Machine, e: &Envelope) -> io::Result<()> {
+fn bson_write_envelope(w: &mut dyn Write, _m: &Machine, e: &Envelope) -> io::Result<()> {
     let mut buf = Vec::new();
     let doc = bson_doc_begin(&mut buf);
 
@@ -302,8 +302,9 @@ fn bson_write_envelope(w: &mut dyn Write, m: &Machine, e: &Envelope) -> io::Resu
         bson_cstring(&mut buf, &i.to_string());
         let sdoc = bson_doc_begin(&mut buf);
         for b in &sol.bindings {
-            let tb = copyterm::copy_to_buf(m, b.word);
-            let payload = serialize_termbuf(&tb);
+            // The TermBuf was snapshotted at capture time — serializing it
+            // must not touch the (long-since-rewound) machine heap (#58).
+            let payload = serialize_termbuf(&b.buf);
             buf.push(T_BINARY);
             bson_cstring(&mut buf, &b.name);
             let len = i32::try_from(payload.len()).expect("termbuf < 2GB");
@@ -475,7 +476,7 @@ fn skip_value(buf: &[u8], off: usize, ty: u8) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cell::{TAG_STR, make, make_atom, make_int, pack_functor, payload, tag_of};
+    use crate::cell::{TAG_LST, TAG_STR, make, make_atom, make_int, pack_functor, payload, tag_of};
     use plg_shared::StringInterner;
     use plg_shared::atom::ATOM_NIL;
 
@@ -498,7 +499,10 @@ mod tests {
                 bindings: vec![crate::render::Binding {
                     name: n.to_string(),
                     text: t.to_string(),
-                    word: make_atom(0),
+                    buf: TermBuf {
+                        cells: Vec::new(),
+                        root: make_atom(0),
+                    },
                 }],
             })
             .collect()
@@ -649,7 +653,7 @@ mod tests {
     fn termbuf_framing_roundtrips_scalar_and_cycle() {
         let m = machine();
         let a = make_atom(7);
-        let tb = copyterm::copy_to_buf(&m, a);
+        let tb = crate::copyterm::copy_to_buf(&m, a);
         assert!(tb.cells.is_empty());
         let rt = deserialize_termbuf(&serialize_termbuf(&tb));
         assert_eq!(rt.root, a);
@@ -664,9 +668,9 @@ mod tests {
             make(TAG_STR, i as u64)
         };
         m.bind(payload(x) as usize, s);
-        let tb = copyterm::copy_to_buf(&m, s);
+        let tb = crate::copyterm::copy_to_buf(&m, s);
         let rt = deserialize_termbuf(&serialize_termbuf(&tb));
-        let restored = copyterm::restore_from_buf(&mut m, &rt);
+        let restored = crate::copyterm::restore_from_buf(&mut m, &rt);
         assert_eq!(tag_of(restored), TAG_STR);
         let ri = payload(restored) as usize;
         assert_eq!(
@@ -674,6 +678,73 @@ mod tests {
             restored,
             "f(X) arg is the term itself"
         );
+    }
+
+    /// #58: multi-solution bson output must not alias cell-backed bindings
+    /// to the last solution's value. Solutions used to capture raw heap
+    /// words which the encoder walked AFTER solving — when backtracking
+    /// had already rewound and reused the arena — so every solution
+    /// rendered the last one's list. Snapshots are taken at capture time.
+    #[test]
+    fn bson_solutions_do_not_alias_across_heap_reuse() {
+        // Solution 1: X = [1, 2].
+        let mut m = machine();
+        let x = m.new_var();
+        m.query_vars.push(("X".to_string(), payload(x) as usize));
+        let build = |m: &mut Machine, a: i64, b: i64| {
+            let inner = {
+                let i = m.heap.len();
+                m.heap.push(make_int(b));
+                m.heap.push(make_atom(ATOM_NIL));
+                make(TAG_LST, i as u64)
+            };
+            let i = m.heap.len();
+            m.heap.push(make_int(a));
+            m.heap.push(inner);
+            make(TAG_LST, i as u64)
+        };
+        let mark = m.heap.len();
+        let l12 = build(&mut m, 1, 2);
+        m.bind(payload(x) as usize, l12);
+        let sol1 = crate::render::capture_solution(&m);
+
+        // Backtracking rewinds the heap (and the trail unbinds X); the next
+        // solution's list lands on the SAME cells sol1's binding used.
+        m.heap.truncate(mark);
+        m.heap[payload(x) as usize] = x; // trail rewind: X is unbound again
+        let l34 = build(&mut m, 3, 4);
+        m.bind(payload(x) as usize, l34);
+        let sol2 = crate::render::capture_solution(&m);
+
+        let sols = [sol1, sol2];
+        let e = Envelope {
+            count: 2,
+            exhausted: true,
+            solutions: &sols,
+            program_output: None,
+            atoms: None,
+        };
+        let buf = bytes(|w| (PLG_ENC_BSON.write_envelope)(w, &machine(), &e));
+
+        // Extract each solution's `X` BinData payload (T_BINARY, "X\0",
+        // i32 len, subtype byte, payload) and decode it back to a term.
+        let mut payloads: Vec<Vec<u8>> = Vec::new();
+        for i in 0..buf.len().saturating_sub(8) {
+            if buf[i] == T_BINARY && buf[i + 1..].starts_with(b"X\0") {
+                let len = i32::from_le_bytes(buf[i + 3..i + 7].try_into().unwrap()) as usize;
+                payloads.push(buf[i + 8..i + 8 + len].to_vec());
+            }
+        }
+        assert_eq!(payloads.len(), 2, "one X binding per solution");
+
+        let mut m2 = machine();
+        let render = |m2: &mut Machine, p: &[u8]| {
+            let tb = deserialize_termbuf(p);
+            let w = crate::copyterm::restore_from_buf(m2, &tb);
+            crate::render::term_to_string(m2, w)
+        };
+        assert_eq!(render(&mut m2, &payloads[0]), "[1, 2]");
+        assert_eq!(render(&mut m2, &payloads[1]), "[3, 4]");
     }
 
     // ── bson input parsing ─────────────────────────────────────────────────
