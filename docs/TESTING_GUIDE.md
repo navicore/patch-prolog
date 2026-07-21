@@ -24,8 +24,10 @@ engine — the thing being tested is the compiler.
    - `just check-binary-contents` — a hello-world binary must not
      contain symbols from builtin families it never references
      (linker dead-stripping is working).
-   - `just footprint` — track hello-world binary size; the patch-seq
-     bar is ~730 KB on Linux.
+   - `just size-gate` — the CI size gate: hello-world release binary
+     must stay under the 1.4 MB ceiling, built in a fresh target dir so
+     the measurement is deterministic (#63). `just footprint` is the
+     dev-time recorder; the patch-seq bar is ~730 KB on Linux.
 
 ## Invariants every milestone must keep
 

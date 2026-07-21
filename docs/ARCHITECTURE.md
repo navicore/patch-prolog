@@ -56,7 +56,7 @@ or `plg-shared`; every byte there lands in every user binary. (The
 compiler-side crates — `plg-frontend`, `plg-compiler`, `plg-lsp`,
 `plg-repl` — are dev tooling and carry no such constraint.) This is a
 strong default, not an absolute: a dependency that demonstrably pays for
-its bytes against the footprint gate, or is scoped to compiler-side crates,
+its bytes against the size gate, or is scoped to compiler-side crates,
 can be considered.
 
 ## Execution model (summary)
