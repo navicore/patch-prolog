@@ -2,9 +2,11 @@
 
 Build and deploy a real REST service on Cloudflare's edge: a **cold-chain
 release-decision API** for fresh produce, written in Prolog, compiled to a
-reactor wasm module, and served from a V8 isolate. Every command and every
-output below is real — the example program ships as
-[`examples/coldchain.pl`](examples.md) and each step was run against it.
+reactor wasm module, and served from a V8 isolate. Everything you need is in
+this directory: the program (`coldchain.pl`), the REST handler (`worker.js`),
+and this walkthrough. The final phase puts it on Cloudflare's global network
+on the **free tier** — after that, `curl` from anywhere on the planet is
+doing logic inference against your Prolog.
 
 **The scenario.** A multistate *Cyclospora* outbreak is active and your
 distribution center needs a decision for every incoming lot: `release`,
@@ -35,11 +37,12 @@ just install-wasm                            # plgc with wasm support
 npm i -g workerd                             # local dev loop
 ```
 
-You only need Cloudflare tooling (`npx wrangler login`) at the deploy step.
+You only need a Cloudflare account and `npx wrangler` at the deploy phase —
+and the free tier is enough for everything below.
 
 ## Step 1 — the policy, as facts
 
-Create `coldchain.pl` (or follow along in `examples/coldchain.pl`). First the
+Create `coldchain.pl` (or follow along in this directory's). First the
 outbreak advisory and the per-commodity transport policy:
 
 ```prolog
@@ -153,19 +156,19 @@ Develop with the native loop — answers are byte-identical to what the edge
 module will return, so all rule work happens here:
 
 ```sh
-plgc run examples/coldchain.pl --query \
+plgc run examples/coldchain/coldchain.pl --query \
   "release(romaine, us_az, standard, no, [r(0,2.0), r(120,6.5), r(240,6.9), r(360,3.0)], D, Rs)"
 # D = quarantine
 # Rs = [why(quarantine, excursion_exceeded(240, 120))]
 
 # The same lot in a certified shipper — the exception flips the decision:
-plgc run examples/coldchain.pl --query \
+plgc run examples/coldchain/coldchain.pl --query \
   "release(romaine, us_az, certified_shipper, no, [r(0,2.0), r(120,6.5), r(240,6.9), r(360,3.0)], D, Rs)"
 # D = release
 # Rs = []
 
 # An implicated lot: lab-tested, perfect cold chain — rejected anyway.
-plgc run examples/coldchain.pl --query \
+plgc run examples/coldchain/coldchain.pl --query \
   "release(basil, mx_sonora, certified_shipper, yes, [r(0,3.0), r(180,3.2)], D, Rs)"
 # D = reject
 # Rs = [why(reject, implicated_source(basil, mx_sonora))]
@@ -175,7 +178,7 @@ plgc run examples/coldchain.pl --query \
 backtracking enumerates *which lots fail and why* across the whole rule set:
 
 ```sh
-plgc run examples/coldchain.pl --query "release_sample(Lot, D, Rs)"
+plgc run examples/coldchain/coldchain.pl --query "release_sample(Lot, D, Rs)"
 # D = reject
 # Lot = lot_1
 # Rs = [why(reject, implicated_source(basil, mx_sonora))]
@@ -195,15 +198,15 @@ No imperative version of this policy gives you that query for free.
 ## Step 5 — compile to a worker module
 
 ```sh
-plgc build --target worker examples/coldchain.pl -o edge/coldchain.worker.wasm
+plgc build --target worker examples/coldchain/coldchain.pl -o edge/coldchain.worker.wasm
 # (the missing edge/ directory is created for you)
 # note: wrote reactor.mjs, worker.js, wrangler.toml, config.capnp next to …
 ```
 
 You get the reactor module (**≈1.8 MB** — well inside the Workers budget)
 plus four scaffolding files, written only if absent: `reactor.mjs` (the
-buffer-ABI marshalling), `worker.js` (the fetch handler — you'll edit it in
-Step 7), `wrangler.toml`, and `config.capnp`. Rebuilds refresh the `.wasm`
+buffer-ABI marshalling), `worker.js` (the fetch handler — you'll replace it
+in Step 7), `wrangler.toml`, and `config.capnp`. Rebuilds refresh the `.wasm`
 and never clobber your glue edits.
 
 ## Step 6 — serve it locally
@@ -247,8 +250,15 @@ curl -s --get --data-urlencode 'query=release_sample(Lot, D, Rs)' http://localho
 ## Step 7 — make it a REST service
 
 The generated handler is a raw query passthrough. A real service owns its
-contract: JSON in, decision out, Prolog inside. Replace the scaffolding
-`worker.js` (it is never regenerated — editing is the intended use):
+contract: JSON in, decision out, Prolog inside. This directory ships the
+replacement as `worker.js` — copy it over the scaffolding (which is never
+regenerated, so the copy survives rebuilds):
+
+```sh
+cp examples/coldchain/worker.js edge/worker.js
+```
+
+The whole file, for reading (it's short — every piece matters):
 
 ```js
 import { runQuery, assertExports } from "./reactor.mjs";
@@ -373,23 +383,92 @@ a malformed body gets `400 {"error":"invalid JSON body"}`, a bad field gets
 `400 {"error":"commodity must be a lowercase atom like 'basil'"}`, and an
 unknown path gets 404.
 
-## Step 8 — deploy, then watch the outbreak evolve
+## Phase 2 — put it on the planet (free tier)
 
-`wrangler.toml` was emitted with the module; deploy from the `edge/`
-directory:
+Everything so far ran on your machine. This phase ships the service to
+Cloudflare's global network: the same isolate, replicated to every region,
+answering `curl` from anywhere in single-digit milliseconds. A free
+Cloudflare account in good standing covers all of it — no card, no trial
+clock. We assume Cloudflare is also the DNS provider for your domain, which
+makes the custom-domain step fully automatic.
+
+### 8a — one-time setup (account, login, workers.dev subdomain)
+
+1. Sign up at cloudflare.com (free).
+2. Authenticate the CLI: `npx wrangler login` — it opens a browser OAuth
+   flow; `npx wrangler whoami` should then show your account.
+3. Pick your `workers.dev` subdomain, once per account. The dashboard
+   prompts for it on first visit to **Workers & Pages**; the first
+   `wrangler deploy` will also tell you if it's missing. Every free-tier
+   service you ever deploy lives under `https://<name>.<subdomain>.workers.dev`.
+
+### 8b — deploy and curl your first planet-scale inference
+
+`wrangler.toml` was emitted next to the module in Step 5; deploy from the
+`edge/` directory:
 
 ```sh
-npx wrangler login     # once
+cd edge
 npx wrangler deploy
-curl -s -X POST https://coldchain.<your-subdomain>.workers.dev/v1/release \
-  -H 'content-type: application/json' --data '{"commodity":"mesclun", … }'
+# Uploaded coldchain (x.xx sec)
+# Published coldchain (x.xx sec)
+#   https://coldchain.<your-subdomain>.workers.dev
 ```
 
-The isolate cold-starts once (`plg_init` builds the machine), then every
-request is a warm in-memory call — no process fork, no per-request parse.
+That's it — the service is live in every region Cloudflare has. Prove it to
+yourself from a couple of networks (your box, your phone on LTE):
 
-Now the payoff. The traceback implicates raspberries from Jalisco. The update
-is one clause:
+```sh
+curl -s -X POST https://coldchain.<your-subdomain>.workers.dev/v1/release \
+  -H 'content-type: application/json' \
+  --data '{"commodity":"romaine","origin":"us_az","packaging":"standard","tested":"no",
+           "readings":[{"minute":0,"temp":2.0},{"minute":120,"temp":6.5},
+                       {"minute":240,"temp":6.9},{"minute":360,"temp":3.0}]}'
+```
+
+```json
+{"decision":"quarantine","reasons":[{"severity":"quarantine","rule":"excursion_exceeded","args":[240,120]}]}
+```
+
+Same bytes as localhost — except the answer now comes from an isolate in
+whichever of ~300 cities is closest to the caller. The isolate cold-starts
+once (`plg_init` builds the machine), then every request is a warm
+in-memory call: no process fork, no per-request parse, no container.
+
+### 8c — your own hostname (Cloudflare is the DNS, so this is one stanza)
+
+Because your domain's zone lives on Cloudflare, a Workers **custom domain**
+needs no DNS editing, no cert provisioning, and costs nothing — Cloudflare
+creates the record and issues TLS automatically. Add one stanza to
+`edge/wrangler.toml`:
+
+```toml
+routes = [
+  { pattern = "coldchain.example.com", custom_domain = true }
+]
+```
+
+Redeploy:
+
+```sh
+npx wrangler deploy
+# …
+#   coldchain.example.com (custom domain)
+```
+
+```sh
+curl -s -X POST https://coldchain.example.com/v1/release \
+  -H 'content-type: application/json' \
+  --data '{"commodity":"mesclun","origin":"us_ca","packaging":"standard","tested":"no","readings":[]}'
+# {"decision":"hold_for_testing","reasons":[{"severity":"hold","rule":"untested_watchlist","args":["mesclun","us_ca"]}]}
+```
+
+The workers.dev URL keeps working alongside the custom domain.
+
+### 8d — watch the outbreak evolve, globally, in seconds
+
+Now the payoff. The traceback implicates raspberries from Jalisco. The
+update is one clause in `coldchain.pl`:
 
 ```prolog
 implicated(raspberries, mx_jalisco).
@@ -398,23 +477,32 @@ implicated(raspberries, mx_jalisco).
 Rebuild and redeploy:
 
 ```sh
-plgc build --target worker examples/coldchain.pl -o edge/coldchain.worker.wasm
-npx wrangler deploy
+plgc build --target worker examples/coldchain/coldchain.pl -o edge/coldchain.worker.wasm
+cd edge && npx wrangler deploy
 ```
 
 `lot_3` — which released yesterday — now returns
-`{"decision":"reject","reasons":[{"severity":"reject","rule":"implicated_source","args":["raspberries","mx_jalisco"]}]}`.
-The policy change touched no control flow, because there isn't any: the
-advisory is data, and the deploy *is* the policy update.
+`{"decision":"reject","reasons":[{"severity":"reject","rule":"implicated_source","args":["raspberries","mx_jalisco"]}]}`
+everywhere on Earth within seconds. The policy change touched no control
+flow, because there isn't any: the advisory is data, and the deploy *is*
+the policy update.
+
+### What the free tier includes (and the limits you'll never notice here)
+
+- **100,000 requests/day**, no credit card.
+- **10 ms CPU time per request** — CPU, not wall clock; the queries above
+  are sub-millisecond. (`runQuery` options mirror the native knobs if a
+  future rule set needs headroom: `runQuery(reactor(), goal, { stepLimit:
+  100_000_000n })`, plus `limit` and `depthLimit`.)
+- **3 MiB compressed worker size** — this module is ≈1.8 MB uncompressed,
+  well under after compression.
+- **Custom domains and TLS** on your Cloudflare-DNS zones: free.
+- The one structural rule to respect: **one in-flight query per isolate** —
+  the handler satisfies it by never yielding around `runQuery`. Keep that
+  when you extend it.
 
 ## Tuning and limits
 
-- **`runQuery` options** mirror the native knobs:
-  `runQuery(reactor(), goal, { stepLimit: 100_000_000n })` raises the step
-  ceiling (i64, hence the BigInt); `limit` bounds solutions, `depthLimit`
-  bounds metacall depth. The defaults are ample for this rule set.
-- **One in-flight query per isolate** — the handler above satisfies this by
-  never yielding around `runQuery`. Keep it that way when you extend it.
 - **Footprint**: large fact tables inflate the module's `.rodata`. A real
   advisory with thousands of implicated (lot, origin) pairs still fits
   comfortably; a national lot-level database belongs behind the API, passed
@@ -425,6 +513,6 @@ advisory is data, and the deploy *is* the policy update.
 - Add severities (e.g. `recall` for lots already shipped) — one clause each.
 - Version the advisory (`advisory(2025_07, …)`) and return the version in the
   response for audit trails.
-- Pair with the [WASM Worker reference](wasm-worker.md) for the buffer ABI if
-  you outgrow `reactor.mjs`, or drop to [Tier 1](wasm-target.md) if the data
-  outgrows isolates.
+- Pair with the [WASM Worker reference](../../docs/wasm-worker.md) for the
+  buffer ABI if you outgrow `reactor.mjs`, or drop to
+  [Tier 1](../../docs/wasm-target.md) if the data outgrows isolates.

@@ -12,24 +12,24 @@
 % reason a lot fails — the audit trail is the answer, not a log line.
 %
 % Try it (compiles to a temp binary and runs the query):
-%   plgc run examples/coldchain.pl --query \
+%   plgc run examples/coldchain/coldchain.pl --query \
 %     "release(romaine, us_az, standard, no, [r(0,2.0), r(120,6.5), r(240,6.9), r(360,3.0)], D, Rs)"
 %     D = quarantine
 %     Rs = [why(quarantine, excursion_exceeded(240, 120))]
 %
 % Same lot, certified shipper packaging (extends the excursion budget):
-%   plgc run examples/coldchain.pl --query \
+%   plgc run examples/coldchain/coldchain.pl --query \
 %     "release(romaine, us_az, certified_shipper, no, [r(0,2.0), r(120,6.5), r(240,6.9), r(360,3.0)], D, Rs)"
 %     D = release
 %
 % An implicated lot is rejected even with lab tests and a perfect cold chain:
-%   plgc run examples/coldchain.pl --query \
+%   plgc run examples/coldchain/coldchain.pl --query \
 %     "release(basil, mx_sonora, certified_shipper, yes, [r(0,3.0), r(180,3.2)], D, Rs)"
 %     D = reject
 %     Rs = [why(reject, implicated_source(basil, mx_sonora))]
 %
 % Run it backward over the compiled-in sample lots (the generative query):
-%   plgc run examples/coldchain.pl --query "release_sample(Lot, D, Rs)"
+%   plgc run examples/coldchain/coldchain.pl --query "release_sample(Lot, D, Rs)"
 %
 % NOTE: advisory data below is ILLUSTRATIVE, not a real FDA advisory.
 

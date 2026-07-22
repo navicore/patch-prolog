@@ -192,7 +192,7 @@ build-examples: build
     set -euo pipefail
     echo "Building examples..."
     mkdir -p target/examples
-    for file in examples/*.pl; do
+    for file in examples/*.pl examples/coldchain/coldchain.pl; do
         name=$(basename "$file" .pl)
         echo "  Compiling $file..."
         if ! out=$(target/release/plgc build "$file" -o "target/examples/$name" 2>&1); then
@@ -231,7 +231,7 @@ check-binary-contents:
 # Lint all Prolog example sources with the compiler's static checks
 lint-pl: build
     @echo "Checking Prolog sources..."
-    ./target/release/plgc check examples/*.pl
+    ./target/release/plgc check examples/*.pl examples/coldchain/coldchain.pl
     @echo "✅ Prolog check passed!"
 
 # Run clippy on all workspace members
