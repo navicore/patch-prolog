@@ -148,6 +148,9 @@ no Prolog runtime to run — hand it to anyone.
 
 ## Where to next
 
+- The full edge-deployment tutorial — Prolog policy → worker module → REST
+  contract → Cloudflare free tier — lives with its code:
+  `examples/coldchain/README.md`.
 - [Language Guide](language-guide.md) — the concepts these programs use.
 - [Compiler Usage](compiler-usage.md) — every `plgc` flag and the query
   wire-contract.

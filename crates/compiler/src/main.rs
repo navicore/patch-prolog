@@ -171,7 +171,7 @@ fn emit_worker_glue(output: &std::path::Path) {
                 output.display()
             );
             eprintln!("      serve locally:  just wasm-worker-serve <prog.pl>");
-            eprintln!("      deploy:         wrangler deploy");
+            eprintln!("      deploy:         npx wrangler deploy");
         }
         Err(e) => eprintln!("warning: reactor built, but writing worker glue failed: {e}"),
     }

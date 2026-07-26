@@ -12,7 +12,7 @@ become native code via LLVM.
 <!-- docs:skip-start -->
 **Home Code Repository** is at [git.navicore.tech](https://git.navicore.tech/navicore/patch-prolog)
 
-**PRs and issues** welcome at [codeberg.org mirror](https://codeberg.org/navicore/patch-prolog)
+**PRs and issues** welcome at the [GitHub mirror](https://github.com/navicore/patch-prolog)
 
 [Documentation](https://docs.navicore.tech/patch-prolog)
 

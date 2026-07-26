@@ -1,0 +1,518 @@
+# Tutorial: an edge release-decision service
+
+Build and deploy a real REST service on Cloudflare's edge: a **cold-chain
+release-decision API** for fresh produce, written in Prolog, compiled to a
+reactor wasm module, and served from a V8 isolate. Everything you need is in
+this directory: the program (`coldchain.pl`), the REST handler (`worker.js`),
+and this walkthrough. The final phase puts it on Cloudflare's global network
+on the **free tier** — after that, `curl` from anywhere on the planet is
+doing logic inference against your Prolog.
+
+**The scenario.** A multistate *Cyclospora* outbreak is active and your
+distribution center needs a decision for every incoming lot: `release`,
+`hold_for_testing`, `quarantine`, or `reject` — plus **the reasons**, because
+a safety decision you can't explain is worthless. Cyclospora makes the policy
+interesting: it's a parasite that contaminates produce *at the source*, so
+refrigeration doesn't mitigate it — an implicated lot has no release path no
+matter how perfect its cold chain is. Temperature rules still apply to every
+lot for ordinary quality reasons.
+
+This is exactly the kind of logic that rots into a wall of if/then and
+switch statements: tiered severities, exceptions on exceptions, and "list
+*everything* that's wrong." In Prolog each rule is one clause, exceptions are
+guards on the clause, and `findall` makes the audit trail the answer itself.
+
+> The advisory data in the example is **illustrative**, not a real FDA
+> advisory.
+
+## Prerequisites
+
+A wasm-capable `plgc` (both wasm targets are needed — the `wasm` feature
+embeds both runtime archives), plus `workerd` for the local loop:
+
+```sh
+rustup target add wasm32-unknown-unknown wasm32-wasip1
+rustup component add llvm-tools-preview      # llc + wasm-ld
+just install-wasm                            # plgc with wasm support
+npm i -g workerd                             # local dev loop
+```
+
+You only need a Cloudflare account and `npx wrangler` at the deploy phase —
+and the free tier is enough for everything below.
+
+## Step 1 — the policy, as facts
+
+Create `coldchain.pl` (or follow along in this directory's). First the
+outbreak advisory and the per-commodity transport policy:
+
+```prolog
+% Commodities named in the active Cyclospora advisory.
+watchlist(basil).
+watchlist(cilantro).
+watchlist(raspberries).
+watchlist(mesclun).
+
+% Traceback-implicated (commodity, origin) pairs: no release path.
+implicated(basil, mx_sonora).
+
+% class_band(Commodity, MinC, MaxC) — acceptable transport temperatures.
+class_band(basil, 2, 7).
+class_band(romaine, 0, 4).
+% …one clause per commodity…
+
+% excursion_limit(Commodity, Minutes) — cumulative out-of-band time tolerated.
+excursion_limit(basil, 60).
+excursion_limit(romaine, 120).
+
+% The packaging exception: a certified shipper extends the budget.
+packaging_bonus(certified_shipper, 120).
+```
+
+Nothing here is control flow — the advisory *is* data. When the traceback
+implicates a new origin tomorrow, that's one more clause, not a code change.
+
+## Step 2 — rules that earn reasons
+
+The heart of the service: `reason/6` relates a lot to every reason it fails,
+tagged with a severity (`reject` > `hold` > `quarantine`):
+
+```prolog
+% An implicated (commodity, origin) pair is rejected outright. Note what is
+% NOT in this clause: temperature. No cold chain clears a source-pathogen lot.
+reason(Commodity, Origin, _Pkg, _Tested, _Readings,
+       why(reject, implicated_source(Commodity, Origin))) :-
+    implicated(Commodity, Origin).
+
+% A watchlist commodity from a NON-implicated origin may still carry the
+% parasite: hold for lab testing unless it arrived with a certified negative.
+reason(Commodity, Origin, _Pkg, Tested, _Readings,
+       why(hold, untested_watchlist(Commodity, Origin))) :-
+    watchlist(Commodity),
+    \+ implicated(Commodity, Origin),
+    Tested = no.
+
+% Fail closed: an unrecognized commodity earns manual review, never a
+% release. Without this clause it would match no rule and auto-release.
+reason(Commodity, _Origin, _Pkg, _Tested, _Readings,
+       why(hold, unknown_commodity(Commodity))) :-
+    \+ class_band(Commodity, _, _).
+```
+
+Read the second clause as the requirement reads — "watchlist, *unless*
+implicated (that's `reject`'s job), *unless* tested." The `\+` guards are the
+exceptions, stated where they belong instead of nested inside an if-ladder.
+
+## Step 3 — cumulative temperature excursions
+
+Sensor readings arrive as a list of `r(MinuteSinceLoading, TempC)` terms.
+Two rules: a single reading more than 5° outside the band is a hard breach,
+and total out-of-band time beyond the (packaging-adjusted) budget is an
+excursion:
+
+```prolog
+reason(Commodity, _Origin, _Pkg, _Tested, Readings,
+       why(quarantine, temp_breach(Minute, Temp))) :-
+    member(r(Minute, Temp), Readings),
+    class_band(Commodity, Lo, Hi),
+    ( Temp < Lo - 5 ; Temp > Hi + 5 ).
+
+reason(Commodity, _Origin, Pkg, _Tested, Readings,
+       why(quarantine, excursion_exceeded(Minutes, Limit))) :-
+    oob_minutes(Commodity, Readings, 0, Minutes),
+    limit_for(Commodity, Pkg, Limit),
+    Minutes > Limit.
+
+% Sum the intervals ending at each out-of-band reading.
+oob_minutes(_, [], _, 0).
+oob_minutes(Commodity, [r(Minute, Temp)|Rs], Prev, Total) :-
+    oob_minutes(Commodity, Rs, Minute, Rest),
+    class_band(Commodity, Lo, Hi),
+    ( (Temp < Lo ; Temp > Hi)
+    -> Delta is Minute - Prev, Total is Rest + Delta
+    ;  Total = Rest ).
+```
+
+`member/2` in the first rule is nondeterministic — it produces one reason
+*per breaching reading*, no loop required. `limit_for/3` applies the
+certified-shipper bonus with a `->` guard.
+
+## Step 4 — the decision, tested natively
+
+`findall` gathers **every** reason; the worst severity wins:
+
+```prolog
+release(Commodity, Origin, Pkg, Tested, Readings, Decision, Reasons) :-
+    findall(R, reason(Commodity, Origin, Pkg, Tested, Readings, R), Reasons),
+    decide(Reasons, Decision).
+
+decide(Reasons, Decision) :-
+    ( member(why(reject, _), Reasons) -> Decision = reject
+    ; member(why(hold, _), Reasons)   -> Decision = hold_for_testing
+    ; Reasons \= []                   -> Decision = quarantine
+    ;                                   Decision = release ).
+```
+
+Develop with the native loop — answers are byte-identical to what the edge
+module will return, so all rule work happens here:
+
+```sh
+plgc run examples/coldchain/coldchain.pl --query \
+  "release(romaine, us_az, standard, no, [r(0,2.0), r(120,6.5), r(240,6.9), r(360,3.0)], D, Rs)"
+# D = quarantine
+# Rs = [why(quarantine, excursion_exceeded(240, 120))]
+
+# The same lot in a certified shipper — the exception flips the decision:
+plgc run examples/coldchain/coldchain.pl --query \
+  "release(romaine, us_az, certified_shipper, no, [r(0,2.0), r(120,6.5), r(240,6.9), r(360,3.0)], D, Rs)"
+# D = release
+# Rs = []
+
+# An implicated lot: lab-tested, perfect cold chain — rejected anyway.
+plgc run examples/coldchain/coldchain.pl --query \
+  "release(basil, mx_sonora, certified_shipper, yes, [r(0,3.0), r(180,3.2)], D, Rs)"
+# D = reject
+# Rs = [why(reject, implicated_source(basil, mx_sonora))]
+```
+
+**The party trick** — run it backward. With a few sample lots compiled in,
+backtracking enumerates *which lots fail and why* across the whole rule set:
+
+```sh
+plgc run examples/coldchain/coldchain.pl --query "release_sample(Lot, D, Rs)"
+# D = reject
+# Lot = lot_1
+# Rs = [why(reject, implicated_source(basil, mx_sonora))]
+# D = quarantine
+# Lot = lot_2
+# Rs = [why(quarantine, excursion_exceeded(240, 120))]
+# D = release
+# Lot = lot_3
+# Rs = []
+# D = hold_for_testing
+# Lot = lot_4
+# Rs = [why(hold, untested_watchlist(mesclun, us_ca))]
+```
+
+No imperative version of this policy gives you that query for free.
+
+## Step 5 — compile to a worker module
+
+```sh
+plgc build --target worker examples/coldchain/coldchain.pl -o edge/coldchain.worker.wasm
+# (the missing edge/ directory is created for you)
+# note: wrote reactor.mjs, worker.js, wrangler.toml, config.capnp next to …
+```
+
+You get the reactor module (**≈1.8 MB** — well inside the Workers budget)
+plus four scaffolding files, written only if absent: `reactor.mjs` (the
+buffer-ABI marshalling), `worker.js` (the fetch handler — you'll replace it
+in Step 7), `wrangler.toml`, and `config.capnp`. Rebuilds refresh the `.wasm`
+and never clobber your glue edits.
+
+## Step 6 — serve it locally
+
+```sh
+cd edge && workerd serve config.capnp
+```
+
+The generated handler takes the goal from `?query=` or a POST body:
+
+```sh
+curl -s --get --data-urlencode \
+  'query=release(romaine, us_az, standard, no, [r(0,2.0), r(120,6.5), r(240,6.9), r(360,3.0)], D, Rs)' \
+  http://localhost:8080/
+```
+
+```json
+{"count":1,"exhausted":true,"output":"","solutions":[{"D":"quarantine","Rs":[{"functor":"why","args":["quarantine",{"functor":"excursion_exceeded","args":[240,120]}]}]}]}
+```
+
+Same engine, same answer as the native run — terms render host-side as
+atoms→strings, numbers→numbers, lists→arrays, compounds→`{functor, args}`.
+Errors keep their native text:
+
+```sh
+curl -s --get --data-urlencode 'query=release(romaine,' http://localhost:8080/
+# {"error":"Parse error: unexpected end of query"}
+```
+
+And the Step 4 party trick works at the edge — the backward query, answered
+by a warm isolate, auditing every compiled-in sample lot in one request:
+
+```sh
+curl -s --get --data-urlencode 'query=release_sample(Lot, D, Rs)' http://localhost:8080/
+```
+
+```json
+{"count":4,"exhausted":true,"output":"","solutions":[{"D":"reject","Lot":"lot_1","Rs":[{"functor":"why","args":["reject",{"functor":"implicated_source","args":["basil","mx_sonora"]}]}]},{"D":"quarantine","Lot":"lot_2","Rs":[{"functor":"why","args":["quarantine",{"functor":"excursion_exceeded","args":[240,120]}]}]},{"D":"release","Lot":"lot_3","Rs":[]},{"D":"hold_for_testing","Lot":"lot_4","Rs":[{"functor":"why","args":["hold",{"functor":"untested_watchlist","args":["mesclun","us_ca"]}]}]}]}
+```
+
+## Step 7 — make it a REST service
+
+The generated handler is a raw query passthrough. A real service owns its
+contract: JSON in, decision out, Prolog inside. This directory ships the
+replacement as `worker.js` — copy it over the scaffolding (which is never
+regenerated, so the copy survives rebuilds):
+
+```sh
+cp examples/coldchain/worker.js edge/worker.js
+```
+
+The whole file, for reading (it's short — every piece matters):
+
+```js
+import { runQuery, assertExports } from "./reactor.mjs";
+import reactorModule from "./coldchain.worker.wasm";
+
+let cached;
+function reactor() {
+  if (!cached) {
+    const instance = new WebAssembly.Instance(reactorModule, {});
+    assertExports(instance.exports);
+    instance.exports.plg_init();
+    cached = instance.exports;
+  }
+  return cached;
+}
+
+// JSON body → Prolog goal. Validating atoms against Prolog's atom syntax
+// doubles as the injection guard — nothing else reaches the goal string.
+const ATOM = /^[a-z][a-z0-9_]*$/;
+const bad = (msg) => Object.assign(new Error(msg), { status: 400 });
+
+function atom(value, name) {
+  if (typeof value !== "string" || !ATOM.test(value))
+    throw bad(`${name} must be a lowercase atom like 'basil'`);
+  return value;
+}
+function num(value, name) {
+  if (typeof value !== "number" || !Number.isFinite(value))
+    throw bad(`${name} must be a finite number`);
+  return value;
+}
+
+function goalFromBody(body) {
+  const commodity = atom(body.commodity, "commodity");
+  const origin = atom(body.origin, "origin");
+  const packaging = atom(body.packaging, "packaging");
+  const tested = atom(body.tested, "tested"); // yes | no
+  if (!Array.isArray(body.readings)) throw bad("readings must be an array");
+  const readings = body.readings
+    .map((r, i) => `r(${num(r.minute, `readings[${i}].minute`)}, ${num(r.temp, `readings[${i}].temp`)})`)
+    .join(", ");
+  return `release(${commodity}, ${origin}, ${packaging}, ${tested}, [${readings}], D, Rs)`;
+}
+
+// why(Sev, Detail) compounds render as {functor, args}; reshape for clients.
+function renderReason(t) {
+  if (t && t.functor === "why") {
+    const [severity, detail] = t.args;
+    return detail && detail.functor
+      ? { severity, rule: detail.functor, args: detail.args }
+      : { severity, rule: detail };
+  }
+  return t;
+}
+
+export default {
+  async fetch(request) {
+    const url = new URL(request.url);
+    const headers = { "content-type": "application/json" };
+
+    // Ad-hoc queries (the generated behavior), handy while developing rules.
+    if (request.method === "GET" && url.searchParams.get("query")) {
+      return new Response(runQuery(reactor(), url.searchParams.get("query").trim()), { headers });
+    }
+
+    // The service contract: POST /v1/release with a JSON lot description.
+    if (request.method === "POST" && url.pathname === "/v1/release") {
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        return new Response('{"error":"invalid JSON body"}', { status: 400, headers });
+      }
+      let goal;
+      try {
+        goal = goalFromBody(body);
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), { status: e.status ?? 400, headers });
+      }
+      const envelope = JSON.parse(runQuery(reactor(), goal));
+      if ("error" in envelope)
+        return new Response(JSON.stringify(envelope), { status: 422, headers });
+      const sol = envelope.solutions[0] ?? {};
+      return new Response(
+        JSON.stringify({ decision: sol.D ?? null, reasons: (sol.Rs ?? []).map(renderReason) }),
+        { headers },
+      );
+    }
+
+    return new Response('{"error":"not found"}', { status: 404, headers });
+  },
+};
+```
+
+The concurrency contract is preserved without thought: `runQuery` is fully
+synchronous, and the only `await` (reading the body) happens before it.
+
+Restart `workerd` and exercise the contract:
+
+```sh
+curl -s -X POST http://localhost:8080/v1/release \
+  -H 'content-type: application/json' \
+  --data '{"commodity":"romaine","origin":"us_az","packaging":"standard","tested":"no",
+           "readings":[{"minute":0,"temp":2.0},{"minute":120,"temp":6.5},
+                       {"minute":240,"temp":6.9},{"minute":360,"temp":3.0}]}'
+```
+
+```json
+{"decision":"quarantine","reasons":[{"severity":"quarantine","rule":"excursion_exceeded","args":[240,120]}]}
+```
+
+Same lot, `"packaging":"certified_shipper"` → `{"decision":"release","reasons":[]}`.
+An implicated lot:
+
+```json
+{"decision":"reject","reasons":[{"severity":"reject","rule":"implicated_source","args":["basil","mx_sonora"]}]}
+```
+
+And the edges behave like an API's should: an unknown commodity fails closed
+(`{"decision":"hold_for_testing","reasons":[{"severity":"hold","rule":"unknown_commodity","args":["kale"]}]}`),
+a malformed body gets `400 {"error":"invalid JSON body"}`, a bad field gets
+`400 {"error":"commodity must be a lowercase atom like 'basil'"}`, and an
+unknown path gets 404.
+
+## Phase 2 — put it on the planet (free tier)
+
+Everything so far ran on your machine. This phase ships the service to
+Cloudflare's global network: the same isolate, replicated to every region,
+answering `curl` from anywhere in single-digit milliseconds. A free
+Cloudflare account in good standing covers all of it — no card, no trial
+clock. We assume Cloudflare is also the DNS provider for your domain, which
+makes the custom-domain step fully automatic.
+
+### 8a — one-time setup (account, login, workers.dev subdomain)
+
+1. Sign up at cloudflare.com (free).
+2. Authenticate the CLI: `npx wrangler login` — it opens a browser OAuth
+   flow; `npx wrangler whoami` should then show your account.
+3. Pick your `workers.dev` subdomain, once per account. The dashboard
+   prompts for it on first visit to **Workers & Pages**; the first
+   `npx wrangler deploy` will also tell you if it's missing. Every free-tier
+   service you ever deploy lives under `https://<name>.<subdomain>.workers.dev`.
+
+### 8b — deploy and curl your first planet-scale inference
+
+`wrangler.toml` was emitted next to the module in Step 5; deploy from the
+`edge/` directory:
+
+```sh
+cd edge
+npx wrangler deploy
+# Uploaded coldchain (x.xx sec)
+# Published coldchain (x.xx sec)
+#   https://coldchain.<your-subdomain>.workers.dev
+```
+
+That's it — the service is live in every region Cloudflare has. Prove it to
+yourself from a couple of networks (your box, your phone on LTE):
+
+```sh
+curl -s -X POST https://coldchain.<your-subdomain>.workers.dev/v1/release \
+  -H 'content-type: application/json' \
+  --data '{"commodity":"romaine","origin":"us_az","packaging":"standard","tested":"no",
+           "readings":[{"minute":0,"temp":2.0},{"minute":120,"temp":6.5},
+                       {"minute":240,"temp":6.9},{"minute":360,"temp":3.0}]}'
+```
+
+```json
+{"decision":"quarantine","reasons":[{"severity":"quarantine","rule":"excursion_exceeded","args":[240,120]}]}
+```
+
+Same bytes as localhost — except the answer now comes from an isolate in
+whichever of ~300 cities is closest to the caller. The isolate cold-starts
+once (`plg_init` builds the machine), then every request is a warm
+in-memory call: no process fork, no per-request parse, no container.
+
+### 8c — your own hostname (Cloudflare is the DNS, so this is one stanza)
+
+Because your domain's zone lives on Cloudflare, a Workers **custom domain**
+needs no DNS editing, no cert provisioning, and costs nothing — Cloudflare
+creates the record and issues TLS automatically. Add one stanza to
+`edge/wrangler.toml`:
+
+```toml
+routes = [
+  { pattern = "coldchain.example.com", custom_domain = true }
+]
+```
+
+Redeploy:
+
+```sh
+npx wrangler deploy
+# …
+#   coldchain.example.com (custom domain)
+```
+
+```sh
+curl -s -X POST https://coldchain.example.com/v1/release \
+  -H 'content-type: application/json' \
+  --data '{"commodity":"mesclun","origin":"us_ca","packaging":"standard","tested":"no","readings":[]}'
+# {"decision":"hold_for_testing","reasons":[{"severity":"hold","rule":"untested_watchlist","args":["mesclun","us_ca"]}]}
+```
+
+The workers.dev URL keeps working alongside the custom domain.
+
+### 8d — watch the outbreak evolve, globally, in seconds
+
+Now the payoff. The traceback implicates raspberries from Jalisco. The
+update is one clause in `coldchain.pl`:
+
+```prolog
+implicated(raspberries, mx_jalisco).
+```
+
+Rebuild and redeploy:
+
+```sh
+plgc build --target worker examples/coldchain/coldchain.pl -o edge/coldchain.worker.wasm
+cd edge && npx wrangler deploy
+```
+
+`lot_3` — which released yesterday — now returns
+`{"decision":"reject","reasons":[{"severity":"reject","rule":"implicated_source","args":["raspberries","mx_jalisco"]}]}`
+everywhere on Earth within seconds. The policy change touched no control
+flow, because there isn't any: the advisory is data, and the deploy *is*
+the policy update.
+
+### What the free tier includes (and the limits you'll never notice here)
+
+- **100,000 requests/day**, no credit card.
+- **10 ms CPU time per request** — CPU, not wall clock; the queries above
+  are sub-millisecond. (`runQuery` options mirror the native knobs if a
+  future rule set needs headroom: `runQuery(reactor(), goal, { stepLimit:
+  100_000_000n })`, plus `limit` and `depthLimit`.)
+- **3 MiB compressed worker size** — this module is ≈1.8 MB uncompressed,
+  well under after compression.
+- **Custom domains and TLS** on your Cloudflare-DNS zones: free.
+- The one structural rule to respect: **one in-flight query per isolate** —
+  the handler satisfies it by never yielding around `runQuery`. Keep that
+  when you extend it.
+
+## Tuning and limits
+
+- **Footprint**: large fact tables inflate the module's `.rodata`. A real
+  advisory with thousands of implicated (lot, origin) pairs still fits
+  comfortably; a national lot-level database belongs behind the API, passed
+  in per-request, not compiled in.
+
+## Where next
+
+- Add severities (e.g. `recall` for lots already shipped) — one clause each.
+- Version the advisory (`advisory(2025_07, …)`) and return the version in the
+  response for audit trails.
+- Pair with the [WASM Worker reference](../../docs/wasm-worker.md) for the
+  buffer ABI if you outgrow `reactor.mjs`, or drop to
+  [Tier 1](../../docs/wasm-target.md) if the data outgrows isolates.
