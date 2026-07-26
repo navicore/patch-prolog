@@ -399,7 +399,7 @@ makes the custom-domain step fully automatic.
    flow; `npx wrangler whoami` should then show your account.
 3. Pick your `workers.dev` subdomain, once per account. The dashboard
    prompts for it on first visit to **Workers & Pages**; the first
-   `wrangler deploy` will also tell you if it's missing. Every free-tier
+   `npx wrangler deploy` will also tell you if it's missing. Every free-tier
    service you ever deploy lives under `https://<name>.<subdomain>.workers.dev`.
 
 ### 8b — deploy and curl your first planet-scale inference

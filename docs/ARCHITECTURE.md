@@ -116,6 +116,12 @@ restrict);
 `--format`/`--input-format` outside that set exit 2. Encoders not advertised
 are dead-stripped from the binary (`--gc-sections`). A host wanting JSON
 derives it from bson at the host boundary — the engine never serializes JSON.
+(In the worker environment that "host" is two layers: `reactor.mjs`, which
+plgc emits and which owns everything coupled to engine internals (bson decode,
+atom map, wasm ABI); and the service's own handler, which owns JSON in —
+there is no structured input path, data reaches a query only as Prolog syntax
+in the goal string — and API-shaped JSON out. See
+`examples/coldchain/README.md`.)
 
 - `--query "goal(X)"`, `--limit N`, `--format text|bson`, `--input-format text|bson`
 - exit `0` no solutions · `1` solutions found · `2` parse/usage error ·
