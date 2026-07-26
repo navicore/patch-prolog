@@ -2,8 +2,12 @@
 
 Build and deploy a real REST service on Cloudflare's edge: a **cold-chain
 release-decision API** for fresh produce, written in Prolog, compiled to a
-reactor wasm module, and served from a V8 isolate. Everything you need is in
-this directory: the program (`coldchain.pl`), the REST handler (`worker.js`),
+reactor wasm module, and served from a V8 isolate. The leverage behind that
+last part: `plgc` lowers Prolog to LLVM IR, and the same IR feeds LLVM's
+native (x86/ARM) and WebAssembly backends — the wasm side is LLVM's doing,
+not a Prolog-to-wasm compiler we had to write, which is how a logic program
+ends up running inside a V8 isolate at all. Everything you need is in this
+directory: the program (`coldchain.pl`), the REST handler (`worker.js`),
 and this walkthrough. The final phase puts it on Cloudflare's global network
 on the **free tier** — after that, `curl` from anywhere on the planet is
 doing logic inference against your Prolog.
