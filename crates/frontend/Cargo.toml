@@ -11,4 +11,4 @@ description = "Tokenizer and parser for patch-prolog2 (compiler-side only)"
 # Compiler-side only: this crate is NOT linked into compiled Prolog
 # binaries (the runtime has its own minimal goal-only parser).
 [dependencies]
-plg-shared = { path = "../shared", version = "=0.4.7", package = "patch-prolog-shared" }
+plg-shared = { path = "../shared", version = "=0.4.8", package = "patch-prolog-shared" }
