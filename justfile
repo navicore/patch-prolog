@@ -177,6 +177,46 @@ wasm-lint: build-runtime-wasm-all
     @echo "Linting wasm-feature code..."
     cargo clippy --locked --features wasm -p patch-prolog-compiler --all-targets -- -D warnings
 
+# JVM superjar example (examples/deps-superjar): compile examples/deps.pl to
+# a Tier 1 WASI module and shade it — plus Chicory, a pure-Java Wasm runtime
+# — into ONE jar with no JNI and no native code. The jar speaks the exact
+# wire contract of the native binary. Needs java + mvn on PATH; NOT part of
+# `just ci` or `just wasm-ci` (base runners may lack a JDK).
+deps-superjar: build-runtime-wasm-all
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v java >/dev/null || { echo "❌ deps-superjar needs java on PATH"; exit 1; }
+    command -v mvn  >/dev/null || { echo "❌ deps-superjar needs mvn on PATH"; exit 1; }
+    echo "Compiling examples/deps.pl → wasm32-wasi (superjar resource)..."
+    cargo run -q --features wasm -p patch-prolog-compiler --bin plgc -- \
+        build examples/deps.pl --target wasm32-wasi \
+        -o examples/deps-superjar/src/main/resources/deps.wasm
+    cd examples/deps-superjar && mvn -q package
+    echo "✅ examples/deps-superjar/target/deps-superjar.jar"
+
+# Superjar equivalence gate: the jar must answer byte-identically to the
+# native binary — stdout AND exit codes — on happy paths and error paths.
+deps-superjar-smoke: deps-superjar
+    #!/usr/bin/env bash
+    set -euo pipefail
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+    cargo run -q -p patch-prolog-compiler --bin plgc -- \
+        build examples/deps.pl -o "$work/deps-native"
+    jar=examples/deps-superjar/target/deps-superjar.jar
+    fail=0
+    for q in "needs(app, X)" "depends_on(app, D)" "shared_deps(auth, render, Ds)" \
+             "findall(D, needs(app, D), Ds)" "nonexistent(x)" "X is 1/0"; do
+        native=$("$work/deps-native" --query "$q" 2>&1; echo "rc=$?")
+        jarout=$(java -jar "$jar" --query "$q" 2>&1; echo "rc=$?")
+        if [ "$native" = "$jarout" ]; then
+            echo "✅ $q"
+        else
+            echo "❌ $q"; echo "   native: $native"; echo "   jar:    $jarout"; fail=1
+        fi
+    done
+    exit $fail
+
 # Build the compiler
 build-compiler:
     @echo "Building compiler..."
