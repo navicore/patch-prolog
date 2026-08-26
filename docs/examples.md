@@ -153,6 +153,8 @@ no Prolog runtime to run — hand it to anyone.
   `examples/coldchain/README.md`.
 - Give your coding agent a self-check habit — the compiled policy as an
   agent-runnable tool: `examples/agent-linter/README.md`.
+- Embed the inference in a JVM service — one jar, no JNI, the same wire
+  contract on a pure-Java Wasm runtime: `examples/deps-superjar/README.md`.
 - [Language Guide](language-guide.md) — the concepts these programs use.
 - [Compiler Usage](compiler-usage.md) — every `plgc` flag and the query
   wire-contract.
