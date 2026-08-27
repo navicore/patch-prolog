@@ -39,7 +39,13 @@ function goalFromBody(body) {
   const commodity = atom(body.commodity, "commodity");
   const origin = atom(body.origin, "origin");
   const packaging = atom(body.packaging, "packaging");
-  const tested = atom(body.tested, "tested"); // yes | no
+  // tested is an enum, not just an atom: whitelist it for a clean 400.
+  // The rule set ALSO guards it (the invalid_tested hold) — this JS is only
+  // one host; the native binary and the GET passthrough have no such glue,
+  // so the real guard lives in Prolog.
+  if (body.tested !== "yes" && body.tested !== "no")
+    throw bad("tested must be 'yes' or 'no'");
+  const tested = body.tested;
   if (!Array.isArray(body.readings)) throw bad("readings must be an array");
   const readings = body.readings
     .map((r, i) => `r(${num(r.minute, `readings[${i}].minute`)}, ${num(r.temp, `readings[${i}].temp`)})`)

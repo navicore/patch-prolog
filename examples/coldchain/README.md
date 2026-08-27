@@ -106,6 +106,27 @@ Read the second clause as the requirement reads — "watchlist, *unless*
 implicated (that's `reject`'s job), *unless* tested." The `\+` guards are the
 exceptions, stated where they belong instead of nested inside an if-ladder.
 
+The `unknown_commodity` clause generalizes into a habit: **any input consumed
+only by positive equality checks is fail-open on typos.** `tested` is exactly
+that shape — the watchlist clause asks only `Tested = no`, so a `"yse"` typo
+would match no clause and silently release an untested watchlist lot. Same
+hole, same shaped guard:
+
+```prolog
+% Fail closed: Tested must be exactly yes or no.
+reason(_Commodity, _Origin, _Pkg, Tested, _Readings,
+       why(hold, invalid_tested(Tested))) :-
+    Tested \= yes,
+    Tested \= no.
+```
+
+The guard lives in the rule set, not the REST glue, because the glue is only
+one host: the native binary and the worker's ad-hoc GET query path have no
+validation layer at all. (One edge is knowingly accepted: `origin` is also
+consumed only by positive checks against `implicated/2`, so a typo'd origin
+skips a reject. Closing that needs a closed-world table of known origins — a
+data decision, not a rule.)
+
 ## Step 3 — cumulative temperature excursions
 
 Sensor readings arrive as a list of `r(MinuteSinceLoading, TempC)` terms.
@@ -139,6 +160,31 @@ oob_minutes(Commodity, [r(Minute, Temp)|Rs], Prev, Total) :-
 `member/2` in the first rule is nondeterministic — it produces one reason
 *per breaching reading*, no loop required. `limit_for/3` applies the
 certified-shipper bonus with a `->` guard.
+
+`oob_minutes` trusts one thing about its input: that minutes are
+non-decreasing. Each out-of-band reading is charged `Minute - Prev`, so a
+shuffled log charges *negative* intervals and the excursion shrinks — reverse
+the failed lot's readings and its 240-minute excursion sums to -240 and
+*releases*. Sensor data is hostile input like anything else off the wire, so
+the rule set fails closed on it too:
+
+```prolog
+reason(_Commodity, _Origin, _Pkg, _Tested, Readings,
+       why(hold, non_monotonic_readings)) :-
+    \+ monotonic(Readings).
+
+% monotonic/1 — minutes non-decreasing across r(Minute, Temp) readings.
+monotonic([]).
+monotonic([_]).
+monotonic([r(M1, _), r(M2, _) | Rs]) :-
+    M1 =< M2,
+    monotonic([r(M2, _) | Rs]).
+```
+
+Deliberately *not* `Delta is max(0, Minute - Prev)`: clamping is silent data
+repair — a tampered log or a malfunctioning sensor becomes invisible, and the
+audit trail is the whole point. A malformed log earns a human, with the
+reason recorded.
 
 ## Step 4 — the decision, tested natively
 
@@ -176,6 +222,19 @@ plgc run examples/coldchain/coldchain.pl --query \
   "release(basil, mx_sonora, certified_shipper, yes, [r(0,3.0), r(180,3.2)], D, Rs)"
 # D = reject
 # Rs = [why(reject, implicated_source(basil, mx_sonora))]
+
+# The fail-closed guards, attacked. A typo'd `tested`:
+plgc run examples/coldchain/coldchain.pl --query \
+  "release(basil, us_az, standard, yse, [r(0,3.0)], D, Rs)"
+# D = hold_for_testing
+# Rs = [why(hold, invalid_tested(yse))]
+
+# The same failed romaine lot with its sensor log reversed — without the
+# monotonic guard this laundered 240 excursion-minutes into a release:
+plgc run examples/coldchain/coldchain.pl --query \
+  "release(romaine, us_az, standard, no, [r(360,3.0), r(240,6.9), r(120,6.5), r(0,2.0)], D, Rs)"
+# D = hold_for_testing
+# Rs = [why(hold, non_monotonic_readings)]
 ```
 
 **The party trick** — run it backward. With a few sample lots compiled in,
@@ -299,7 +358,13 @@ function goalFromBody(body) {
   const commodity = atom(body.commodity, "commodity");
   const origin = atom(body.origin, "origin");
   const packaging = atom(body.packaging, "packaging");
-  const tested = atom(body.tested, "tested"); // yes | no
+  // tested is an enum, not just an atom: whitelist it for a clean 400.
+  // The rule set ALSO guards it (the invalid_tested hold) — this JS is only
+  // one host; the native binary and the GET passthrough have no such glue,
+  // so the real guard lives in Prolog.
+  if (body.tested !== "yes" && body.tested !== "no")
+    throw bad("tested must be 'yes' or 'no'");
+  const tested = body.tested;
   if (!Array.isArray(body.readings)) throw bad("readings must be an array");
   const readings = body.readings
     .map((r, i) => `r(${num(r.minute, `readings[${i}].minute`)}, ${num(r.temp, `readings[${i}].temp`)})`)
@@ -384,8 +449,12 @@ An implicated lot:
 And the edges behave like an API's should: an unknown commodity fails closed
 (`{"decision":"hold_for_testing","reasons":[{"severity":"hold","rule":"unknown_commodity","args":["kale"]}]}`),
 a malformed body gets `400 {"error":"invalid JSON body"}`, a bad field gets
-`400 {"error":"commodity must be a lowercase atom like 'basil'"}`, and an
-unknown path gets 404.
+`400 {"error":"commodity must be a lowercase atom like 'basil'}` or
+`400 {"error":"tested must be 'yes' or 'no'"}`, and an unknown path gets 404.
+Note the layering on that last 400: the JS whitelist is the *polite* response,
+but the guard that actually protects the decision is the `invalid_tested`
+clause in the rule set — it fires on every host, including this worker's own
+ad-hoc GET path and the native binary, where no JS exists at all.
 
 ## Phase 2 — put it on the planet (free tier)
 

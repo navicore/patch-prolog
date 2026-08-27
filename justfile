@@ -335,9 +335,51 @@ size-gate:
     echo "✅ size-gate passed"
 
 # Run all CI checks (same as Forgejo Actions!)
-ci: fmt-check lint license-audit test build build-examples test-integration lint-pl check-binary-contents size-gate
+ci: fmt-check lint license-audit test build build-examples test-integration lint-pl check-binary-contents size-gate coldchain-smoke
     @echo ""
     @echo "✅ All CI checks passed!"
+
+# Cold-chain example behavior gate: pins the release policy's decisions AND
+# its fail-closed guards (typo'd `tested`, shuffled sensor log) — the
+# tutorial's claims, asserted against the compiled binary.
+coldchain-smoke: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+    target/release/plgc build examples/coldchain/coldchain.pl -o "$work/cc"
+    fail=0
+    check() {  # $1 label · $2 query · $3... expected substrings of the output
+        local label=$1 query=$2; shift 2
+        local out want
+        out=$("$work/cc" --query "$query" --format text || true)
+        for want in "$@"; do
+            if ! grep -qF "$want" <<<"$out"; then
+                echo "❌ $label"; echo "   wanted: $want"; echo "   got:    $out"
+                fail=1; return
+            fi
+        done
+        echo "✅ $label"
+    }
+    check "in-order excursion quarantines" \
+        "release(romaine, us_az, standard, no, [r(0,2.0), r(120,6.5), r(240,6.9), r(360,3.0)], D, Rs)" \
+        "D = quarantine" "excursion_exceeded(240, 120)"
+    check "shuffled sensor log fails closed" \
+        "release(romaine, us_az, standard, no, [r(360,3.0), r(240,6.9), r(120,6.5), r(0,2.0)], D, Rs)" \
+        "D = hold_for_testing" "non_monotonic_readings"
+    check "typo'd tested fails closed" \
+        "release(basil, us_az, standard, yse, [r(0,3.0)], D, Rs)" \
+        "D = hold_for_testing" "invalid_tested(yse)"
+    check "untested watchlist still holds" \
+        "release(basil, us_az, standard, no, [r(0,3.0)], D, Rs)" \
+        "D = hold_for_testing" "untested_watchlist(basil, us_az)"
+    check "implicated lot still rejects" \
+        "release(basil, mx_sonora, certified_shipper, yes, [r(0,3.0), r(180,3.2)], D, Rs)" \
+        "D = reject" "implicated_source(basil, mx_sonora)"
+    check "certified-shipper lot still releases" \
+        "release(romaine, us_az, certified_shipper, no, [r(0,2.0), r(120,6.5), r(240,6.9), r(360,3.0)], D, Rs)" \
+        "D = release"
+    exit $fail
 
 # Clean all build artifacts
 clean:
