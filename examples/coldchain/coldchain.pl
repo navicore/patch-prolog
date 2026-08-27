@@ -31,6 +31,18 @@
 % Run it backward over the compiled-in sample lots (the generative query):
 %   plgc run examples/coldchain/coldchain.pl --query "release_sample(Lot, D, Rs)"
 %
+% The rules also defend themselves — malformed input fails CLOSED.
+% `tested` is yes|no; a typo earns a hold, never a silent release:
+%   plgc run examples/coldchain/coldchain.pl --query \
+%     "release(basil, us_az, standard, yse, [r(0,3.0)], D, Rs)"
+%     D = hold_for_testing
+%     Rs = [why(hold, invalid_tested(yse))]
+% A shuffled sensor log (minutes must be non-decreasing) likewise:
+%   plgc run examples/coldchain/coldchain.pl --query \
+%     "release(romaine, us_az, standard, no, [r(360,3.0), r(240,6.9), r(120,6.5), r(0,2.0)], D, Rs)"
+%     D = hold_for_testing
+%     Rs = [why(hold, non_monotonic_readings)]
+%
 % NOTE: advisory data below is ILLUSTRATIVE, not a real FDA advisory.
 
 % ── Outbreak advisory (compiled in; an evolving outbreak = edit + redeploy) ──
@@ -94,6 +106,32 @@ reason(Commodity, Origin, _Pkg, Tested, _Readings,
 reason(Commodity, _Origin, _Pkg, _Tested, _Readings,
        why(hold, unknown_commodity(Commodity))) :-
     \+ class_band(Commodity, _, _).
+
+% Fail closed: Tested must be exactly yes or no. The watchlist clause above
+% consumes Tested only by the positive check `Tested = no`, so without this
+% guard a TYPO (yse) matches no clause and an untested watchlist lot
+% auto-releases — the same hole as unknown_commodity, through a different
+% field. (Any input consumed only by positive equality checks needs a guard
+% clause like this one.)
+reason(_Commodity, _Origin, _Pkg, Tested, _Readings,
+       why(hold, invalid_tested(Tested))) :-
+    Tested \= yes,
+    Tested \= no.
+
+% Fail closed: minutes must be non-decreasing across the sensor log. A
+% shuffled log would charge NEGATIVE intervals in oob_minutes below and
+% shrink the excursion under the limit — a failed lot laundered into a
+% release by reordering an array. Malformed telemetry earns manual review.
+reason(_Commodity, _Origin, _Pkg, _Tested, Readings,
+       why(hold, non_monotonic_readings)) :-
+    \+ monotonic(Readings).
+
+% monotonic/1 — minutes non-decreasing across r(Minute, Temp) readings.
+monotonic([]).
+monotonic([_]).
+monotonic([r(M1, _), r(M2, _) | Rs]) :-
+    M1 =< M2,
+    monotonic([r(M2, _) | Rs]).
 
 % Hard temperature breach: any single reading more than 5° outside the band
 % is damage no cumulative budget excuses.
