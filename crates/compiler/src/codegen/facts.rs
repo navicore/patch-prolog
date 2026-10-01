@@ -79,6 +79,8 @@ fn serialize_arg(root: &Term, blob: &mut Vec<u64>) -> u64 {
     r
 }
 
+/// One term → one table word / blob cell; subterm fills are enqueued into
+/// `work` for `serialize_arg` to drain (keeping this non-recursive).
 fn xlate<'a>(t: &'a Term, blob: &mut Vec<u64>, work: &mut Vec<(&'a Term, usize)>) -> u64 {
     match t {
         Term::Atom(id) => atom_word(*id),
@@ -114,6 +116,25 @@ fn xlate<'a>(t: &'a Term, blob: &mut Vec<u64>, work: &mut Vec<(&'a Term, usize)>
         }
         Term::Var(_) => unreachable!("is_fact_predicate guarantees ground args"),
     }
+}
+
+/// Serialize every clause's head args, column-major within a row: immediate
+/// columns inline in `table`, non-immediate columns appended to `blob` (the
+/// table cell holds a blob-ref word).
+fn serialize_rows(clauses: &[CgClause], acount: usize) -> (Vec<u64>, Vec<u64>) {
+    let mut table: Vec<u64> = Vec::with_capacity(clauses.len() * acount);
+    let mut blob: Vec<u64> = Vec::new();
+    for c in clauses {
+        let args: &[Term] = match &c.head {
+            Term::Compound { args, .. } => args,
+            _ => &[], // arity 0
+        };
+        for a in args {
+            let cell = serialize_arg(a, &mut blob);
+            table.push(cell);
+        }
+    }
+    (table, blob)
 }
 
 /// Emit a `private` `.rodata` `[N x i64]` global (or an empty
@@ -153,45 +174,46 @@ impl CodeGen<'_> {
         let sym = self.pred_symbol(functor, arity);
         let tbl = format!("plg_facts_{functor}_{arity}");
         let nrows = clauses.len();
-        let acount = arity as usize;
 
-        // --- Serialize each row, column-major within a row: immediate columns
-        //     inline, non-immediate columns into the blob (table cell = a
-        //     blob-ref word).
-        let mut table: Vec<u64> = Vec::with_capacity(nrows * acount);
-        let mut blob: Vec<u64> = Vec::new();
-        for c in clauses {
-            let args: &[Term] = match &c.head {
-                Term::Compound { args, .. } => args,
-                _ => &[], // arity 0
-            };
-            for a in args {
-                let cell = serialize_arg(a, &mut blob);
-                table.push(cell);
-            }
-        }
+        let (table, blob) = serialize_rows(clauses, arity as usize);
+        let has_index = self.emit_fact_globals(functor, arity, &tbl, nrows, &table, &blob);
+        self.emit_fact_entry(&sym, &tbl, arity, nrows, blob.len(), has_index);
+        self.emit_fact_retry(&sym);
+        Ok(())
+    }
 
+    /// Emit the `;` header, the table global, and (as present) the blob and
+    /// sorted first-argument index globals. Returns whether the index was
+    /// emitted.
+    fn emit_fact_globals(
+        &mut self,
+        functor: AtomId,
+        arity: u32,
+        tbl: &str,
+        nrows: usize,
+        table: &[u64],
+        blob: &[u64],
+    ) -> bool {
         writeln!(
             self.out,
             "; {}/{arity} ({nrows} facts \u{2192} table)",
             self.interner.resolve(functor)
         )
         .unwrap();
-        emit_words_global(&mut self.out, &tbl, &table);
+        emit_words_global(&mut self.out, tbl, table);
 
-        // --- Serialized-term blob for non-immediate columns (Stage C). Absent
-        //     when every column is an immediate; the entry passes a null blob
-        //     pointer then.
-        let has_blob = !blob.is_empty();
-        if has_blob {
-            emit_words_global(&mut self.out, &format!("{tbl}_blob"), &blob);
+        // Serialized-term blob for non-immediate columns (Stage C). Absent
+        // when every column is an immediate; the entry passes a null blob
+        // pointer then.
+        if !blob.is_empty() {
+            emit_words_global(&mut self.out, &format!("{tbl}_blob"), blob);
         }
-        let blob_len = blob.len();
 
-        // --- First-argument index (Stage B): only when column 0 is
-        //     all-immediate (a blob-ref column 0 can't be u64-key-sorted, and
-        //     arity-0 has no first column). Row indices sorted by column 0,
-        //     ties keeping program order, for an O(log n) bound-key lookup.
+        // First-argument index (Stage B): only when column 0 is
+        // all-immediate (a blob-ref column 0 can't be u64-key-sorted, and
+        // arity-0 has no first column). Row indices sorted by column 0,
+        // ties keeping program order, for an O(log n) bound-key lookup.
+        let acount = arity as usize;
         let has_index = acount >= 1
             && (0..nrows).all(|r| matches!(tag_of(table[r * acount]), TAG_ATOM | TAG_INT));
         if has_index {
@@ -200,9 +222,20 @@ impl CodeGen<'_> {
             let idxwords: Vec<u64> = order.iter().map(|&r| r as u64).collect();
             emit_words_global(&mut self.out, &format!("{tbl}_idx"), &idxwords);
         }
+        has_index
+    }
 
-        // --- Entry: step, then find the first matching row (runtime), then
-        //     musttail the continuation.
+    /// Entry function: step, then find the first matching row (runtime),
+    /// then musttail the continuation.
+    fn emit_fact_entry(
+        &mut self,
+        sym: &str,
+        tbl: &str,
+        arity: u32,
+        nrows: usize,
+        blob_len: usize,
+        has_index: bool,
+    ) {
         self.reset_temps();
         writeln!(self.out, "define i32 @{sym}(ptr %m, i64 %env) {{").unwrap();
         writeln!(self.out, "entry:").unwrap();
@@ -214,8 +247,8 @@ impl CodeGen<'_> {
         writeln!(self.out, "go:").unwrap();
         let tp = self.fresh();
         writeln!(self.out, "  {tp} = ptrtoint ptr @{tbl} to i64").unwrap();
-        // Index pointer: the sorted index when column 0 is all-immediate, else
-        // null (full scan).
+        // Index pointer: the sorted index when column 0 is all-immediate,
+        // else null (full scan).
         let ip = if has_index {
             let ip = self.fresh();
             writeln!(self.out, "  {ip} = ptrtoint ptr @{tbl}_idx to i64").unwrap();
@@ -225,7 +258,7 @@ impl CodeGen<'_> {
         };
         // Blob pointer: the serialized-term section when any column is
         // non-immediate, else null.
-        let bp = if has_blob {
+        let bp = if blob_len > 0 {
             let bp = self.fresh();
             writeln!(self.out, "  {bp} = ptrtoint ptr @{tbl}_blob to i64").unwrap();
             bp
@@ -240,16 +273,11 @@ impl CodeGen<'_> {
             "  {ok} = call i32 @plg_rt_fact_first(ptr %m, i64 {tp}, i64 {ip}, i64 {bp}, i64 {blob_len}, i64 {nrows}, i64 {arity}, i64 {rp})"
         )
         .unwrap();
-        let d = self.fresh();
-        writeln!(self.out, "  {d} = icmp ne i32 {ok}, 0").unwrap();
-        writeln!(self.out, "  br i1 {d}, label %deliver, label %fail").unwrap();
-        writeln!(self.out, "deliver:").unwrap();
-        self.emit_fact_deliver();
-        writeln!(self.out, "fail:").unwrap();
-        writeln!(self.out, "  ret i32 0").unwrap();
-        writeln!(self.out, "}}").unwrap();
+        self.emit_fact_lookup_tail(&ok);
+    }
 
-        // --- Retry: the choice-point continuation — find the next match.
+    /// Retry function: the choice-point continuation — find the next match.
+    fn emit_fact_retry(&mut self, sym: &str) {
         self.reset_temps();
         writeln!(
             self.out,
@@ -263,6 +291,12 @@ impl CodeGen<'_> {
             "  {ok} = call i32 @plg_rt_fact_next(ptr %m, i64 %f)"
         )
         .unwrap();
+        self.emit_fact_lookup_tail(&ok);
+    }
+
+    /// Shared lookup tail: branch on `ok`, deliver on success, fail
+    /// otherwise, and close the function.
+    fn emit_fact_lookup_tail(&mut self, ok: &str) {
         let d = self.fresh();
         writeln!(self.out, "  {d} = icmp ne i32 {ok}, 0").unwrap();
         writeln!(self.out, "  br i1 {d}, label %deliver, label %fail").unwrap();
@@ -271,8 +305,6 @@ impl CodeGen<'_> {
         writeln!(self.out, "fail:").unwrap();
         writeln!(self.out, "  ret i32 0").unwrap();
         writeln!(self.out, "}}").unwrap();
-
-        Ok(())
     }
 
     /// `deliver:` block — musttail the machine's current continuation. The
@@ -287,5 +319,128 @@ impl CodeGen<'_> {
         let r = self.fresh();
         writeln!(self.out, "  {r} = musttail call i32 {kp}(ptr %m, i64 {ke})").unwrap();
         writeln!(self.out, "  ret i32 {r}").unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use plg_shared::{Span, Spanned};
+
+    fn clause(head: Term) -> CgClause {
+        CgClause { head, body: vec![] }
+    }
+
+    fn bodied(head: Term) -> CgClause {
+        CgClause {
+            head,
+            body: vec![Spanned {
+                node: Term::Atom(1),
+                span: Span {
+                    file: 0,
+                    lo: 0,
+                    hi: 0,
+                },
+            }],
+        }
+    }
+
+    #[test]
+    fn fact_predicate_needs_bodyless_ground_clauses() {
+        let ground = clause(Term::Compound {
+            functor: 7,
+            args: vec![Term::Atom(1), Term::Integer(2)],
+        });
+        assert!(is_fact_predicate(std::slice::from_ref(&ground)));
+        // No rows at all: nothing to table.
+        assert!(!is_fact_predicate(&[]));
+        // A variable anywhere in the head disqualifies.
+        let var = clause(Term::Compound {
+            functor: 7,
+            args: vec![Term::Var(0)],
+        });
+        assert!(!is_fact_predicate(&[ground, var]));
+        // Any clause with a body disqualifies.
+        assert!(!is_fact_predicate(&[bodied(Term::Atom(9))]));
+        // Deeply ground structure in an argument still qualifies (a list
+        // cannot itself be a predicate head).
+        let deep = clause(Term::Compound {
+            functor: 7,
+            args: vec![Term::List {
+                head: Box::new(Term::Integer(1)),
+                tail: Box::new(Term::List {
+                    head: Box::new(Term::Float(2.5)),
+                    tail: Box::new(Term::Atom(3)),
+                }),
+            }],
+        });
+        assert!(is_fact_predicate(&[deep]));
+    }
+
+    #[test]
+    fn serialize_immediates_stay_inline() {
+        let mut blob = vec![];
+        let w = serialize_arg(&Term::Atom(5), &mut blob);
+        assert_eq!(w, atom_word(5));
+        let w = serialize_arg(&Term::Integer(42), &mut blob);
+        assert_eq!(w, int_word(42).unwrap());
+        assert!(blob.is_empty(), "immediates must not touch the blob");
+    }
+
+    #[test]
+    fn serialize_non_immediates_go_to_blob() {
+        let mut blob = vec![];
+        let w = serialize_arg(&Term::Float(1.5), &mut blob);
+        assert_eq!(tag_of(w), TAG_FLT);
+        assert_eq!(blob, vec![1.5f64.to_bits()]);
+
+        let big = 1i64 << 62; // outside the immediate (i61) range
+        let w = serialize_arg(&Term::Integer(big), &mut blob);
+        assert_eq!(tag_of(w), TAG_BIG);
+        assert_eq!(*blob.last().unwrap(), big as u64);
+    }
+
+    #[test]
+    fn serialize_fills_enqueued_subterm_slots() {
+        // A list reserves head/tail cells as 0 and fills them from the work
+        // queue — the fills must land in the right slots.
+        let mut blob = vec![];
+        let w = serialize_arg(
+            &Term::List {
+                head: Box::new(Term::Integer(7)),
+                tail: Box::new(Term::Atom(9)),
+            },
+            &mut blob,
+        );
+        assert_eq!(tag_of(w), TAG_LST);
+        assert_eq!(blob, vec![int_word(7).unwrap(), atom_word(9)]);
+
+        // A compound reserves a functor cell plus one cell per arg.
+        let mut blob = vec![];
+        let w = serialize_arg(
+            &Term::Compound {
+                functor: 3,
+                args: vec![Term::Atom(4)],
+            },
+            &mut blob,
+        );
+        assert_eq!(tag_of(w), TAG_STR);
+        assert_eq!(blob, vec![pack_functor(3, 1), atom_word(4)]);
+    }
+
+    #[test]
+    fn words_global_empty_vs_formatted() {
+        let mut out = String::new();
+        emit_words_global(&mut out, "t", &[]);
+        assert_eq!(
+            out,
+            "@t = private unnamed_addr constant [0 x i64] zeroinitializer\n"
+        );
+        let mut out = String::new();
+        emit_words_global(&mut out, "t", &[1, 2]);
+        assert_eq!(
+            out,
+            "@t = private unnamed_addr constant [2 x i64] [i64 1, i64 2]\n"
+        );
     }
 }
