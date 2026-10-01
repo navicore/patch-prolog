@@ -21,11 +21,15 @@ concurrency:
 
 jobs:
   review:
+    # runs-on disables Forgejo's reusable-workflow expansion (which
+    # mis-evaluates the caller's `if:` server-side and skips the job); the
+    # runner then evaluates `if:` with the real event payload. Must sit at
+    # job-key indent — anything deeper is swallowed by the `if: >-` block.
+    runs-on: navibot
     if: >-
       github.event_name == 'pull_request' ||
       (github.event.issue.pull_request &&
        contains(github.event.comment.body, '@navibot'))
-      runs-on: navibot
     uses: navicore/navibot/.forgejo/workflows/review.yml@main
     # NOTE: cross-repo reusable workflows require the navibot repo to be
     # public (Forgejo docs, jobs.<job_id>.uses). It holds no secrets.
