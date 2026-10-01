@@ -25,6 +25,7 @@ jobs:
       github.event_name == 'pull_request' ||
       (github.event.issue.pull_request &&
        contains(github.event.comment.body, '@navibot'))
+      runs-on: navibot
     uses: navicore/navibot/.forgejo/workflows/review.yml@main
     # NOTE: cross-repo reusable workflows require the navibot repo to be
     # public (Forgejo docs, jobs.<job_id>.uses). It holds no secrets.
