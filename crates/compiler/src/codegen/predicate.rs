@@ -21,6 +21,18 @@ use plg_shared::{AtomId, FirstArgKey};
 use std::collections::HashMap;
 use std::fmt::Write;
 
+/// First-argument indexing plan for one predicate: deduplicated candidate
+/// clause lists ("chains"). `all_chain` covers every clause (non-indexed
+/// dispatch); `var_chain` buckets the clauses indexed dispatch falls back
+/// to; `key_chains` maps first-argument constants to their chains.
+struct ChainPlan {
+    chains: Vec<Vec<usize>>,
+    all_chain: usize,
+    var_chain: usize,
+    key_chains: Vec<(FirstArgKey, usize)>,
+    indexable: bool,
+}
+
 impl CodeGen<'_> {
     pub fn emit_predicate(
         &mut self,
@@ -30,62 +42,37 @@ impl CodeGen<'_> {
     ) -> Result<(), String> {
         let name = self.pred_symbol(functor, arity);
         let base = format!("plg_p{functor}_{arity}");
-        let n = clauses.len();
-
-        // --- Candidate chains from first-argument keys.
-        let keys: Vec<Option<FirstArgKey>> = clauses
-            .iter()
-            .map(|c| {
-                c.head.first_arg_key().filter(|k| {
-                    // Boxed-range integers can't be switch constants;
-                    // treat those clauses as unindexable (var bucket).
-                    !matches!(k, FirstArgKey::Integer(n)
-                        if !(super::term_emit::IMM_INT_MIN..=super::term_emit::IMM_INT_MAX).contains(n))
-                })
-            })
-            .collect();
-        let indexable = arity > 0 && keys.iter().any(|k| k.is_some());
-
-        let mut chains: Vec<Vec<usize>> = Vec::new();
-        let chain_id = |list: Vec<usize>, chains: &mut Vec<Vec<usize>>| -> usize {
-            if let Some(i) = chains.iter().position(|c| *c == list) {
-                i
-            } else {
-                chains.push(list);
-                chains.len() - 1
-            }
-        };
-        let all_chain = chain_id((0..n).collect(), &mut chains);
-        let (var_chain, key_chains) = if indexable {
-            let var_bucket: Vec<usize> = (0..n).filter(|&i| keys[i].is_none()).collect();
-            let vc = chain_id(var_bucket, &mut chains);
-            // Distinct keys in first-appearance order.
-            let mut key_chains: Vec<(FirstArgKey, usize)> = Vec::new();
-            for k in keys.iter().flatten() {
-                if key_chains.iter().any(|(kk, _)| kk == k) {
-                    continue;
-                }
-                let list: Vec<usize> = (0..n)
-                    .filter(|&i| keys[i].is_none() || keys[i].as_ref() == Some(k))
-                    .collect();
-                let id = chain_id(list, &mut chains);
-                key_chains.push((k.clone(), id));
-            }
-            (vc, key_chains)
-        } else {
-            (all_chain, Vec::new())
-        };
+        let plan = first_arg_chains(arity, clauses);
 
         // --- Entry function.
         self.reset_temps();
         writeln!(
             self.out,
-            "; {}/{arity} ({n} clauses{})",
+            "; {}/{arity} ({} clauses{})",
             self.interner.resolve(functor),
-            if indexable { ", indexed" } else { "" }
+            clauses.len(),
+            if plan.indexable { ", indexed" } else { "" }
         )
         .unwrap();
         writeln!(self.out, "define i32 @{name}(ptr %m, i64 %env) {{").unwrap();
+        let (f, arg0) = self.emit_entry_prologue(arity);
+        self.emit_dispatch(&base, &plan, &f, &arg0)?;
+
+        // --- Chain retry functions (for chains with > 1 candidate).
+        self.emit_retry_fns(&base, &plan.chains);
+
+        // --- Clause functions (shared across chains).
+        for (j, clause) in clauses.iter().enumerate() {
+            self.emit_clause(functor, arity, j, clause)?;
+        }
+        Ok(())
+    }
+
+    /// Entry prologue: the `entry:` block bumps the step counter, and the
+    /// `go:` block snapshots argument registers, caller continuation, and
+    /// cut barrier into a predicate frame. Returns the frame and
+    /// first-argument register names.
+    fn emit_entry_prologue(&mut self, arity: u32) -> (String, String) {
         writeln!(self.out, "entry:").unwrap();
         let s = self.fresh();
         writeln!(self.out, "  {s} = call i32 @plg_rt_step(ptr %m)").unwrap();
@@ -142,87 +129,124 @@ impl CodeGen<'_> {
             arity + 2
         )
         .unwrap();
+        (f, arg0)
+    }
 
-        // --- Dispatch.
-        if !indexable {
-            self.emit_chain_jump(&base, all_chain, &chains[all_chain], &f);
+    /// Entry dispatch (indexed on the first argument, or a direct jump),
+    /// then the shared `fail` epilogue that closes the entry function.
+    fn emit_dispatch(
+        &mut self,
+        base: &str,
+        plan: &ChainPlan,
+        f: &str,
+        arg0: &str,
+    ) -> Result<(), String> {
+        if !plan.indexable {
+            self.emit_chain_jump(base, plan.all_chain, &plan.chains[plan.all_chain], f);
         } else {
-            let d = self.fresh();
-            writeln!(
-                self.out,
-                "  {d} = call i64 @plg_rt_deref(ptr %m, i64 {arg0})"
-            )
-            .unwrap();
-            let tag = self.fresh();
-            writeln!(self.out, "  {tag} = and i64 {d}, 7").unwrap();
-
-            // Group key chains by tag.
-            let mut atom_cases: Vec<(u64, usize)> = Vec::new();
-            let mut int_cases: Vec<(u64, usize)> = Vec::new();
-            let mut str_cases: Vec<(u64, usize)> = Vec::new();
-            for (k, id) in &key_chains {
-                match k {
-                    FirstArgKey::Atom(a) => atom_cases.push((atom_word(*a), *id)),
-                    FirstArgKey::Integer(i) => int_cases.push((int_word(*i)?, *id)),
-                    FirstArgKey::Functor(fu, ar) => {
-                        str_cases.push((((*fu as u64) << 32) | *ar as u64, *id))
-                    }
-                }
-            }
-            let asw = if atom_cases.is_empty() {
-                format!("ch{var_chain}")
-            } else {
-                "asw".into()
-            };
-            let isw = if int_cases.is_empty() {
-                format!("ch{var_chain}")
-            } else {
-                "isw".into()
-            };
-            let ssw = if str_cases.is_empty() {
-                format!("ch{var_chain}")
-            } else {
-                "ssw".into()
-            };
-            writeln!(
-                self.out,
-                "  switch i64 {tag}, label %ch{var_chain} [ i64 0, label %ch{all_chain}\n    \
-                 i64 1, label %{asw}\n    i64 2, label %{isw}\n    i64 3, label %{ssw} ]"
-            )
-            .unwrap();
-            if !atom_cases.is_empty() {
-                writeln!(self.out, "asw:").unwrap();
-                self.emit_word_switch(&d, &atom_cases, var_chain);
-            }
-            if !int_cases.is_empty() {
-                writeln!(self.out, "isw:").unwrap();
-                self.emit_word_switch(&d, &int_cases, var_chain);
-            }
-            if !str_cases.is_empty() {
-                writeln!(self.out, "ssw:").unwrap();
-                let k = self.fresh();
-                writeln!(
-                    self.out,
-                    "  {k} = call i64 @plg_rt_str_key(ptr %m, i64 {d})"
-                )
-                .unwrap();
-                self.emit_word_switch(&k, &str_cases, var_chain);
-            }
-            // Chain blocks (deduped — emit each used chain once).
-            let mut used: Vec<usize> = vec![all_chain, var_chain];
-            used.extend(key_chains.iter().map(|(_, id)| *id));
-            used.sort_unstable();
-            used.dedup();
-            for id in used {
-                writeln!(self.out, "ch{id}:").unwrap();
-                self.emit_chain_jump(&base, id, &chains[id], &f);
-            }
+            self.emit_indexed_dispatch(base, plan, f, arg0)?;
         }
         writeln!(self.out, "fail:").unwrap();
         writeln!(self.out, "  ret i32 0").unwrap();
         writeln!(self.out, "}}").unwrap();
+        Ok(())
+    }
 
-        // --- Chain retry functions (for chains with > 1 candidate).
+    /// Indexed dispatch: deref the first argument, switch on its tag,
+    /// sub-switch atoms/integers/functors on their switch words, then
+    /// emit the per-chain entry blocks.
+    fn emit_indexed_dispatch(
+        &mut self,
+        base: &str,
+        plan: &ChainPlan,
+        f: &str,
+        arg0: &str,
+    ) -> Result<(), String> {
+        let var_chain = plan.var_chain;
+        let all_chain = plan.all_chain;
+        let d = self.fresh();
+        writeln!(
+            self.out,
+            "  {d} = call i64 @plg_rt_deref(ptr %m, i64 {arg0})"
+        )
+        .unwrap();
+        let tag = self.fresh();
+        writeln!(self.out, "  {tag} = and i64 {d}, 7").unwrap();
+
+        // Group key chains by tag.
+        let mut atom_cases: Vec<(u64, usize)> = Vec::new();
+        let mut int_cases: Vec<(u64, usize)> = Vec::new();
+        let mut str_cases: Vec<(u64, usize)> = Vec::new();
+        for (k, id) in &plan.key_chains {
+            match k {
+                FirstArgKey::Atom(a) => atom_cases.push((atom_word(*a), *id)),
+                FirstArgKey::Integer(i) => int_cases.push((int_word(*i)?, *id)),
+                FirstArgKey::Functor(fu, ar) => {
+                    str_cases.push((((*fu as u64) << 32) | *ar as u64, *id))
+                }
+            }
+        }
+        let asw = if atom_cases.is_empty() {
+            format!("ch{var_chain}")
+        } else {
+            "asw".into()
+        };
+        let isw = if int_cases.is_empty() {
+            format!("ch{var_chain}")
+        } else {
+            "isw".into()
+        };
+        let ssw = if str_cases.is_empty() {
+            format!("ch{var_chain}")
+        } else {
+            "ssw".into()
+        };
+        writeln!(
+            self.out,
+            "  switch i64 {tag}, label %ch{var_chain} [ i64 0, label %ch{all_chain}\n    \
+             i64 1, label %{asw}\n    i64 2, label %{isw}\n    i64 3, label %{ssw} ]"
+        )
+        .unwrap();
+        if !atom_cases.is_empty() {
+            writeln!(self.out, "asw:").unwrap();
+            self.emit_word_switch(&d, &atom_cases, var_chain);
+        }
+        if !int_cases.is_empty() {
+            writeln!(self.out, "isw:").unwrap();
+            self.emit_word_switch(&d, &int_cases, var_chain);
+        }
+        if !str_cases.is_empty() {
+            writeln!(self.out, "ssw:").unwrap();
+            let k = self.fresh();
+            writeln!(
+                self.out,
+                "  {k} = call i64 @plg_rt_str_key(ptr %m, i64 {d})"
+            )
+            .unwrap();
+            self.emit_word_switch(&k, &str_cases, var_chain);
+        }
+        // Chain blocks.
+        self.emit_chain_blocks(base, plan, f);
+        Ok(())
+    }
+
+    /// Entry blocks for each chain this dispatch can reach (deduped —
+    /// emit each used chain once).
+    fn emit_chain_blocks(&mut self, base: &str, plan: &ChainPlan, f: &str) {
+        let mut used: Vec<usize> = vec![plan.all_chain, plan.var_chain];
+        used.extend(plan.key_chains.iter().map(|(_, id)| *id));
+        used.sort_unstable();
+        used.dedup();
+        for id in used {
+            writeln!(self.out, "ch{id}:").unwrap();
+            self.emit_chain_jump(base, id, &plan.chains[id], f);
+        }
+    }
+
+    /// Chain retry functions (`@<base>_x<chain>_t<p>`): resume candidate
+    /// `p` of a multi-candidate chain by pushing the next retry, then
+    /// musttailing into the clause function.
+    fn emit_retry_fns(&mut self, base: &str, chains: &[Vec<usize>]) {
         for (id, list) in chains.iter().enumerate() {
             for p in 1..list.len() {
                 self.reset_temps();
@@ -232,37 +256,11 @@ impl CodeGen<'_> {
                 )
                 .unwrap();
                 writeln!(self.out, "entry:").unwrap();
-                if p + 1 < list.len() {
-                    let t = self.fresh();
-                    writeln!(
-                        self.out,
-                        "  {t} = ptrtoint ptr @{base}_x{id}_t{} to i64",
-                        p + 1
-                    )
-                    .unwrap();
-                    writeln!(
-                        self.out,
-                        "  call void @plg_rt_push_cp(ptr %m, i64 {t}, i64 %f)"
-                    )
-                    .unwrap();
-                }
-                let r = self.fresh();
-                writeln!(
-                    self.out,
-                    "  {r} = musttail call i32 @{base}_c{}(ptr %m, i64 %f)",
-                    list[p]
-                )
-                .unwrap();
-                writeln!(self.out, "  ret i32 {r}").unwrap();
+                let next = (p + 1 < list.len()).then(|| format!("@{base}_x{id}_t{}", p + 1));
+                self.emit_push_cp_jump(base, next.as_deref(), list[p], "%f");
                 writeln!(self.out, "}}").unwrap();
             }
         }
-
-        // --- Clause functions (shared across chains).
-        for (j, clause) in clauses.iter().enumerate() {
-            self.emit_clause(functor, arity, j, clause)?;
-        }
-        Ok(())
     }
 
     /// Inside the entry function: enter chain `id` (terminates the block).
@@ -283,23 +281,30 @@ impl CodeGen<'_> {
                 writeln!(self.out, "  ret i32 {r}").unwrap();
             }
             _ => {
-                let t = self.fresh();
-                writeln!(self.out, "  {t} = ptrtoint ptr @{base}_x{id}_t1 to i64").unwrap();
-                writeln!(
-                    self.out,
-                    "  call void @plg_rt_push_cp(ptr %m, i64 {t}, i64 {f})"
-                )
-                .unwrap();
-                let r = self.fresh();
-                writeln!(
-                    self.out,
-                    "  {r} = musttail call i32 @{base}_c{}(ptr %m, i64 {f})",
-                    list[0]
-                )
-                .unwrap();
-                writeln!(self.out, "  ret i32 {r}").unwrap();
+                self.emit_push_cp_jump(base, Some(&format!("@{base}_x{id}_t1")), list[0], f);
             }
         }
+    }
+
+    /// Push a choice point resuming at `next_retry` (if any), then
+    /// musttail into clause function `c` and return its result.
+    fn emit_push_cp_jump(&mut self, base: &str, next_retry: Option<&str>, c: usize, env: &str) {
+        if let Some(nr) = next_retry {
+            let t = self.fresh();
+            writeln!(self.out, "  {t} = ptrtoint ptr {nr} to i64").unwrap();
+            writeln!(
+                self.out,
+                "  call void @plg_rt_push_cp(ptr %m, i64 {t}, i64 {env})"
+            )
+            .unwrap();
+        }
+        let r = self.fresh();
+        writeln!(
+            self.out,
+            "  {r} = musttail call i32 @{base}_c{c}(ptr %m, i64 {env})"
+        )
+        .unwrap();
+        writeln!(self.out, "  ret i32 {r}").unwrap();
     }
 
     /// `switch` on a tagged word over constant cases.
@@ -317,5 +322,61 @@ impl CodeGen<'_> {
             body.join("\n    ")
         )
         .unwrap();
+    }
+}
+
+/// Bucket `clauses` into deduplicated candidate lists keyed by their
+/// head's first-argument constant; clauses with unbound (or unswitchable)
+/// first arguments share the var chain.
+fn first_arg_chains(arity: u32, clauses: &[CgClause]) -> ChainPlan {
+    let n = clauses.len();
+    let keys: Vec<Option<FirstArgKey>> = clauses
+        .iter()
+        .map(|c| {
+            c.head.first_arg_key().filter(|k| {
+                // Boxed-range integers can't be switch constants;
+                // treat those clauses as unindexable (var bucket).
+                !matches!(k, FirstArgKey::Integer(n)
+                    if !(super::term_emit::IMM_INT_MIN..=super::term_emit::IMM_INT_MAX).contains(n))
+            })
+        })
+        .collect();
+    let indexable = arity > 0 && keys.iter().any(|k| k.is_some());
+
+    let mut chains: Vec<Vec<usize>> = Vec::new();
+    let chain_id = |list: Vec<usize>, chains: &mut Vec<Vec<usize>>| -> usize {
+        if let Some(i) = chains.iter().position(|c| *c == list) {
+            i
+        } else {
+            chains.push(list);
+            chains.len() - 1
+        }
+    };
+    let all_chain = chain_id((0..n).collect(), &mut chains);
+    let (var_chain, key_chains) = if indexable {
+        let var_bucket: Vec<usize> = (0..n).filter(|&i| keys[i].is_none()).collect();
+        let vc = chain_id(var_bucket, &mut chains);
+        // Distinct keys in first-appearance order.
+        let mut key_chains: Vec<(FirstArgKey, usize)> = Vec::new();
+        for k in keys.iter().flatten() {
+            if key_chains.iter().any(|(kk, _)| kk == k) {
+                continue;
+            }
+            let list: Vec<usize> = (0..n)
+                .filter(|&i| keys[i].is_none() || keys[i].as_ref() == Some(k))
+                .collect();
+            let id = chain_id(list, &mut chains);
+            key_chains.push((k.clone(), id));
+        }
+        (vc, key_chains)
+    } else {
+        (all_chain, Vec::new())
+    };
+    ChainPlan {
+        chains,
+        all_chain,
+        var_chain,
+        key_chains,
+        indexable,
     }
 }

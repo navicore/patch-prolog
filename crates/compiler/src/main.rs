@@ -7,35 +7,6 @@ use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-fn run_script(source: &str, args: &[String]) -> ExitCode {
-    let dir = match tempfile::tempdir() {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("error: cannot create temp dir: {e}");
-            return ExitCode::from(3);
-        }
-    };
-    let bin = dir.path().join("plg-script");
-    let src = std::path::Path::new(source);
-    if let Err(e) = plgc::compile_files(
-        &[src],
-        &bin,
-        false,
-        plgc::OptLevel::O3,
-        plgc::Target::Native,
-    ) {
-        eprintln!("error: {e}");
-        return ExitCode::from(3);
-    }
-    match std::process::Command::new(&bin).args(args).status() {
-        Ok(status) => ExitCode::from(status.code().unwrap_or(3) as u8),
-        Err(e) => {
-            eprintln!("error: failed to run compiled script: {e}");
-            ExitCode::from(3)
-        }
-    }
-}
-
 #[derive(Parser)]
 #[command(
     name = "plgc",
@@ -177,6 +148,159 @@ fn emit_worker_glue(output: &std::path::Path) {
     }
 }
 
+/// Script mode: compile `source` to a temp binary and exec it with
+/// `args`.
+fn run_script(source: &str, args: &[String]) -> ExitCode {
+    let dir = match tempfile::tempdir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: cannot create temp dir: {e}");
+            return ExitCode::from(3);
+        }
+    };
+    let bin = dir.path().join("plg-script");
+    let src = std::path::Path::new(source);
+    if let Err(e) = plgc::compile_files(
+        &[src],
+        &bin,
+        false,
+        plgc::OptLevel::O3,
+        plgc::Target::Native,
+    ) {
+        eprintln!("error: {e}");
+        return ExitCode::from(3);
+    }
+    let mut cmd = std::process::Command::new(&bin);
+    cmd.args(args);
+    spawn_exit(cmd)
+}
+
+/// Run `cmd`, mapping its exit status (or spawn failure) to an ExitCode.
+fn spawn_exit(mut cmd: std::process::Command) -> ExitCode {
+    match cmd.status() {
+        Ok(status) => ExitCode::from(status.code().unwrap_or(3) as u8),
+        Err(e) => {
+            eprintln!("error: failed to run compiled binary: {e}");
+            ExitCode::from(3)
+        }
+    }
+}
+
+fn cmd_build(
+    inputs: Vec<PathBuf>,
+    output: Option<PathBuf>,
+    keep_ir: bool,
+    debug: bool,
+    deny_undefined: bool,
+    target: Option<String>,
+) -> ExitCode {
+    if inputs.is_empty() {
+        eprintln!("error: no input files");
+        return ExitCode::from(3);
+    }
+    let target = match parse_target(target.as_deref()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(3);
+        }
+    };
+    // Default output stem. Distinct wasm extensions so compiling one
+    // source to both wasm targets without an explicit `-o` doesn't
+    // silently overwrite (`prog.wasm` vs `prog.worker.wasm`).
+    let output = output.unwrap_or_else(|| {
+        let stem = PathBuf::from(inputs[0].file_stem().unwrap_or_default());
+        match target {
+            plgc::Target::Wasm => stem.with_extension("wasm"),
+            plgc::Target::Worker => stem.with_extension("worker.wasm"),
+            plgc::Target::Native => stem,
+        }
+    });
+    let sources: Vec<&std::path::Path> = inputs.iter().map(|p| p.as_path()).collect();
+    if let Err(code) = lint_undefined(&sources, deny_undefined) {
+        return ExitCode::from(code);
+    }
+    let opt = if debug {
+        plgc::OptLevel::O0
+    } else {
+        plgc::OptLevel::O3
+    };
+    match plgc::compile_files(&sources, &output, keep_ir, opt, target) {
+        Ok(()) => {
+            // Drop deploy scaffolding next to a reactor module (D1g):
+            // worker.js + wrangler.toml + config.capnp, written only if
+            // absent so a rebuild never clobbers user edits.
+            if target == plgc::Target::Worker {
+                emit_worker_glue(&output);
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(3)
+        }
+    }
+}
+
+/// Compile to a temp binary and exec it — NEVER interpret. Dev mode
+/// and production mode share one execution path.
+fn cmd_run(
+    inputs: Vec<PathBuf>,
+    query: String,
+    limit: Option<usize>,
+    format: String,
+    deny_undefined: bool,
+) -> ExitCode {
+    if inputs.is_empty() {
+        eprintln!("error: no input files");
+        return ExitCode::from(3);
+    }
+    let sources: Vec<&std::path::Path> = inputs.iter().map(|p| p.as_path()).collect();
+    if let Err(code) = lint_undefined(&sources, deny_undefined) {
+        return ExitCode::from(code);
+    }
+    let dir = match tempfile::tempdir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: cannot create temp dir: {e}");
+            return ExitCode::from(3);
+        }
+    };
+    let bin = dir.path().join("plg-run");
+    if let Err(e) = plgc::compile_files(
+        &sources,
+        &bin,
+        false,
+        plgc::OptLevel::O0,
+        plgc::Target::Native,
+    ) {
+        eprintln!("error: {e}");
+        // Parse errors carry file:line:col; map them to exit 2.
+        let code = if is_parse_error(&e) { 2 } else { 3 };
+        return ExitCode::from(code);
+    }
+    let mut cmd = std::process::Command::new(&bin);
+    cmd.arg("--query").arg(&query).arg("--format").arg(&format);
+    if let Some(l) = limit {
+        cmd.arg("--limit").arg(l.to_string());
+    }
+    spawn_exit(cmd)
+}
+
+fn cmd_check(inputs: Vec<PathBuf>, deny_undefined: bool) -> ExitCode {
+    let sources: Vec<&std::path::Path> = inputs.iter().map(|p| p.as_path()).collect();
+    match plgc::check_files(&sources) {
+        Ok(()) => match lint_undefined(&sources, deny_undefined) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(code) => ExitCode::from(code),
+        },
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(2)
+        }
+    }
+}
+
 fn main() -> ExitCode {
     // Script mode (`#!/usr/bin/env plgc`): `plgc prog.pl [binary args…]`
     // compiles to a temp binary and execs it — same path as `plgc run`,
@@ -196,120 +320,18 @@ fn main() -> ExitCode {
             debug,
             deny_undefined,
             target,
-        } => {
-            if inputs.is_empty() {
-                eprintln!("error: no input files");
-                return ExitCode::from(3);
-            }
-            let target = match parse_target(target.as_deref()) {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    return ExitCode::from(3);
-                }
-            };
-            // Default output stem. Distinct wasm extensions so compiling one
-            // source to both wasm targets without an explicit `-o` doesn't
-            // silently overwrite (`prog.wasm` vs `prog.worker.wasm`).
-            let output = output.unwrap_or_else(|| {
-                let stem = PathBuf::from(inputs[0].file_stem().unwrap_or_default());
-                match target {
-                    plgc::Target::Wasm => stem.with_extension("wasm"),
-                    plgc::Target::Worker => stem.with_extension("worker.wasm"),
-                    plgc::Target::Native => stem,
-                }
-            });
-            let sources: Vec<&std::path::Path> = inputs.iter().map(|p| p.as_path()).collect();
-            if let Err(code) = lint_undefined(&sources, deny_undefined) {
-                return ExitCode::from(code);
-            }
-            let opt = if debug {
-                plgc::OptLevel::O0
-            } else {
-                plgc::OptLevel::O3
-            };
-            match plgc::compile_files(&sources, &output, keep_ir, opt, target) {
-                Ok(()) => {
-                    // Drop deploy scaffolding next to a reactor module (D1g):
-                    // worker.js + wrangler.toml + config.capnp, written only if
-                    // absent so a rebuild never clobbers user edits.
-                    if target == plgc::Target::Worker {
-                        emit_worker_glue(&output);
-                    }
-                    ExitCode::SUCCESS
-                }
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    ExitCode::from(3)
-                }
-            }
-        }
+        } => cmd_build(inputs, output, keep_ir, debug, deny_undefined, target),
         Commands::Run {
             inputs,
             query,
             limit,
             format,
             deny_undefined,
-        } => {
-            // Compile to a temp binary and exec it — NEVER interpret.
-            // Dev mode and production mode share one execution path.
-            if inputs.is_empty() {
-                eprintln!("error: no input files");
-                return ExitCode::from(3);
-            }
-            let sources: Vec<&std::path::Path> = inputs.iter().map(|p| p.as_path()).collect();
-            if let Err(code) = lint_undefined(&sources, deny_undefined) {
-                return ExitCode::from(code);
-            }
-            let dir = match tempfile::tempdir() {
-                Ok(d) => d,
-                Err(e) => {
-                    eprintln!("error: cannot create temp dir: {e}");
-                    return ExitCode::from(3);
-                }
-            };
-            let bin = dir.path().join("plg-run");
-            if let Err(e) = plgc::compile_files(
-                &sources,
-                &bin,
-                false,
-                plgc::OptLevel::O0,
-                plgc::Target::Native,
-            ) {
-                eprintln!("error: {e}");
-                // Parse errors carry file:line:col; map them to exit 2.
-                let code = if is_parse_error(&e) { 2 } else { 3 };
-                return ExitCode::from(code);
-            }
-            let mut cmd = std::process::Command::new(&bin);
-            cmd.arg("--query").arg(&query).arg("--format").arg(&format);
-            if let Some(l) = limit {
-                cmd.arg("--limit").arg(l.to_string());
-            }
-            match cmd.status() {
-                Ok(status) => ExitCode::from(status.code().unwrap_or(3) as u8),
-                Err(e) => {
-                    eprintln!("error: failed to run compiled binary: {e}");
-                    ExitCode::from(3)
-                }
-            }
-        }
+        } => cmd_run(inputs, query, limit, format, deny_undefined),
         Commands::Check {
             inputs,
             deny_undefined,
-        } => {
-            let sources: Vec<&std::path::Path> = inputs.iter().map(|p| p.as_path()).collect();
-            match plgc::check_files(&sources) {
-                Ok(()) => match lint_undefined(&sources, deny_undefined) {
-                    Ok(()) => ExitCode::SUCCESS,
-                    Err(code) => ExitCode::from(code),
-                },
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    ExitCode::from(2)
-                }
-            }
-        }
+        } => cmd_check(inputs, deny_undefined),
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             let name = cmd.get_name().to_string();
