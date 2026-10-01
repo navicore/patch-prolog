@@ -57,6 +57,40 @@ enum AuxKind {
     CallerKJump,
 }
 
+/// Loop-carried state for lowering one control construct: the output
+/// buffer, the goals after it, the outer continuation, and the
+/// compilation machinery all of them feed.
+struct SeqSite<'a> {
+    b: &'a mut String,
+    rest: &'a [LGoal],
+    after: &'a After,
+    ctx: &'a mut ClauseCtx,
+    vars: &'a HashMap<VarId, String>,
+    cut_slot: usize,
+}
+
+impl<'a> SeqSite<'a> {
+    fn new(
+        b: &'a mut String,
+        rest: &'a [LGoal],
+        after: &'a After,
+        ctx: &'a mut ClauseCtx,
+        vars: &'a HashMap<VarId, String>,
+        cut_slot: usize,
+    ) -> Self {
+        SeqSite {
+            b,
+            rest,
+            after,
+            ctx,
+            vars,
+            cut_slot,
+        }
+    }
+}
+
+/// Per-clause compilation state: the symbol base, frame layout, the
+/// current body-frame SSA name, and the queued aux functions.
 pub struct ClauseCtx {
     /// Function-name prefix for this clause (`plg_p<F>_<A>_c<j>`).
     pub base: String,
@@ -140,13 +174,7 @@ impl CodeGen<'_> {
                     // predicate barrier; call-like constructs (`->`
                     // conditions, `\+`, `once`) pass a local slot, making
                     // the cut opaque there per ISO.
-                    let h = self.fresh();
-                    writeln!(
-                        b,
-                        "  {h} = call i64 @plg_rt_frame_get(ptr %m, i64 {bf}, i32 {cut_slot})"
-                    )
-                    .unwrap();
-                    writeln!(b, "  call void @plg_rt_cut(ptr %m, i64 {h})").unwrap();
+                    self.emit_cut_to_slot(b, &bf, cut_slot);
                 }
                 LGoalKind::Unify(..)
                 | LGoalKind::NotUnify(..)
@@ -170,108 +198,24 @@ impl CodeGen<'_> {
                     return Ok(());
                 }
                 LGoalKind::Disj(a, b2) => {
-                    // Cut is transparent in both branches.
-                    let rest_after = self.rest_after(rest, after, ctx, cut_slot);
-                    let bsym = ctx.queue(AuxKind::Seq {
-                        goals: goals_of(b2),
-                        after: rest_after.clone(),
-                        cut_slot,
-                    });
-                    let t = self.fresh();
-                    writeln!(b, "  {t} = ptrtoint ptr @{bsym} to i64").unwrap();
-                    writeln!(b, "  call void @plg_rt_push_cp(ptr %m, i64 {t}, i64 {bf})").unwrap();
-                    return self.compile_seq(b, &goals_of(a), &rest_after, ctx, vars, cut_slot);
+                    let mut site = SeqSite::new(b, rest, after, ctx, vars, cut_slot);
+                    return self.lower_disj(&mut site, a, b2);
                 }
                 LGoalKind::IfThenElse(c, t, e) => {
-                    let rest_after = self.rest_after(rest, after, ctx, cut_slot);
-                    let slot = ctx.alloc_scratch();
-                    self.emit_capture_height(b, &bf, slot);
-                    // Cut is transparent in T and E (outer cut_slot)...
-                    let else_sym = ctx.queue(AuxKind::Seq {
-                        goals: goals_of(e),
-                        after: rest_after.clone(),
-                        cut_slot,
-                    });
-                    let then_sym = ctx.queue(AuxKind::CutThenSeq {
-                        slot,
-                        goals: goals_of(t),
-                        after: rest_after,
-                        cut_slot,
-                    });
-                    let p = self.fresh();
-                    writeln!(b, "  {p} = ptrtoint ptr @{else_sym} to i64").unwrap();
-                    writeln!(b, "  call void @plg_rt_push_cp(ptr %m, i64 {p}, i64 {bf})").unwrap();
-                    // ...but call-like (opaque) in the condition: its local
-                    // barrier is the height AFTER the else CP.
-                    let local = ctx.alloc_scratch();
-                    self.emit_capture_height(b, &bf, local);
-                    return self.compile_seq(
-                        b,
-                        &goals_of(c),
-                        &After::Fn(then_sym),
-                        ctx,
-                        vars,
-                        local,
-                    );
+                    let mut site = SeqSite::new(b, rest, after, ctx, vars, cut_slot);
+                    return self.lower_if_then_else(&mut site, c, t, e);
                 }
                 LGoalKind::IfThen(c, t) => {
-                    let rest_after = self.rest_after(rest, after, ctx, cut_slot);
-                    let slot = ctx.alloc_scratch();
-                    self.emit_capture_height(b, &bf, slot);
-                    let then_sym = ctx.queue(AuxKind::CutThenSeq {
-                        slot,
-                        goals: goals_of(t),
-                        after: rest_after,
-                        cut_slot,
-                    });
-                    // No CP pushed: the commit slot doubles as C's local
-                    // cut barrier.
-                    return self.compile_seq(
-                        b,
-                        &goals_of(c),
-                        &After::Fn(then_sym),
-                        ctx,
-                        vars,
-                        slot,
-                    );
+                    let mut site = SeqSite::new(b, rest, after, ctx, vars, cut_slot);
+                    return self.lower_if_then(&mut site, c, t);
                 }
                 LGoalKind::Once(g) => {
-                    // once(G) = commit to G's first solution, continue.
-                    let slot = ctx.alloc_scratch();
-                    self.emit_capture_height(b, &bf, slot);
-                    let then_sym = ctx.queue(AuxKind::CutThenSeq {
-                        slot,
-                        goals: rest.to_vec(),
-                        after: after.clone(),
-                        cut_slot,
-                    });
-                    // call-like: cut inside G is local (commit slot).
-                    return self.compile_seq(
-                        b,
-                        &goals_of(g),
-                        &After::Fn(then_sym),
-                        ctx,
-                        vars,
-                        slot,
-                    );
+                    let mut site = SeqSite::new(b, rest, after, ctx, vars, cut_slot);
+                    return self.lower_once(&mut site, g);
                 }
                 LGoalKind::Naf(g) => {
-                    let rest_after = self.rest_after(rest, after, ctx, cut_slot);
-                    let cont_sym = match &rest_after {
-                        After::Fn(s) => s.clone(),
-                        After::CallerK => ctx.callerk_jump(),
-                    };
-                    let slot = ctx.alloc_scratch();
-                    self.emit_capture_height(b, &bf, slot);
-                    let p = self.fresh();
-                    writeln!(b, "  {p} = ptrtoint ptr @{cont_sym} to i64").unwrap();
-                    writeln!(b, "  call void @plg_rt_push_cp(ptr %m, i64 {p}, i64 {bf})").unwrap();
-                    let found = ctx.queue(AuxKind::NafFound { slot });
-                    // call-like: cut inside G is local — barrier is the
-                    // height AFTER the continue-CP.
-                    let local = ctx.alloc_scratch();
-                    self.emit_capture_height(b, &bf, local);
-                    return self.compile_seq(b, &goals_of(g), &After::Fn(found), ctx, vars, local);
+                    let mut site = SeqSite::new(b, rest, after, ctx, vars, cut_slot);
+                    return self.lower_naf(&mut site, g);
                 }
                 LGoalKind::Conj(gs) => {
                     let mut combined = gs.clone();
@@ -286,6 +230,143 @@ impl CodeGen<'_> {
         Ok(())
     }
 
+    /// `(A ; B)` — push CP retrying B, fall into A. Cut is transparent
+    /// in both branches (outer `cut_slot`).
+    fn lower_disj(&mut self, site: &mut SeqSite<'_>, a: &LGoal, b2: &LGoal) -> Result<(), String> {
+        let bf = site.ctx.bf.clone();
+        let rest_after = self.rest_after(site.rest, site.after, site.ctx, site.cut_slot);
+        let bsym = site.ctx.queue(AuxKind::Seq {
+            goals: goals_of(b2),
+            after: rest_after.clone(),
+            cut_slot: site.cut_slot,
+        });
+        self.emit_push_cp(site.b, &bsym, &bf);
+        self.compile_seq(
+            site.b,
+            &goals_of(a),
+            &rest_after,
+            site.ctx,
+            site.vars,
+            site.cut_slot,
+        )
+    }
+
+    /// `(C->T ; E)` — capture h, push CP retrying E, run C with a
+    /// continuation that cuts to h and runs T. Cut is transparent in T
+    /// and E (outer `cut_slot`), but call-like (opaque) in the
+    /// condition: its local barrier is the height AFTER the else CP.
+    fn lower_if_then_else(
+        &mut self,
+        site: &mut SeqSite<'_>,
+        c: &LGoal,
+        t: &LGoal,
+        e: &LGoal,
+    ) -> Result<(), String> {
+        let bf = site.ctx.bf.clone();
+        let rest_after = self.rest_after(site.rest, site.after, site.ctx, site.cut_slot);
+        let slot = site.ctx.alloc_scratch();
+        self.emit_capture_height(site.b, &bf, slot);
+        let else_sym = site.ctx.queue(AuxKind::Seq {
+            goals: goals_of(e),
+            after: rest_after.clone(),
+            cut_slot: site.cut_slot,
+        });
+        let then_sym = site.ctx.queue(AuxKind::CutThenSeq {
+            slot,
+            goals: goals_of(t),
+            after: rest_after,
+            cut_slot: site.cut_slot,
+        });
+        self.emit_push_cp(site.b, &else_sym, &bf);
+        let local = site.ctx.alloc_scratch();
+        self.emit_capture_height(site.b, &bf, local);
+        self.compile_seq(
+            site.b,
+            &goals_of(c),
+            &After::Fn(then_sym),
+            site.ctx,
+            site.vars,
+            local,
+        )
+    }
+
+    /// `(C -> T)` — like ITE minus the else CP: the commit slot doubles
+    /// as C's local cut barrier.
+    fn lower_if_then(
+        &mut self,
+        site: &mut SeqSite<'_>,
+        c: &LGoal,
+        t: &LGoal,
+    ) -> Result<(), String> {
+        let bf = site.ctx.bf.clone();
+        let rest_after = self.rest_after(site.rest, site.after, site.ctx, site.cut_slot);
+        let slot = site.ctx.alloc_scratch();
+        self.emit_capture_height(site.b, &bf, slot);
+        let then_sym = site.ctx.queue(AuxKind::CutThenSeq {
+            slot,
+            goals: goals_of(t),
+            after: rest_after,
+            cut_slot: site.cut_slot,
+        });
+        self.compile_seq(
+            site.b,
+            &goals_of(c),
+            &After::Fn(then_sym),
+            site.ctx,
+            site.vars,
+            slot,
+        )
+    }
+
+    /// `once(G)` — capture h, run G call-like with a continuation that
+    /// cuts to h and continues with the rest.
+    fn lower_once(&mut self, site: &mut SeqSite<'_>, g: &LGoal) -> Result<(), String> {
+        let bf = site.ctx.bf.clone();
+        let slot = site.ctx.alloc_scratch();
+        self.emit_capture_height(site.b, &bf, slot);
+        let then_sym = site.ctx.queue(AuxKind::CutThenSeq {
+            slot,
+            goals: site.rest.to_vec(),
+            after: site.after.clone(),
+            cut_slot: site.cut_slot,
+        });
+        self.compile_seq(
+            site.b,
+            &goals_of(g),
+            &After::Fn(then_sym),
+            site.ctx,
+            site.vars,
+            slot,
+        )
+    }
+
+    /// `\+ G` — capture h, push CP that CONTINUES the body, run G
+    /// call-like with a continuation that cuts to h and fails the NAF.
+    fn lower_naf(&mut self, site: &mut SeqSite<'_>, g: &LGoal) -> Result<(), String> {
+        let bf = site.ctx.bf.clone();
+        let rest_after = self.rest_after(site.rest, site.after, site.ctx, site.cut_slot);
+        let cont_sym = match &rest_after {
+            After::Fn(s) => s.clone(),
+            After::CallerK => site.ctx.callerk_jump(),
+        };
+        let slot = site.ctx.alloc_scratch();
+        self.emit_capture_height(site.b, &bf, slot);
+        self.emit_push_cp(site.b, &cont_sym, &bf);
+        let found = site.ctx.queue(AuxKind::NafFound { slot });
+        // call-like: cut inside G is local — barrier is the height
+        // AFTER the continue-CP.
+        let local = site.ctx.alloc_scratch();
+        self.emit_capture_height(site.b, &bf, local);
+        self.compile_seq(
+            site.b,
+            &goals_of(g),
+            &After::Fn(found),
+            site.ctx,
+            site.vars,
+            local,
+        )
+    }
+
     /// Drain and emit all functions queued during compile_seq.
     pub fn emit_aux_fns(&mut self, ctx: &mut ClauseCtx) -> Result<(), String> {
         while let Some((sym, kind)) = ctx.work.pop() {
@@ -294,7 +375,7 @@ impl CodeGen<'_> {
             let mut b = String::new();
             // Reload clause variables from the body frame.
             let mut vars: HashMap<VarId, String> = HashMap::new();
-            for (i, v) in ctx.var_list.clone().into_iter().enumerate() {
+            for (i, v) in ctx.var_list.iter().enumerate() {
                 let t = self.fresh();
                 writeln!(
                     b,
@@ -302,7 +383,7 @@ impl CodeGen<'_> {
                     3 + i
                 )
                 .unwrap();
-                vars.insert(v, t);
+                vars.insert(*v, t);
             }
             match kind {
                 AuxKind::Seq {
@@ -318,23 +399,11 @@ impl CodeGen<'_> {
                     after,
                     cut_slot,
                 } => {
-                    let h = self.fresh();
-                    writeln!(
-                        b,
-                        "  {h} = call i64 @plg_rt_frame_get(ptr %m, i64 %bf, i32 {slot})"
-                    )
-                    .unwrap();
-                    writeln!(b, "  call void @plg_rt_cut(ptr %m, i64 {h})").unwrap();
+                    self.emit_cut_to_slot(&mut b, "%bf", slot);
                     self.compile_seq(&mut b, &goals, &after, ctx, &vars, cut_slot)?;
                 }
                 AuxKind::NafFound { slot } => {
-                    let h = self.fresh();
-                    writeln!(
-                        b,
-                        "  {h} = call i64 @plg_rt_frame_get(ptr %m, i64 %bf, i32 {slot})"
-                    )
-                    .unwrap();
-                    writeln!(b, "  call void @plg_rt_cut(ptr %m, i64 {h})").unwrap();
+                    self.emit_cut_to_slot(&mut b, "%bf", slot);
                     writeln!(b, "  ret i32 0").unwrap();
                 }
                 AuxKind::CallerKJump => {
@@ -368,6 +437,24 @@ impl CodeGen<'_> {
                 cut_slot,
             }))
         }
+    }
+
+    /// Push a choice point resuming at `sym` with environment `bf`.
+    fn emit_push_cp(&mut self, b: &mut String, sym: &str, bf: &str) {
+        let t = self.fresh();
+        writeln!(b, "  {t} = ptrtoint ptr @{sym} to i64").unwrap();
+        writeln!(b, "  call void @plg_rt_push_cp(ptr %m, i64 {t}, i64 {bf})").unwrap();
+    }
+
+    /// Load the height stored in frame `slot` and cut to it.
+    fn emit_cut_to_slot(&mut self, b: &mut String, bf: &str, slot: usize) {
+        let h = self.fresh();
+        writeln!(
+            b,
+            "  {h} = call i64 @plg_rt_frame_get(ptr %m, i64 {bf}, i32 {slot})"
+        )
+        .unwrap();
+        writeln!(b, "  call void @plg_rt_cut(ptr %m, i64 {h})").unwrap();
     }
 
     /// Store the current choice-point height into a frame scratch slot.
