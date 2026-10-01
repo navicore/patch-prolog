@@ -40,68 +40,17 @@ impl CodeGen<'_> {
         let mut b = String::new();
         let mut vars: HashMap<VarId, String> = HashMap::new();
 
-        // --- Head: load incoming args; alias first-occurrence var
-        // patterns, queue everything else for unification.
+        // --- Head: alias first-occurrence var patterns, unify the rest.
         let head_args: &[Term] = match &clause.head {
             Term::Compound { args, .. } => args,
             _ => &[], // arity-0 predicate
         };
-        let mut to_unify: Vec<(String, &Term)> = Vec::new();
-        for (i, pat) in head_args.iter().enumerate() {
-            let arg = self.fresh();
-            writeln!(
-                b,
-                "  {arg} = call i64 @plg_rt_frame_get(ptr %m, i64 %f, i32 {i})"
-            )
-            .unwrap();
-            match pat {
-                Term::Var(v) if !vars.contains_key(v) => {
-                    vars.insert(*v, arg);
-                }
-                _ => to_unify.push((arg, pat)),
-            }
-        }
-        // Remaining clause variables get fresh cells.
-        for v in &var_list {
-            if !vars.contains_key(v) {
-                let t = self.fresh();
-                writeln!(b, "  {t} = call i64 @plg_rt_new_var(ptr %m)").unwrap();
-                vars.insert(*v, t);
-            }
-        }
-        // Emit queued head unifications (after all vars exist).
-        for (arg, pat) in to_unify {
-            let w = self.emit_term(&mut b, pat, &vars)?;
-            let u = self.fresh();
-            writeln!(
-                b,
-                "  {u} = call i32 @plg_rt_unify(ptr %m, i64 {arg}, i64 {w})"
-            )
-            .unwrap();
-            self.emit_branch_on(&mut b, &u);
-        }
+        self.emit_head_unification(&mut b, head_args, &var_list, &mut vars)?;
 
         // --- Body.
         if goals.is_empty() {
             // Fact: jump straight to the caller's continuation.
-            let kf = self.fresh();
-            writeln!(
-                b,
-                "  {kf} = call i64 @plg_rt_frame_get(ptr %m, i64 %f, i32 {arity})"
-            )
-            .unwrap();
-            let ke = self.fresh();
-            writeln!(
-                b,
-                "  {ke} = call i64 @plg_rt_frame_get(ptr %m, i64 %f, i32 {})",
-                arity + 1
-            )
-            .unwrap();
-            let kp = self.fresh();
-            writeln!(b, "  {kp} = inttoptr i64 {kf} to ptr").unwrap();
-            let r = self.fresh();
-            writeln!(b, "  {r} = musttail call i32 {kp}(ptr %m, i64 {ke})").unwrap();
-            writeln!(b, "  ret i32 {r}").unwrap();
+            self.emit_fact_jump(&mut b, arity);
             self.write_fn(&base, "%f", &b);
             return Ok(());
         }
@@ -151,6 +100,76 @@ impl CodeGen<'_> {
         Ok(())
     }
 
+    /// Load the predicate-frame arguments into the clause body: alias
+    /// first-occurrence variables, give remaining clause variables fresh
+    /// cells, then unify every non-variable head pattern.
+    fn emit_head_unification(
+        &mut self,
+        b: &mut String,
+        head_args: &[Term],
+        var_list: &[VarId],
+        vars: &mut HashMap<VarId, String>,
+    ) -> Result<(), String> {
+        let mut to_unify: Vec<(String, &Term)> = Vec::new();
+        for (i, pat) in head_args.iter().enumerate() {
+            let arg = self.fresh();
+            writeln!(
+                b,
+                "  {arg} = call i64 @plg_rt_frame_get(ptr %m, i64 %f, i32 {i})"
+            )
+            .unwrap();
+            match pat {
+                Term::Var(v) if !vars.contains_key(v) => {
+                    vars.insert(*v, arg);
+                }
+                _ => to_unify.push((arg, pat)),
+            }
+        }
+        // Remaining clause variables get fresh cells.
+        for v in var_list {
+            if !vars.contains_key(v) {
+                let t = self.fresh();
+                writeln!(b, "  {t} = call i64 @plg_rt_new_var(ptr %m)").unwrap();
+                vars.insert(*v, t);
+            }
+        }
+        // Emit queued head unifications (after all vars exist).
+        for (arg, pat) in to_unify {
+            let w = self.emit_term(b, pat, vars)?;
+            let u = self.fresh();
+            writeln!(
+                b,
+                "  {u} = call i32 @plg_rt_unify(ptr %m, i64 {arg}, i64 {w})"
+            )
+            .unwrap();
+            self.emit_branch_on(b, &u);
+        }
+        Ok(())
+    }
+
+    /// Fact (empty body): `musttail` straight to the caller's
+    /// continuation loaded from the predicate frame.
+    fn emit_fact_jump(&mut self, b: &mut String, arity: u32) {
+        let kf = self.fresh();
+        writeln!(
+            b,
+            "  {kf} = call i64 @plg_rt_frame_get(ptr %m, i64 %f, i32 {arity})"
+        )
+        .unwrap();
+        let ke = self.fresh();
+        writeln!(
+            b,
+            "  {ke} = call i64 @plg_rt_frame_get(ptr %m, i64 %f, i32 {})",
+            arity + 1
+        )
+        .unwrap();
+        let kp = self.fresh();
+        writeln!(b, "  {kp} = inttoptr i64 {kf} to ptr").unwrap();
+        let r = self.fresh();
+        writeln!(b, "  {r} = musttail call i32 {kp}(ptr %m, i64 {ke})").unwrap();
+        writeln!(b, "  ret i32 {r}").unwrap();
+    }
+
     fn write_fn(&mut self, sym: &str, env_name: &str, body: &str) {
         writeln!(
             self.out,
@@ -185,87 +204,87 @@ impl CodeGen<'_> {
         let r = match &g.node {
             LGoalKind::Unify(x, y) => {
                 let (wx, wy) = (self.emit_term(b, x, vars)?, self.emit_term(b, y, vars)?);
-                let r = self.fresh();
-                writeln!(
-                    b,
-                    "  {r} = call i32 @plg_rt_unify(ptr %m, i64 {wx}, i64 {wy})"
-                )
-                .unwrap();
-                r
+                self.fresh_call(b, format!("@plg_rt_unify(ptr %m, i64 {wx}, i64 {wy})"))
             }
             LGoalKind::NotUnify(x, y) => {
                 let (wx, wy) = (self.emit_term(b, x, vars)?, self.emit_term(b, y, vars)?);
-                let r = self.fresh();
-                writeln!(
-                    b,
-                    "  {r} = call i32 @plg_rt_b_neq(ptr %m, i64 {wx}, i64 {wy})"
-                )
-                .unwrap();
-                r
+                self.fresh_call(b, format!("@plg_rt_b_neq(ptr %m, i64 {wx}, i64 {wy})"))
             }
             LGoalKind::TermCmp(op, x, y) => {
                 let (wx, wy) = (self.emit_term(b, x, vars)?, self.emit_term(b, y, vars)?);
-                let r = self.fresh();
-                writeln!(
+                self.fresh_call(
                     b,
-                    "  {r} = call i32 @plg_rt_b_term_cmp(ptr %m, i32 {op}, i64 {wx}, i64 {wy})"
+                    format!("@plg_rt_b_term_cmp(ptr %m, i32 {op}, i64 {wx}, i64 {wy})"),
                 )
-                .unwrap();
-                r
             }
             LGoalKind::Compare(o, x, y) => {
                 let wo = self.emit_term(b, o, vars)?;
                 let (wx, wy) = (self.emit_term(b, x, vars)?, self.emit_term(b, y, vars)?);
-                let r = self.fresh();
-                writeln!(
+                self.fresh_call(
                     b,
-                    "  {r} = call i32 @plg_rt_b_compare(ptr %m, i64 {wo}, i64 {wx}, i64 {wy})"
+                    format!("@plg_rt_b_compare(ptr %m, i64 {wo}, i64 {wx}, i64 {wy})"),
                 )
-                .unwrap();
-                r
             }
             LGoalKind::Is(x, e) => {
                 let wx = self.emit_term(b, x, vars)?;
                 let we = self.emit_term(b, e, vars)?;
                 let site = self.site_id(span);
-                let r = self.fresh();
-                writeln!(
+                self.fresh_call(
                     b,
-                    "  {r} = call i32 @plg_rt_b_is(ptr %m, i64 {wx}, i64 {we}, i32 {site})"
+                    format!("@plg_rt_b_is(ptr %m, i64 {wx}, i64 {we}, i32 {site})"),
                 )
-                .unwrap();
-                r
             }
             LGoalKind::ArithCmp(op, x, y) => {
                 let (wx, wy) = (self.emit_term(b, x, vars)?, self.emit_term(b, y, vars)?);
                 let site = self.site_id(span);
-                let r = self.fresh();
-                writeln!(
+                self.fresh_call(
                     b,
-                    "  {r} = call i32 @plg_rt_b_arith_cmp(ptr %m, i32 {op}, i64 {wx}, i64 {wy}, i32 {site})"
+                    format!(
+                        "@plg_rt_b_arith_cmp(ptr %m, i32 {op}, i64 {wx}, i64 {wy}, i32 {site})"
+                    ),
                 )
-                .unwrap();
-                r
             }
             LGoalKind::RtDet { sym, args, raises } => {
-                let mut words = Vec::with_capacity(args.len());
-                for a in args {
-                    words.push(self.emit_term(b, a, vars)?);
-                }
-                let mut arglist: Vec<String> = words.iter().map(|w| format!(", i64 {w}")).collect();
-                // Raising det builtins take a trailing site_id (SPANS Layer 3).
-                if *raises {
-                    let site = self.site_id(span);
-                    arglist.push(format!(", i32 {site}"));
-                }
-                let r = self.fresh();
-                writeln!(b, "  {r} = call i32 @{sym}(ptr %m{})", arglist.join("")).unwrap();
-                r
+                self.emit_rt_det(b, sym, args, *raises, span, vars)?
             }
             _ => unreachable!("not an inline builtin"),
         };
         self.emit_branch_on(b, &r);
         Ok(())
+    }
+
+    /// Runtime-dispatched deterministic builtin: argument words in the
+    /// argument registers, plus a trailing site_id for the raising ones.
+    fn emit_rt_det(
+        &mut self,
+        b: &mut String,
+        sym: &str,
+        args: &[Term],
+        raises: bool,
+        span: Span,
+        vars: &HashMap<VarId, String>,
+    ) -> Result<String, String> {
+        let mut words = Vec::with_capacity(args.len());
+        for a in args {
+            words.push(self.emit_term(b, a, vars)?);
+        }
+        let mut arglist: Vec<String> = words.iter().map(|w| format!(", i64 {w}")).collect();
+        // Raising det builtins take a trailing site_id (SPANS Layer 3).
+        if raises {
+            let site = self.site_id(span);
+            arglist.push(format!(", i32 {site}"));
+        }
+        let r = self.fresh();
+        writeln!(b, "  {r} = call i32 @{sym}(ptr %m{})", arglist.join("")).unwrap();
+        Ok(r)
+    }
+
+    /// Fresh SSA name for the result of a `call i32` whose operand list
+    /// is already formatted (e.g. `@sym(ptr %m, i64 %t1)`).
+    fn fresh_call(&mut self, b: &mut String, call: String) -> String {
+        let r = self.fresh();
+        writeln!(b, "  {r} = call i32 {call}").unwrap();
+        r
     }
 
     /// Emit a runtime metacall in tail position (`call/N`, or a variable
@@ -303,6 +322,32 @@ impl CodeGen<'_> {
         writeln!(b, "{complex}:").unwrap();
         writeln!(b, "  {r2} = call i32 @plg_rt_metacall(ptr %m, i64 {g})").unwrap();
         writeln!(b, "  ret i32 {r2}").unwrap();
+    }
+
+    /// Emit the callee's argument terms and load them into the
+    /// machine's argument registers.
+    fn emit_set_aregs(
+        &mut self,
+        b: &mut String,
+        args: &[Term],
+        vars: &HashMap<VarId, String>,
+    ) -> Result<(), String> {
+        let mut words = Vec::with_capacity(args.len());
+        for a in args {
+            words.push(self.emit_term(b, a, vars)?);
+        }
+        for (i, w) in words.iter().enumerate() {
+            writeln!(b, "  call void @plg_rt_areg_set(ptr %m, i32 {i}, i64 {w})").unwrap();
+        }
+        Ok(())
+    }
+
+    /// `musttail` into a predicate entry with environment operand `env`
+    /// and return its result.
+    fn emit_musttail_pred(&mut self, b: &mut String, callee: &str, env: &str) {
+        let r = self.fresh();
+        writeln!(b, "  {r} = musttail call i32 @{callee}(ptr %m, i64 {env})").unwrap();
+        writeln!(b, "  ret i32 {r}").unwrap();
     }
 
     /// Emit a predicate call in tail position: load argument registers
@@ -373,41 +418,17 @@ impl CodeGen<'_> {
             ("between", 3) => {
                 // Nondeterministic builtin with a uniform predicate
                 // signature: dispatched exactly like a user predicate.
-                let mut words = Vec::with_capacity(args.len());
-                for a in args {
-                    words.push(self.emit_term(b, a, vars)?);
-                }
-                for (i, w) in words.iter().enumerate() {
-                    writeln!(b, "  call void @plg_rt_areg_set(ptr %m, i32 {i}, i64 {w})").unwrap();
-                }
-                let r = self.fresh();
-                writeln!(
-                    b,
-                    "  {r} = musttail call i32 @plg_rt_pred_between_3(ptr %m, i64 0)"
-                )
-                .unwrap();
-                writeln!(b, "  ret i32 {r}").unwrap();
+                self.emit_set_aregs(b, args, vars)?;
+                self.emit_musttail_pred(b, "plg_rt_pred_between_3", "0");
                 return Ok(());
             }
             ("atom_concat", 3) => {
                 // Nondeterministic in split mode → dispatched as a predicate
                 // (like between/3). The env carries the call-site id so the
                 // type/instantiation errors keep source provenance.
-                let mut words = Vec::with_capacity(args.len());
-                for a in args {
-                    words.push(self.emit_term(b, a, vars)?);
-                }
-                for (i, w) in words.iter().enumerate() {
-                    writeln!(b, "  call void @plg_rt_areg_set(ptr %m, i32 {i}, i64 {w})").unwrap();
-                }
+                self.emit_set_aregs(b, args, vars)?;
                 let site = self.site_id(span);
-                let r = self.fresh();
-                writeln!(
-                    b,
-                    "  {r} = musttail call i32 @plg_rt_pred_atom_concat_3(ptr %m, i64 {site})"
-                )
-                .unwrap();
-                writeln!(b, "  ret i32 {r}").unwrap();
+                self.emit_musttail_pred(b, "plg_rt_pred_atom_concat_3", &site.to_string());
                 return Ok(());
             }
             _ => {}
@@ -430,21 +451,13 @@ impl CodeGen<'_> {
                 writeln!(b, "  ret i32 {r}").unwrap();
             }
             target => {
-                let mut words = Vec::with_capacity(args.len());
-                for a in args {
-                    words.push(self.emit_term(b, a, vars)?);
-                }
-                for (i, w) in words.iter().enumerate() {
-                    writeln!(b, "  call void @plg_rt_areg_set(ptr %m, i32 {i}, i64 {w})").unwrap();
-                }
+                self.emit_set_aregs(b, args, vars)?;
                 let callee = if target == GoalTarget::Defined {
                     self.pred_symbol(functor, arity)
                 } else {
                     "plg_rt_pred_fail".to_string()
                 };
-                let r = self.fresh();
-                writeln!(b, "  {r} = musttail call i32 @{callee}(ptr %m, i64 0)").unwrap();
-                writeln!(b, "  ret i32 {r}").unwrap();
+                self.emit_musttail_pred(b, &callee, "0");
             }
         }
         Ok(())
