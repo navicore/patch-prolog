@@ -177,3 +177,4 @@ Required repo secrets (Forgejo → Settings → Actions → Secrets and Variable
 - `DOCS_CLIENT_SECRET` — anz client secret for publishing the mdbook
 
 <!-- docs:skip-end -->
+
