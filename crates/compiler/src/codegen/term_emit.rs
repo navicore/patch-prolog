@@ -144,4 +144,95 @@ mod tests {
         collect_vars(&t, &mut vars);
         assert_eq!(vars, vec![3, 1]);
     }
+
+    use crate::codegen::CodeGen;
+    use plg_shared::StringInterner;
+    use std::collections::HashMap;
+
+    /// Run `emit_term` on a term with a fresh CodeGen; returns (result,
+    /// emitted IR). `emit_term` never touches the interner, so an empty one
+    /// is fine.
+    fn emit_ir(term: &Term, vars: &HashMap<VarId, String>) -> (Result<String, String>, String) {
+        let interner = StringInterner::new();
+        let mut cg = CodeGen::new(&interner, &[]);
+        let mut body = String::new();
+        let w = cg.emit_term(&mut body, term, vars);
+        (w, body)
+    }
+
+    #[test]
+    fn emit_term_immediates_are_constant_words() {
+        let (w, body) = emit_ir(&Term::Atom(7), &HashMap::new());
+        assert_eq!(w.unwrap(), atom_word(7).to_string());
+        assert!(body.is_empty(), "immediates emit no code");
+
+        let (w, body) = emit_ir(&Term::Integer(5), &HashMap::new());
+        assert_eq!(w.unwrap(), int_word(5).unwrap().to_string());
+        assert!(body.is_empty());
+    }
+
+    #[test]
+    fn emit_term_boxes_big_ints_and_floats() {
+        let (w, body) = emit_ir(&Term::Integer(i64::MAX), &HashMap::new());
+        assert_eq!(w.unwrap(), "%t1");
+        assert_eq!(
+            body,
+            "  %t1 = call i64 @plg_rt_put_big(ptr %m, i64 9223372036854775807)\n"
+        );
+
+        let (w, body) = emit_ir(&Term::Float(1.5), &HashMap::new());
+        assert_eq!(w.unwrap(), "%t1");
+        assert_eq!(
+            body,
+            format!(
+                "  %t1 = call i64 @plg_rt_put_float(ptr %m, i64 {})\n",
+                1.5f64.to_bits()
+            )
+        );
+    }
+
+    #[test]
+    fn emit_term_compound_loads_bregs_then_put_struct() {
+        let t = Term::Compound {
+            functor: 3,
+            args: vec![Term::Atom(1), Term::Var(0)],
+        };
+        let mut vars = HashMap::new();
+        vars.insert(0, "%t9".to_string());
+        let (w, body) = emit_ir(&t, &vars);
+        // Children emit nothing (constant + mapped var); the only fresh
+        // temporary is the put_struct result.
+        assert_eq!(w.unwrap(), "%t1");
+        assert_eq!(
+            body,
+            format!(
+                "  call void @plg_rt_breg_set(ptr %m, i32 0, i64 {})\n  \
+                 call void @plg_rt_breg_set(ptr %m, i32 1, i64 %t9)\n  \
+                 %t1 = call i64 @plg_rt_put_struct(ptr %m, i32 3, i32 2)\n",
+                atom_word(1)
+            )
+        );
+    }
+
+    #[test]
+    fn emit_term_lists_and_unmapped_vars() {
+        let t = Term::List {
+            head: Box::new(Term::Atom(1)),
+            tail: Box::new(Term::Atom(2)),
+        };
+        let (w, body) = emit_ir(&t, &HashMap::new());
+        assert_eq!(w.unwrap(), "%t1");
+        assert_eq!(
+            body,
+            format!(
+                "  %t1 = call i64 @plg_rt_put_list(ptr %m, i64 {}, i64 {})\n",
+                atom_word(1),
+                atom_word(2)
+            )
+        );
+
+        // A variable missing from the map is an internal error, not a panic.
+        let (w, _) = emit_ir(&Term::Var(4), &HashMap::new());
+        assert!(w.unwrap_err().contains("unmapped variable _4"));
+    }
 }
