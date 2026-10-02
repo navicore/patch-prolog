@@ -21,7 +21,7 @@ become native code via LLVM.
 <!-- docs:skip-end -->
 
 ```sh
-plgc build rules.pl -o my-linter      # ~676K standalone binary
+plgc build rules.pl -o my-linter      # ~1.1M standalone binary
 ./my-linter --query "violation([field(id,integer)], Field, Reason)"
 echo $?   # 0 = no solutions (clean), 1 = solutions found
 ```
@@ -88,7 +88,7 @@ chmod +x greet.pl && ./greet.pl --query "greet(X, Y)" --format text
 | `plgc prog.pl [args...]` | script mode (shebang-friendly) |
 
 Compiled binaries take `--query "goal"`, `--limit N`,
-`--format json|text` (default json) and exit with `0` no solutions ·
+`--format text|bson` (default text) and exit with `0` no solutions ·
 `1` solutions · `2` query parse error · `3` runtime error. The step
 ceiling (default 10,000, uncatchable) is tunable via `PLG_MAX_STEPS`.
 
