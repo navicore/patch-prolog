@@ -1,5 +1,10 @@
 # Installation
 
+> **Need production Prolog today?** patch-prolog is alpha,
+> single-maintainer software focused on its own use cases — use
+> [Scryer Prolog](https://github.com/mthom/scryer-prolog) for production
+> systems now.
+
 patch-prolog is built from source. The toolchain is three binaries —
 `plgc` (compiler), `plgr` (REPL), and `plgl` (language server) — installed
 together.
