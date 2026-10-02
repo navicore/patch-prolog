@@ -10,25 +10,12 @@ use super::{CodeGen, GoalTarget};
 use std::fmt::Write;
 
 impl CodeGen<'_> {
+    /// The atom table: per-atom string globals plus `@plg_atom_strs`,
+    /// from which the runtime rebuilds the compiler's exact atom-id
+    /// space at startup.
     pub fn emit_atom_table(&mut self) {
-        let count = self.interner.len();
-        for (i, name) in self.interner.iter().enumerate() {
-            let bytes = name.as_bytes();
-            writeln!(
-                self.out,
-                "@plg_atom_{i} = private unnamed_addr constant [{} x i8] c\"{}\\00\"",
-                bytes.len() + 1,
-                escape_ir_string(bytes)
-            )
-            .unwrap();
-        }
-        let refs: Vec<String> = (0..count).map(|i| format!("ptr @plg_atom_{i}")).collect();
-        writeln!(
-            self.out,
-            "@plg_atom_strs = internal constant [{count} x ptr] [{}]",
-            refs.join(", ")
-        )
-        .unwrap();
+        let interner = self.interner;
+        emit_string_table(&mut self.out, "plg_atom", "plg_atom_strs", interner.iter());
     }
 
     /// Registry rows: every defined predicate plus `:- dynamic`
@@ -101,11 +88,7 @@ impl CodeGen<'_> {
         }
         let refs: Vec<String> = syms.iter().map(|s| format!("ptr {s}")).collect();
         let n = syms.len();
-        let arr = if n == 0 {
-            String::new()
-        } else {
-            refs.join(", ")
-        };
+        let arr = refs.join(", ");
         writeln!(
             self.out,
             "@plg_caps = internal constant [{n} x ptr] [{arr}]"
@@ -120,26 +103,12 @@ impl CodeGen<'_> {
     /// handoff. Both are `0` when nothing raises with provenance — the empty
     /// tables cost ~0 bytes.
     pub fn emit_provenance(&mut self) -> (usize, usize) {
-        for i in 0..self.files.len() {
-            let bytes = self.files[i].as_bytes();
-            writeln!(
-                self.out,
-                "@plg_file_{i} = private unnamed_addr constant [{} x i8] c\"{}\\00\"",
-                bytes.len() + 1,
-                escape_ir_string(bytes)
-            )
-            .unwrap();
-        }
-        let frefs: Vec<String> = (0..self.files.len())
-            .map(|i| format!("ptr @plg_file_{i}"))
-            .collect();
-        writeln!(
-            self.out,
-            "@plg_files = internal constant [{} x ptr] [{}]",
-            self.files.len(),
-            frefs.join(", ")
-        )
-        .unwrap();
+        emit_string_table(
+            &mut self.out,
+            "plg_file",
+            "plg_files",
+            self.files.iter().map(|s| s.as_str()),
+        );
 
         writeln!(self.out, "%SrcLoc = type {{ i32, i32, i32 }}").unwrap();
         let rows: Vec<String> = self
@@ -156,6 +125,35 @@ impl CodeGen<'_> {
         .unwrap();
         (self.srcmap.len(), self.files.len())
     }
+}
+
+/// Emit one NUL-terminated string per index as `@{prefix}_{i}` globals,
+/// plus the `@{array}` pointer table indexing them.
+fn emit_string_table<'a>(
+    out: &mut String,
+    prefix: &str,
+    array: &str,
+    names: impl Iterator<Item = &'a str>,
+) {
+    let mut refs = Vec::new();
+    for (i, name) in names.enumerate() {
+        let bytes = name.as_bytes();
+        writeln!(
+            out,
+            "@{prefix}_{i} = private unnamed_addr constant [{} x i8] c\"{}\\00\"",
+            bytes.len() + 1,
+            escape_ir_string(bytes)
+        )
+        .unwrap();
+        refs.push(format!("ptr @{prefix}_{i}"));
+    }
+    writeln!(
+        out,
+        "@{array} = internal constant [{} x ptr] [{}]",
+        refs.len(),
+        refs.join(", ")
+    )
+    .unwrap();
 }
 
 /// LLVM IR c"..." escaping: printable ASCII except `"` and `\` stays
@@ -180,5 +178,63 @@ mod tests {
     fn ir_string_escaping() {
         assert_eq!(escape_ir_string(b"abc"), "abc");
         assert_eq!(escape_ir_string(b"a\"b\\c\n"), "a\\22b\\5Cc\\0A");
+    }
+
+    use crate::codegen::CodeGen;
+    use plg_shared::StringInterner;
+
+    /// Run `emit_capabilities` on a fresh CodeGen; returns (result,
+    /// emitted IR).
+    fn caps_ir(declared: &[String]) -> (Result<usize, String>, String) {
+        let interner = StringInterner::new();
+        let mut cg = CodeGen::new(&interner, &[]);
+        let r = cg.emit_capabilities(declared);
+        (r, cg.out)
+    }
+
+    #[test]
+    fn caps_default_advertises_both_core_formats() {
+        let (r, out) = caps_ir(&[]);
+        assert_eq!(r.unwrap(), 2);
+        assert_eq!(
+            out,
+            "@plg_caps = internal constant [2 x ptr] [ptr @PLG_ENC_TEXT, ptr @PLG_ENC_BSON]\n"
+        );
+    }
+
+    #[test]
+    fn caps_io_format_restricts() {
+        let (r, out) = caps_ir(&["text".to_string()]);
+        assert_eq!(r.unwrap(), 1);
+        assert_eq!(
+            out,
+            "@plg_caps = internal constant [1 x ptr] [ptr @PLG_ENC_TEXT]\n"
+        );
+
+        let (r, out) = caps_ir(&["bson".to_string()]);
+        assert_eq!(r.unwrap(), 1);
+        assert_eq!(
+            out,
+            "@plg_caps = internal constant [1 x ptr] [ptr @PLG_ENC_BSON]\n"
+        );
+    }
+
+    #[test]
+    fn caps_dedups_repeated_names_in_first_seen_order() {
+        let (r, out) = caps_ir(&["bson".to_string(), "text".to_string(), "bson".to_string()]);
+        assert_eq!(r.unwrap(), 2);
+        // Dedup keeps first appearance: bson was seen before text.
+        assert_eq!(
+            out,
+            "@plg_caps = internal constant [2 x ptr] [ptr @PLG_ENC_BSON, ptr @PLG_ENC_TEXT]\n"
+        );
+    }
+
+    #[test]
+    fn caps_unknown_encoder_is_an_error() {
+        let (r, _) = caps_ir(&["cbor".to_string()]);
+        let err = r.unwrap_err();
+        assert!(err.contains("unknown encoder `cbor`"), "{err}");
+        assert!(err.contains("known: text, bson"), "{err}");
     }
 }
