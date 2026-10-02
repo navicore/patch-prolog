@@ -253,8 +253,8 @@ impl CodeGen<'_> {
         Ok(())
     }
 
-    /// Runtime-dispatched deterministic builtin: argument words in the
-    /// argument registers, plus a trailing site_id for the raising ones.
+    /// Runtime-dispatched deterministic builtin: argument words as call
+    /// operands, plus a trailing site_id for the raising ones.
     fn emit_rt_det(
         &mut self,
         b: &mut String,
