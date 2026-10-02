@@ -20,6 +20,17 @@ become native code via LLVM.
 [patch-prolog-shared](https://docs.rs/patch-prolog-shared) · [patch-prolog-frontend](https://docs.rs/patch-prolog-frontend) · [patch-prolog-runtime](https://docs.rs/patch-prolog-runtime) · [patch-prolog-compiler](https://docs.rs/patch-prolog-compiler) · [patch-prolog-lsp](https://docs.rs/patch-prolog-lsp) · [patch-prolog-repl](https://docs.rs/patch-prolog-repl)
 <!-- docs:skip-end -->
 
+## Status
+
+**Alpha software, single maintainer.** patch-prolog is built to serve
+this project's own production use cases first. If you need a production
+Prolog system **today**, use
+[Scryer Prolog](https://github.com/mthom/scryer-prolog) — a mature,
+community-developed, ISO-conformant system written in Rust. The two are
+complementary: Scryer is a general-purpose interactive system; patch-prolog
+is a bet on ahead-of-time compilation of an ISO subset to standalone native
+and WASM binaries.
+
 ```sh
 plgc build rules.pl -o my-linter      # ~1.1M standalone binary
 ./my-linter --query "violation([field(id,integer)], Field, Reason)"
