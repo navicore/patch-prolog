@@ -190,7 +190,10 @@ impl PrologError {
                 functor: interner.intern("resource_error"),
                 args: vec![Term::Atom(interner.intern(kind))],
             },
-            PrologError::Syntax { .. } => Term::Atom(interner.intern("syntax_error")),
+            PrologError::Syntax { context } => Term::Compound {
+                functor: interner.intern("syntax_error"),
+                args: vec![Term::Atom(interner.intern(context))],
+            },
         }
     }
 
