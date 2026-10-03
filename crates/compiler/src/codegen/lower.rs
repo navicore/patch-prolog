@@ -113,6 +113,9 @@ pub enum LGoalKind {
     Conj(Vec<LGoal>),
 }
 
+/// Lower one body term to an `LGoal`, stamping `span` on it. Dispatch is
+/// by functor name/arity: control constructs and inline specials in the
+/// match below, comparison/builtin tables in `lower_builtin_or_call`.
 pub fn lower_goal(t: &Term, span: Span, interner: &StringInterner) -> Result<LGoal, String> {
     let (name, args): (&str, &[Term]) = match t {
         Term::Atom(id) => (interner.resolve(*id), &[]),
@@ -165,38 +168,45 @@ pub fn lower_goal(t: &Term, span: Span, interner: &StringInterner) -> Result<LGo
         ("\\=", 2) => LGoalKind::NotUnify(args[0].clone(), args[1].clone()),
         ("compare", 3) => LGoalKind::Compare(args[0].clone(), args[1].clone(), args[2].clone()),
         ("is", 2) => LGoalKind::Is(args[0].clone(), args[1].clone()),
-        _ => {
-            if let Some(&(_, op)) = ARITH_OPS.iter().find(|(n, _)| *n == name)
-                && args.len() == 2
-            {
-                LGoalKind::ArithCmp(op, args[0].clone(), args[1].clone())
-            } else if let Some(&(_, op)) = ORDER_OPS.iter().find(|(n, _)| *n == name)
-                && args.len() == 2
-            {
-                LGoalKind::TermCmp(op, args[0].clone(), args[1].clone())
-            } else if let Some(&(_, _, sym, raises)) = DET_BUILTINS
-                .iter()
-                .find(|(n, a, _, _)| *n == name && *a as usize == args.len())
-            {
-                LGoalKind::RtDet {
-                    sym,
-                    args: args.to_vec(),
-                    raises,
-                }
-            } else {
-                let functor = match t {
-                    Term::Atom(id) => *id,
-                    Term::Compound { functor, .. } => *functor,
-                    _ => unreachable!(),
-                };
-                LGoalKind::Call {
-                    functor,
-                    args: args.to_vec(),
-                }
-            }
-        }
+        _ => lower_builtin_or_call(t, name, args),
     };
     Ok(Spanned::new(kind, span))
+}
+
+/// The fallback ladder for a goal that is neither control nor an inline
+/// special: arithmetic/order comparison ops, then deterministic
+/// builtins, else a user-predicate Call.
+fn lower_builtin_or_call(t: &Term, name: &str, args: &[Term]) -> LGoalKind {
+    if let Some(&(_, op)) = ARITH_OPS.iter().find(|(n, _)| *n == name)
+        && args.len() == 2
+    {
+        LGoalKind::ArithCmp(op, args[0].clone(), args[1].clone())
+    } else if let Some(&(_, op)) = ORDER_OPS.iter().find(|(n, _)| *n == name)
+        && args.len() == 2
+    {
+        LGoalKind::TermCmp(op, args[0].clone(), args[1].clone())
+    } else if let Some(&(_, _, sym, raises)) = DET_BUILTINS
+        .iter()
+        .find(|(n, a, _, _)| *n == name && *a as usize == args.len())
+    {
+        LGoalKind::RtDet {
+            sym,
+            args: args.to_vec(),
+            raises,
+        }
+    } else {
+        // Only Atom/Compound reach here: a Var goal returned early above
+        // and non-callable terms already errored at entry.
+        let functor = match t {
+            Term::Atom(id) => *id,
+            Term::Compound { functor, .. } => *functor,
+            _ => unreachable!("goal shape checked at lower_goal entry"),
+        };
+        LGoalKind::Call {
+            functor,
+            args: args.to_vec(),
+        }
+    }
 }
 
 /// Flatten a `,`-tree into a goal list (right-associated per the parser).
@@ -405,5 +415,68 @@ mod span_invariant {
             assert!(g.span.hi > g.span.lo, "degenerate span: {:?}", g.span);
             assert_eq!(g.span.file, 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod dispatch_shape {
+    //! The lowering dispatch's tricky rules, pinned directly: ITE
+    //! disambiguation from `;`, once(Var) vs once(goal), the arith/order
+    //! op tables, DET_BUILTINS lookup, and the Call fallback.
+    use super::{LGoalKind, lower_body};
+    use plg_frontend::Parser;
+    use plg_shared::StringInterner;
+
+    fn first_kind(src: &str) -> LGoalKind {
+        let mut interner = StringInterner::new();
+        let (clauses, _) = Parser::parse_program_cg(src, &mut interner, 0).unwrap();
+        let goals = lower_body(&clauses[0].body, &interner).unwrap();
+        goals[0].node.clone()
+    }
+
+    #[test]
+    fn control_constructs_lower_to_their_variants() {
+        assert!(matches!(
+            first_kind("p :- (a -> b ; c).\n"),
+            LGoalKind::IfThenElse(..)
+        ));
+        assert!(matches!(first_kind("p :- (a ; b).\n"), LGoalKind::Disj(..)));
+        assert!(matches!(
+            first_kind("p :- (a -> b).\n"),
+            LGoalKind::IfThen(..)
+        ));
+        assert!(matches!(first_kind("p :- \\+ a.\n"), LGoalKind::Naf(..)));
+    }
+
+    #[test]
+    fn once_of_a_var_is_a_metacall_once_of_a_goal_is_once() {
+        assert!(matches!(
+            first_kind("p :- once(X).\n"),
+            LGoalKind::Metacall(..)
+        ));
+        assert!(matches!(first_kind("p :- once(a).\n"), LGoalKind::Once(..)));
+    }
+
+    #[test]
+    fn comparisons_and_builtins_hit_their_tables() {
+        assert!(matches!(
+            first_kind("p :- X < 3.\n"),
+            LGoalKind::ArithCmp(..)
+        ));
+        assert!(matches!(
+            first_kind("p :- X == Y.\n"),
+            LGoalKind::TermCmp(..)
+        ));
+        assert!(matches!(
+            first_kind("p :- var(X).\n"),
+            LGoalKind::RtDet {
+                sym: "plg_rt_b_var_1",
+                ..
+            }
+        ));
+        assert!(matches!(
+            first_kind("p :- foo(X).\n"),
+            LGoalKind::Call { .. }
+        ));
     }
 }
