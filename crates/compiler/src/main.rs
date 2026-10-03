@@ -1,7 +1,9 @@
 //! plgc — standalone Prolog compiler CLI.
 //!
-//! Exit codes (compile path): 0 = success, 2 = parse error,
-//! 3 = compile/codegen/link error.
+//! Exit codes: 0 = success, 2 = input error (bad source, unreadable
+//! file, invalid directive, usage), 3 = toolchain/environment failure
+//! (clang missing/old, link) or a runtime error from the executed query.
+//! Compiled binaries keep their own contract (docs/compiler-usage.md).
 
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
@@ -113,6 +115,13 @@ fn is_parse_error(msg: &str) -> bool {
     })
 }
 
+/// Input-class failures — a parse error, an unreadable file, or an
+/// invalid directive — map to exit 2 in every subcommand (issue #73);
+/// toolchain/environment failures and engine runtime errors stay 3.
+fn is_bad_input(msg: &str) -> bool {
+    is_parse_error(msg) || msg.contains("cannot read file") || msg.starts_with("io_format:")
+}
+
 /// Map the `--target` string to a [`plgc::Target`]. `None` and the host
 /// triple mean native; `wasm32-wasi`/`wasm32-wasip1` select the Tier-1 CLI
 /// module; `worker`/`wasm32-unknown-unknown` select the Tier-2 reactor.
@@ -168,7 +177,8 @@ fn run_script(source: &str, args: &[String]) -> ExitCode {
         plgc::Target::Native,
     ) {
         eprintln!("error: {e}");
-        return ExitCode::from(3);
+        let code = if is_bad_input(&e) { 2 } else { 3 };
+        return ExitCode::from(code);
     }
     let mut cmd = std::process::Command::new(&bin);
     cmd.args(args);
@@ -196,13 +206,13 @@ fn cmd_build(
 ) -> ExitCode {
     if inputs.is_empty() {
         eprintln!("error: no input files");
-        return ExitCode::from(3);
+        return ExitCode::from(2);
     }
     let target = match parse_target(target.as_deref()) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("error: {e}");
-            return ExitCode::from(3);
+            return ExitCode::from(2);
         }
     };
     // Default output stem. Distinct wasm extensions so compiling one
@@ -237,7 +247,8 @@ fn cmd_build(
         }
         Err(e) => {
             eprintln!("error: {e}");
-            ExitCode::from(3)
+            let code = if is_bad_input(&e) { 2 } else { 3 };
+            ExitCode::from(code)
         }
     }
 }
@@ -253,7 +264,7 @@ fn cmd_run(
 ) -> ExitCode {
     if inputs.is_empty() {
         eprintln!("error: no input files");
-        return ExitCode::from(3);
+        return ExitCode::from(2);
     }
     let sources: Vec<&std::path::Path> = inputs.iter().map(|p| p.as_path()).collect();
     if let Err(code) = lint_undefined(&sources, deny_undefined) {
@@ -275,8 +286,9 @@ fn cmd_run(
         plgc::Target::Native,
     ) {
         eprintln!("error: {e}");
-        // Parse errors carry file:line:col; map them to exit 2.
-        let code = if is_parse_error(&e) { 2 } else { 3 };
+        // Input-class failures (parse shape, unreadable file, bad
+        // directive) map to exit 2 (issue #73).
+        let code = if is_bad_input(&e) { 2 } else { 3 };
         return ExitCode::from(code);
     }
     let mut cmd = std::process::Command::new(&bin);

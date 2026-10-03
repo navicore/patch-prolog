@@ -113,6 +113,17 @@ if [ $? -eq 1 ]; then
 fi
 ```
 
+### `plgc` exit codes (the CLI itself)
+
+`plgc` mirrors the binary's classes (issue #73) — the same failure exits
+the same code from every subcommand:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success. |
+| `2` | Input error: the source doesn't parse, a file is missing/unreadable, a directive (e.g. `io_format`) is invalid, or usage is wrong. |
+| `3` | Toolchain/environment failure (clang missing or too old, link failure) or a runtime error from the executed query. |
+
 ## Undefined predicates
 
 Because patch-prolog compiles the *whole* program, it knows every defined
