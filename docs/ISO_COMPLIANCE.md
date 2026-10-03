@@ -57,7 +57,7 @@ reference, with ISO section numbers.
   `error(Formal, Context)`, where `Formal` is one of `instantiation_error`,
   `type_error/2`, `existence_error/2`, `domain_error/2`,
   `evaluation_error/1`, `permission_error/3`, `representation_error/1`,
-  `resource_error/1`, or `syntax_error`.
+  `resource_error/1`, or `syntax_error/1`.
 - `throw/1` of an unbound variable raises `instantiation_error`.
 - `catch/3` is opaque to cut: a `!` inside the goal cannot escape the catch
   frame.

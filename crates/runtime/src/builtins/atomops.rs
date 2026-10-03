@@ -7,7 +7,8 @@
 //! - `atom_chars/2` works both directions (atom→one-char atoms,
 //!   list→atom).
 //! - `number_chars/2` and `number_codes/2` work both directions; garbage
-//!   input on the reverse direction raises a bare `syntax_error` formal.
+//!   input on the reverse direction raises `error(syntax_error/1, Culprit)`
+//!   per ISO 13211-1.
 //! - float→chars/codes uses `format_float` ("3.0", not "3").
 
 use crate::cell::*;
@@ -73,10 +74,17 @@ fn number_string(m: &Machine, w: Word) -> Option<String> {
     }
 }
 
-/// Raise a bare `syntax_error` formal with the given context.
-fn syntax_error(m: &mut Machine, context: &str) {
-    let f = make_atom(m.atoms.intern("syntax_error"));
-    crate::errors::set_formal(m, f, context, false);
+/// Raise `error(syntax_error(Detail), Culprit)` — ISO 13211-1 defines the
+/// formal as `syntax_error/1` with an implementation-defined description
+/// (issue #72).
+fn syntax_error(m: &mut Machine, culprit: &str, detail: &str) {
+    let se = m.atoms.intern("syntax_error");
+    let d = make_atom(m.atoms.intern(detail));
+    let idx = m.heap.len();
+    m.heap.push(pack_functor(se, 1));
+    m.heap.push(d);
+    let f = make(TAG_STR, idx as u64);
+    crate::errors::set_formal(m, f, culprit, false);
 }
 
 /// Parse a numeric string into an INT or FLT word, mirroring the
@@ -248,7 +256,7 @@ fn number_from_chars(m: &mut Machine, num: u64, chars: u64) -> i32 {
     match parse_number(m, &s) {
         Some(n) => unify(m, num, n) as i32,
         None => {
-            syntax_error(m, "number_chars/2: invalid number syntax");
+            syntax_error(m, "number_chars/2", "invalid number syntax");
             0
         }
     }
@@ -307,7 +315,7 @@ fn number_from_codes(m: &mut Machine, num: u64, codes: u64) -> i32 {
     match parse_number(m, &s) {
         Some(n) => unify(m, num, n) as i32,
         None => {
-            syntax_error(m, "number_codes/2: invalid number syntax");
+            syntax_error(m, "number_codes/2", "invalid number syntax");
             0
         }
     }
@@ -450,7 +458,7 @@ mod tests {
         assert_eq!(nchars(mp, n, inlist), 0);
         assert_eq!(
             msg(&m),
-            "error(syntax_error, number_chars/2: invalid number syntax)"
+            "error(syntax_error(invalid number syntax), number_chars/2)"
         );
     }
 
