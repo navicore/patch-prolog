@@ -1,7 +1,8 @@
 //! Error surfaces: existence_error for undefined predicates, the
 //! dynamic-predicate silent-fail contract, the uncatchable step limit,
 //! query-time parse errors (exit 2), and compile-time (program) parse
-//! errors surfaced by `plgc build` (exit 3, surface-lexeme messages).
+//! errors surfaced by `plgc build` (exit 2 — input class, issue #73 —
+//! with surface-lexeme messages).
 //!
 //! Parse-error wording: plgc's query parser phrases trailing junk as
 //! "unexpected input at column N". The behavioral contract (trailing
@@ -160,7 +161,7 @@ fn program_parse_errors_show_surface_lexemes() {
     let (err, code) = try_build("p(]).\n");
     assert!(err.contains("`]`"), "{err}");
     assert!(!err.contains("RBracket"), "{err}");
-    assert_ne!(code, 0);
+    assert_eq!(code, 2, "program parse error is input class (issue #73)");
 
     // `mod` in primary position names the word-op as `mod`, not `Mod`.
     let (err, _) = try_build("p :- X is mod 3.\n");
@@ -179,7 +180,74 @@ fn program_parse_errors_show_surface_lexemes() {
 
     // Generic malformed program is rejected.
     let (_, code) = try_build("invalid(((.\n");
-    assert_ne!(code, 0);
+    assert_eq!(code, 2, "program parse error is input class (issue #73)");
+}
+
+// ---- CLI exit-code unification (issue #73) ---------------------------
+
+/// The same input failure exits 2 from every subcommand (issue #73:
+/// build used to exit 3, run exited 3 for missing files).
+#[test]
+fn missing_input_file_is_input_error_everywhere() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let missing = dir.path().join("missing.pl");
+    for args in [
+        vec!["build", missing.to_str().unwrap()],
+        vec!["run", missing.to_str().unwrap(), "--query", "g"],
+        vec!["check", missing.to_str().unwrap()],
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_plgc"))
+            .args(&args)
+            .output()
+            .expect("run plgc");
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+/// Usage-class failures exit 2: no inputs, an unknown --target, and an
+/// invalid io_format directive in the source.
+#[test]
+fn usage_and_directive_errors_exit_2() {
+    let out = Command::new(env!("CARGO_BIN_EXE_plgc"))
+        .arg("build")
+        .output()
+        .expect("run plgc");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "no input files: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("ok.pl");
+    std::fs::write(&src, "ok(yes).\n").expect("write source");
+    for extra in [["--target", "wasm64"], ["--target", "nonsense"]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_plgc"))
+            .arg("build")
+            .arg(&src)
+            .args(extra)
+            .output()
+            .expect("run plgc");
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "target {:?}: {}",
+            extra,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    // An invalid io_format directive is bad source, not an environment
+    // failure (was 3 before issue #73).
+    let (err, code) = try_build(":- io_format([csv]).\nf(a).\n");
+    assert!(err.contains("unknown encoder"), "{err}");
+    assert_eq!(code, 2);
 }
 
 // Smoke: try_build succeeds on a valid program (and the binary path exists).
