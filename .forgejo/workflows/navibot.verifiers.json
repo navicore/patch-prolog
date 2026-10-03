@@ -1,0 +1,52 @@
+{
+  "verifiers": [
+    {
+      "name": "refactor-integrity",
+      "description": "Refactors claiming pure code motion must not silently change literals, symbols, or visibility.",
+      "severity": "error",
+      "include": ["crates/**/*.rs"],
+      "rules": [
+        {
+          "id": "no-literal-drift",
+          "question": "In diff hunks that read as moved or extracted code, do any string literals, IR symbol names, numeric constants, or visibility qualifiers change value?",
+          "pass": "Literals, symbols, constants, and visibilities are unchanged in moved code",
+          "fail": "A move silently changes a literal, symbol, constant, or visibility (e.g. a retyped format string or a changed target triple)"
+        }
+      ]
+    },
+    {
+      "name": "codegen-hygiene",
+      "description": "patch-prolog codegen policies: unwrap discipline and comment-code agreement.",
+      "severity": "warn",
+      "include": ["crates/compiler/src/**/*.rs"],
+      "rules": [
+        {
+          "id": "no-new-unwraps",
+          "question": "Does the diff add .unwrap() or .expect() outside #[cfg(test)] blocks?",
+          "pass": "No new unwrap/expect outside tests, or each new one is invariant-backed with a message saying why it cannot fail",
+          "fail": "A new unwrap/expect outside tests with no invariant justification"
+        },
+        {
+          "id": "comments-match-code",
+          "question": "Do the changed doc and inline comments still accurately describe the adjacent code after this diff?",
+          "pass": "Changed comments match the code they annotate",
+          "fail": "A comment describes mechanics the code no longer has (e.g. says 'argument registers' where the code passes call operands)"
+        }
+      ]
+    },
+    {
+      "name": "test-integrity",
+      "description": "Assertions are only weakened deliberately and visibly.",
+      "severity": "error",
+      "include": ["crates/**/*.rs"],
+      "rules": [
+        {
+          "id": "no-silent-test-weakening",
+          "question": "Does the diff delete or weaken assertions, remove test cases, or add ignore/skip attributes?",
+          "pass": "No assertions or tests are removed or weakened, or the removal is flagged in the PR as deliberate",
+          "fail": "Assertions or tests are silently removed, weakened, or skipped"
+        }
+      ]
+    }
+  ]
+}
