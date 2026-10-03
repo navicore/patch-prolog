@@ -902,9 +902,9 @@ checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "libc"
-version = "0.2.189"
+version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
 
 [[package]]
 name = "libm"
@@ -1024,9 +1024,9 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "mio"
-version = "1.2.3"
+version = "1.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b18443e9c262bfe8fa82f51666e2642c53393f7e5c27b3e1aeab922cff5b9d8"
+checksum = "1788edb87fdc09c7e26304471e2f5be8cdefb1b6930d6e3985fc02ff53bf86ee"
 dependencies = [
  "libc",
  "log",
@@ -1192,7 +1192,7 @@ dependencies = [
 
 [[package]]
 name = "patch-prolog-compiler"
-version = "0.4.9"
+version = "0.4.10"
 dependencies = [
  "clap",
  "clap_complete",
@@ -1205,14 +1205,14 @@ dependencies = [
 
 [[package]]
 name = "patch-prolog-frontend"
-version = "0.4.9"
+version = "0.4.10"
 dependencies = [
  "patch-prolog-shared",
 ]
 
 [[package]]
 name = "patch-prolog-lsp"
-version = "0.4.9"
+version = "0.4.10"
 dependencies = [
  "patch-prolog-frontend",
  "patch-prolog-shared",
@@ -1226,7 +1226,7 @@ dependencies = [
 
 [[package]]
 name = "patch-prolog-repl"
-version = "0.4.9"
+version = "0.4.10"
 dependencies = [
  "clap",
  "crossterm",
@@ -1240,14 +1240,14 @@ dependencies = [
 
 [[package]]
 name = "patch-prolog-runtime"
-version = "0.4.9"
+version = "0.4.10"
 dependencies = [
  "patch-prolog-shared",
 ]
 
 [[package]]
 name = "patch-prolog-shared"
-version = "0.4.9"
+version = "0.4.10"
 
 [[package]]
 name = "percent-encoding"
@@ -2018,9 +2018,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.53.1"
+version = "1.53.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
 dependencies = [
  "pin-project-lite",
  "tokio-macros",
@@ -2279,9 +2279,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.26.1"
+version = "1.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
+checksum = "97277d36b9c3ace13e58fa6e753f8b0bbbf302a18dd193240d70f9e29681059a"
 dependencies = [
  "atomic",
  "getrandom 0.4.3",
