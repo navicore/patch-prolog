@@ -43,13 +43,9 @@ fn llc_to_obj(
 
 /// Link an LLVM IR file into a standalone `wasm32-wasi` module (Tier 1),
 /// using the Rust-bundled `llc` / `wasm-ld` and the wasm
-/// target's self-contained wasi-libc — no wasi-sdk.
-///
-/// The musttail chains that keep recursion in constant stack require the wasm
-/// tail-call feature: `llc -mattr=+tail-call` lowers them to `return_call`.
-/// Without it `llc` errors out — it never silently emits a non-tail call — so a
-/// misconfigured toolchain fails loudly at build time, not as a runtime
-/// stack overflow.
+/// target's self-contained wasi-libc — no wasi-sdk. Tail-call handling
+/// (`+tail-call`, and why a misconfigured toolchain fails loudly instead
+/// of emitting a stack-overflowing module) is documented on `llc_to_obj`.
 pub fn link_wasm(ir_path: &Path, output_path: &Path, opt: OptLevel) -> Result<(), String> {
     let wasm_runtime = crate::WASM_RUNTIME_LIB.ok_or_else(|| {
         "this plgc was built without wasm support.\n\

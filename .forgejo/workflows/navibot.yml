@@ -1,12 +1,15 @@
 # navibot opt-in stub. Copy to .forgejo/workflows/navibot.yml in a repo to
 # have navibot review its PRs. Delete the file to opt out. Requires the
-# OPENROUTER_API_KEY secret to be visible to this repo (user-level secret
-# on the owner's account, or repo-level here).
+# OPENROUTER_API_KEY and TYPESAFE_API_KEY secrets to be visible to this
+# repo (user-level secrets on the owner's account, or repo-level here).
 #
 # - pull_request (opened/synchronize/reopened): review each new head; a newer
 #   push cancels the in-flight review for the same PR (concurrency group).
 # - issue_comment containing @navibot: on-demand re-review. The bot never
 #   writes @navibot, so its own comments cannot re-trigger it.
+# - Blocker findings fail the check (red X) after the comment is posted. To
+#   gate merges on it, list "navibot / review" as a required status check
+#   in branch protection — see the navibot README "Merge gating".
 
 name: navibot
 on:
@@ -37,3 +40,4 @@ jobs:
       pr: ${{ github.event.pull_request.number || github.event.issue.number }}
     secrets:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
