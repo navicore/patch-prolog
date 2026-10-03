@@ -55,7 +55,8 @@ cell ABI resolving atom ids → render native JSON.
 - **`crates/compiler/src/codegen/program.rs`** — emit a tiny `plg_rt_atom_table`
   function for the `Worker` target (alongside `plg_init`), returning the packed
   `(@plg_atom_strs, atom_count)`. No IR change to the atom table itself.
-- **`crates/compiler/src/link.rs`** — add `plg_rt_atom_table` to
+- **`crates/compiler/src/link.rs`** (now `link/wasm.rs` after the
+  module split) — add `plg_rt_atom_table` to
   `REACTOR_EXPORTS` so wasm-ld roots it.
 - **`crates/compiler/src/worker_glue.rs`** — rewrite `reactor.mjs`'s `runQuery`
   return path (the `FIXME (wasm track)` site): bson decode + TermBuf walk +

@@ -121,7 +121,12 @@ pub fn link_ir(ir_path: &Path, output_path: &Path, opt: OptLevel) -> Result<(), 
         .arg("-o")
         .arg(output_path)
         .arg("-L")
-        .arg(runtime.lib_path().parent().unwrap())
+        .arg(
+            runtime
+                .lib_path()
+                .parent()
+                .expect("archive path always has a parent"),
+        )
         .arg("-lplg_runtime")
         // libm: arithmetic builtins reach libm symbols via the runtime
         // archive; the link must be explicit. Harmless on macOS where
