@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout main (PAT lets us push the version bump back)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           token: ${{ secrets.PAT }}
           ref: main
