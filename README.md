@@ -52,6 +52,35 @@ the architecture proven by
 generation, clang linking, and a Rust runtime staticlib embedded in the
 compiler binary.
 
+## Install
+
+Install from [crates.io](https://crates.io) with cargo — the preferred
+way:
+
+```sh
+cargo install patch-prolog-compiler patch-prolog-repl patch-prolog-lsp
+```
+
+One command, all three binaries: `plgc` the compiler, `plgr` the REPL,
+and `plgl` the language server. Compiler only:
+
+```sh
+cargo install patch-prolog-compiler
+```
+
+To emit WebAssembly too, add `--features wasm` (see
+[docs/wasm-target.md](docs/wasm-target.md)).
+
+After that, `plgc` needs only `clang` ≥ 15 to link what it compiles —
+no Rust on the machines you compile for, and nothing at all (beyond
+libc/libm) on the machines that run the binaries.
+
+Building from a source checkout instead (for development):
+
+```sh
+just install
+```
+
 ## The toolchain
 
 Three binaries share the engine:
@@ -64,15 +93,15 @@ Three binaries share the engine:
 
 ## Requirements
 
-- To **build the compiler**: Rust (see `rust-toolchain.toml`), `just`
+- To **install**: Rust (cargo) — `cargo install` from crates.io, or
+  build from source with `just` (see `rust-toolchain.toml`)
 - To **use `plgc`**: clang ≥ 15 (for linking) — no Rust required
 - To **run compiled binaries**: nothing (libc/libm only)
 
 ## Quick start
 
 ```sh
-just build                 # builds libplg_runtime.a then plgc
-target/release/plgc build examples/deps.pl -o deps
+plgc build examples/deps.pl -o deps
 ./deps --query "needs(app, X)"
 ./deps --query "findall(D, needs(app, D), Ds)" --format text
 ```

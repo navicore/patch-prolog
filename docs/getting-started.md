@@ -8,19 +8,38 @@
 patch-prolog is built from source. The toolchain is three binaries —
 `plgc` (compiler), `plgr` (REPL), and `plgl` (language server) — installed
 together.
+=======
+The preferred way to install is from [crates.io](https://crates.io) with
+cargo. The toolchain is three binaries — `plgc` (compiler), `plgr`
+(REPL), and `plgl` (language server) — installed together:
+
+```sh
+cargo install patch-prolog-compiler patch-prolog-repl patch-prolog-lsp
+```
+
+Compiler only:
+
+```sh
+cargo install patch-prolog-compiler
+```
+
+To emit WebAssembly too, add `--features wasm` (see
+[wasm-target.md](wasm-target.md)).
 
 ## Requirements
 
 | To… | You need |
 |---|---|
-| **build the toolchain** | Rust (see `rust-toolchain.toml`) and [`just`](https://github.com/casey/just) |
+| **install the toolchain** | Rust (cargo) |
 | **use `plgc`** | `clang` ≥ 15 — it links the generated code. No Rust required. |
 | **run a compiled binary** | nothing — only system `libc`/`libm` |
 
 That last row is the point: the programs `plgc` produces are standalone.
 You hand someone the binary and it runs, with no Prolog system installed.
 
-## Build and install
+## Build and install from source
+
+For development on a checkout:
 
 ```sh
 just install
