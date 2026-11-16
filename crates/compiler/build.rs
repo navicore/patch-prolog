@@ -22,12 +22,18 @@ fn main() {
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
-    // OUT_DIR = target/<profile>/build/<pkg>-<hash>/out
-    let target_dir = out_dir
-        .parent() // build/<pkg>-<hash>/out -> build/<pkg>-<hash>
-        .and_then(|p| p.parent()) // -> build
-        .and_then(|p| p.parent()) // -> <profile> (release/debug)
-        .expect("Could not find target directory");
+    // Cargo 1.100 added a package-name component between build/ and the
+    // hashed output directory. Find build/ instead of assuming a fixed
+    // number of parents, so both layouts resolve to target/<profile>:
+    //   build/<pkg>-<hash>/out       (Cargo <= 1.99)
+    //   build/<pkg>/<hash>/out       (Cargo >= 1.100)
+    let build_dir = out_dir
+        .ancestors()
+        .find(|path| path.file_name().is_some_and(|name| name == "build"))
+        .expect("Could not find Cargo build directory");
+    let target_dir = build_dir
+        .parent()
+        .expect("Could not find Cargo target profile directory");
 
     // Pick the runtime staticlib cargo just built. We MUST NOT prefer the
     // uplifted top-level `target/<profile>/libplg_runtime.a`: that name is
@@ -39,7 +45,10 @@ fn main() {
     // deterministic filename tie-break. The uplifted copy is only a
     // last-resort fallback for layouts where deps/ has none.
     let deps_dir = target_dir.join("deps");
-    let runtime_lib = newest_runtime_lib(&deps_dir)
+    let cargo_100_runtime_dir = build_dir.join("patch-prolog-runtime");
+    // Search both layouts together so a stale pre-1.100 deps/ artifact cannot
+    // take precedence over the archive Cargo just built in build/.
+    let runtime_lib = newest_runtime_lib(&[&deps_dir, &cargo_100_runtime_dir])
         .or_else(|| {
             let direct = target_dir.join("libplg_runtime.a");
             direct.exists().then_some(direct)
@@ -128,7 +137,10 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     hash
 }
 
-/// Newest `libplg_runtime-*.a` in `deps/` by modification time.
+/// Newest `libplg_runtime-*.a` in any directory or its descendants.
+///
+/// Recursion covers Cargo >= 1.100's build/<package>/<hash>/out layout;
+/// the same function also scans the flat pre-1.100 deps/ directory.
 ///
 /// Guarantee this provides: cargo compiles build-dependencies before running
 /// this script, so it has just (re)written *this build's* runtime artifact —
@@ -143,9 +155,24 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 ///
 /// Ties (identical mtime) break on the lexically-LARGER path — arbitrary but
 /// deterministic; direction chosen only so the rule is total.
-fn newest_runtime_lib(deps_dir: &Path) -> Option<PathBuf> {
+fn newest_runtime_lib(dirs: &[&Path]) -> Option<PathBuf> {
     let mut best: Option<(SystemTime, PathBuf)> = None;
-    for entry in fs::read_dir(deps_dir).ok()?.flatten() {
+    for dir in dirs {
+        collect_runtime_libs(dir, &mut best);
+    }
+    best.map(|(_, p)| p)
+}
+
+fn collect_runtime_libs(dir: &Path, best: &mut Option<(SystemTime, PathBuf)>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_runtime_libs(&path, best);
+            continue;
+        }
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if !(name.starts_with("libplg_runtime") && name.ends_with(".a")) {
@@ -154,16 +181,14 @@ fn newest_runtime_lib(deps_dir: &Path) -> Option<PathBuf> {
         let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) else {
             continue;
         };
-        let path = entry.path();
         let better = match &best {
             None => true,
             Some((t, p)) => (mtime, &path) > (*t, p),
         };
         if better {
-            best = Some((mtime, path));
+            *best = Some((mtime, path));
         }
     }
-    best.map(|(_, p)| p)
 }
 
 /// Verify that the plg-runtime version matches the plg-compiler version
