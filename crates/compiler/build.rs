@@ -9,6 +9,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+// The build dependency supplies the staticlib and guarantees it is built
+// before this script runs; no Rust symbols are needed from it. Mark it as
+// used without disabling Cargo's unused-dependency lint for this package.
+use plg_runtime as _;
+
 fn main() {
     // Verify that plg-runtime version matches compiler version
     verify_runtime_version();
